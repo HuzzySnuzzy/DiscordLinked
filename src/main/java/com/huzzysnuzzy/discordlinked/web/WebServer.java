@@ -207,8 +207,17 @@ public final class WebServer {
             user = oauth.identify(clientId, code);
         } catch (IOException e) {
             plugin.logger().warn("Discord login failed: {}", e.getMessage());
-            sendMessagePage(ex, 502, "Login failed", "Discord rejected the login. Check discord-client-secret and "
-                    + "that the redirect URL is added in the Developer Portal.");
+            String errorCode = e instanceof DiscordOAuth.OAuthException oauthError ? oauthError.code : "";
+            sendMessagePage(ex, 502, "Login failed", switch (errorCode) {
+                case "invalid_client" -> "Discord says the client ID or secret is wrong (invalid_client). Copy the "
+                        + "Client Secret from Developer Portal -> OAuth2 into discord-client-secret (not the bot token), "
+                        + "leave discord-client-id empty, and restart the proxy.";
+                case "invalid_grant" -> "Discord rejected the login code (invalid_grant). This usually means "
+                        + "web-public-url doesn't match the redirect in the Developer Portal, or the page was "
+                        + "refreshed. Try logging in again.";
+                case "" -> "Couldn't finish the login with Discord. See the proxy console for details.";
+                default -> "Discord rejected the login (" + errorCode + "). See the proxy console for details.";
+            });
             return;
         }
         if (!plugin.bot().hasAdminRole(user.id())) {

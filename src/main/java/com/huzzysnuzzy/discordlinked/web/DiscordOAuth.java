@@ -82,8 +82,14 @@ final class DiscordOAuth {
     private DataObject send(HttpRequest request) throws IOException, InterruptedException {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() / 100 != 2) {
-            throw new IOException("Discord returned " + response.statusCode() + " for " + request.uri().getPath()
-                    + ": " + response.body());
+            String code = "";
+            try {
+                code = DataObject.fromJson(response.body()).getString("error", "");
+            } catch (RuntimeException ignored) {
+                // not JSON (e.g. a Cloudflare page)
+            }
+            throw new OAuthException(code, "Discord returned " + response.statusCode() + " for "
+                    + request.uri().getPath() + ": " + response.body());
         }
         return DataObject.fromJson(response.body());
     }
@@ -93,6 +99,16 @@ final class DiscordOAuth {
                 .map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8) + "="
                         + URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8))
                 .collect(Collectors.joining("&"));
+    }
+
+    /** A failed OAuth call. {@code code} is Discord's error code such as "invalid_client", or empty. */
+    static final class OAuthException extends IOException {
+        final String code;
+
+        OAuthException(String code, String message) {
+            super(message);
+            this.code = code;
+        }
     }
 
     record DiscordUser(long id, String name, String avatarUrl) {
