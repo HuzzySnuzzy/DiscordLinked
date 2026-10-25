@@ -28,12 +28,16 @@ import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.requests.CloseCode;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 
 import java.awt.Color;
 import java.sql.SQLException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -47,6 +51,9 @@ public final class DiscordBot extends ListenerAdapter {
     private final DiscordLinked plugin;
     private JDA jda;
     private final Set<Long> profileRefreshes = ConcurrentHashMap.newKeySet();
+    private final Set<Long> memberRefreshes = ConcurrentHashMap.newKeySet();
+    private final Map<Long, CachedMember> memberCache = new ConcurrentHashMap<>();
+    private static final Duration MEMBER_CACHE_TIME = Duration.ofMinutes(10);
 
     public DiscordBot(DiscordLinked plugin) {
         this.plugin = plugin;
@@ -209,7 +216,7 @@ public final class DiscordBot extends ListenerAdapter {
             event.reply(msg("discord.unlink.not-linked")).setEphemeral(true).queue();
             return;
         }
-        plugin.unlink(account.get(), actor(event.getUser()), "Unlinked themselves with /unlink");
+        plugin.unlink(account.get(), actor(event.getUser()), "Unlinked themselves with /unlink", false);
         event.reply(msg("discord.unlink.success", "player", account.get().minecraftName())).setEphemeral(true).queue();
     }
 
@@ -275,7 +282,7 @@ public final class DiscordBot extends ListenerAdapter {
             event.reply(msg("discord.not-found", "player", player)).setEphemeral(true).queue();
             return;
         }
-        plugin.unlink(account.get(), actor(event.getUser()), "Discord /forceunlink");
+        plugin.unlink(account.get(), actor(event.getUser()), "Discord /forceunlink", true);
         event.reply(msg("discord.forceunlink.success", "player", account.get().minecraftName())).setEphemeral(true).queue();
     }
 
@@ -327,10 +334,79 @@ public final class DiscordBot extends ListenerAdapter {
         }
         try {
             Member member = guild.retrieveMemberById(userId).complete();
-            return member.getRoles().stream().anyMatch(role -> role.getIdLong() == roleId);
+            cacheMember(userId, member);
+            return isAdmin(member);
         } catch (ErrorResponseException e) {
+            cacheMember(userId, null);
             return false; // not a member of the guild
         }
+    }
+
+    /**
+     * Cached Discord membership for a user, or null if not known yet. A stale or missing entry is
+     * refreshed in the background, so callers see the result on a later call.
+     */
+    public MemberInfo memberInfo(long userId) {
+        CachedMember cached = memberCache.get(userId);
+        if (cached == null || cached.fetchedAt().isBefore(Instant.now().minus(MEMBER_CACHE_TIME))) {
+            refreshMember(userId);
+        }
+        return cached == null ? null : cached.info();
+    }
+
+    private void refreshMember(long userId) {
+        Guild guild = guild();
+        if (guild == null || !memberRefreshes.add(userId)) {
+            return;
+        }
+        guild.retrieveMemberById(userId).queue(member -> {
+            memberRefreshes.remove(userId);
+            cacheMember(userId, member);
+        }, error -> {
+            memberRefreshes.remove(userId);
+            if (error instanceof ErrorResponseException response
+                    && (response.getErrorResponse() == ErrorResponse.UNKNOWN_MEMBER
+                    || response.getErrorResponse() == ErrorResponse.UNKNOWN_USER)) {
+                cacheMember(userId, null);
+            }
+        });
+    }
+
+    private void cacheMember(long userId, Member member) {
+        memberCache.put(userId, new CachedMember(
+                new MemberInfo(member != null, member != null && isAdmin(member)), Instant.now()));
+        if (member != null) {
+            try {
+                plugin.database().updateDiscordProfile(userId, member.getUser().getEffectiveName(),
+                        member.getUser().getEffectiveAvatarUrl());
+            } catch (SQLException e) {
+                plugin.logger().warn("Could not store Discord profile for {}", userId, e);
+            }
+        }
+    }
+
+    private boolean isAdmin(Member member) {
+        long roleId = plugin.config().adminRoleId();
+        return roleId != 0L && member.getRoles().stream().anyMatch(role -> role.getIdLong() == roleId);
+    }
+
+    /** Sends a direct message to a user. Failures (DMs closed, not in a shared server) are only logged. */
+    public void sendDirectMessage(long userId, String text) {
+        if (jda == null || text.isBlank()) {
+            return;
+        }
+        jda.retrieveUserById(userId)
+                .flatMap(User::openPrivateChannel)
+                .flatMap(channel -> channel.sendMessage(truncate(text))
+                        .setAllowedMentions(EnumSet.noneOf(Message.MentionType.class)))
+                .queue(null, error -> plugin.logger().info("Could not DM Discord user {}: {}", userId, error.getMessage()));
+    }
+
+    /** {@code inGuild} is false when the user has left (or was never in) the Discord server. */
+    public record MemberInfo(boolean inGuild, boolean admin) {
+    }
+
+    private record CachedMember(MemberInfo info, Instant fetchedAt) {
     }
 
     /** Fetches and stores a linked user's current Discord name and avatar in the background. */

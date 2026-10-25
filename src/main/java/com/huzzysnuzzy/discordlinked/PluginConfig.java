@@ -24,7 +24,10 @@ public record PluginConfig(
         String webPublicUrl,
         String oauthClientId,
         String oauthClientSecret,
-        long adminRoleId
+        long adminRoleId,
+        boolean dmPlayers,
+        String googleSpreadsheetId,
+        String googleServiceAccountFile
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -46,7 +49,10 @@ public record PluginConfig(
                 stripTrailingSlash(props.getProperty("web-public-url").trim()),
                 props.getProperty("discord-client-id").trim(),
                 props.getProperty("discord-client-secret").trim(),
-                parseId(props, "admin-role-id")
+                parseId(props, "admin-role-id"),
+                parseBoolean(props, "dm-players"),
+                props.getProperty("google-sheets-spreadsheet-id").trim(),
+                props.getProperty("google-service-account-file").trim()
         );
     }
 

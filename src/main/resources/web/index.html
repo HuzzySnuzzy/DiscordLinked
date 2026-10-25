@@ -14,6 +14,11 @@
       <a href="#/linked" data-view="linked">Linked</a>
       <a href="#/logs" data-view="logs">Logs</a>
     </nav>
+    <div class="global-search">
+      <input id="global-search" type="search" placeholder="Find any player…" autocomplete="off"
+             aria-label="Search all players" aria-controls="global-results">
+      <div id="global-results" class="search-results" role="listbox" hidden></div>
+    </div>
     <div class="me">
       <img id="me-avatar" class="avatar" alt="">
       <span id="me-name"></span>
@@ -25,7 +30,21 @@
     <section id="view-linked" hidden>
       <div class="toolbar">
         <h1>Linked players <span id="linked-count" class="count"></span></h1>
-        <input id="linked-search" type="search" placeholder="Search name, UUID or Discord…" aria-label="Search linked players">
+        <div class="legend">
+          <span><i class="dot dot-admin"></i> Admin</span>
+          <span><i class="dot dot-suspended"></i> Suspended</span>
+        </div>
+        <select id="linked-sort" aria-label="Sort players">
+          <option value="name-asc">Name A–Z</option>
+          <option value="name-desc">Name Z–A</option>
+          <option value="online">Online first</option>
+          <option value="seen">Recently seen</option>
+          <option value="linked-new">Newest links</option>
+          <option value="linked-old">Oldest links</option>
+          <option value="suspended">Suspended first</option>
+          <option value="admins">Admins first</option>
+        </select>
+        <input id="linked-search" type="search" placeholder="Filter this list…" aria-label="Filter linked players">
       </div>
       <div class="table-wrap">
         <table class="table">
@@ -47,13 +66,16 @@
           <option value="links">Links &amp; unlinks</option>
           <option value="suspensions">Suspensions</option>
           <option value="kicks">Kicks</option>
+          <option value="notes">Notes</option>
           <option value="sessions">Joins, leaves &amp; switches</option>
           <option value="chat">Chat</option>
           <option value="commands">Commands</option>
           <option value="denied">Denied logins</option>
-          <option value="web">Website logins</option>
+          <option value="web">Website logins &amp; exports</option>
         </select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
+        <button id="logs-csv" class="btn btn-ghost btn-small" type="button">Download CSV</button>
+        <button id="logs-sheets" class="btn btn-ghost btn-small" type="button" hidden>Export to Google Sheets</button>
       </div>
       <div class="table-wrap">
         <table class="table">
@@ -64,8 +86,10 @@
         </table>
         <p id="logs-empty" class="empty" hidden>Nothing logged yet.</p>
       </div>
-      <div class="more"><button id="logs-more" class="btn btn-ghost" hidden>Load more</button></div>
+      <div class="more"><button id="logs-more" class="btn btn-ghost" type="button" hidden>Load more</button></div>
     </section>
+
+    <section id="view-player" hidden></section>
   </main>
 
   <dialog id="action-dialog">
@@ -76,7 +100,7 @@
         <label>Days <input type="number" id="dur-days" min="0" max="3650" value="1"></label>
         <label>Hours <input type="number" id="dur-hours" min="0" max="999" value="0"></label>
       </div>
-      <label class="reason">Reason (required)
+      <label class="reason"><span id="dialog-label">Reason (required)</span>
         <textarea id="dialog-reason" required maxlength="500" rows="3"></textarea>
       </label>
       <p id="dialog-error" class="error" hidden></p>

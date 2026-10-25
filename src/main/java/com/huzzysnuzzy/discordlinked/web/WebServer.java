@@ -4,7 +4,11 @@ import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
 import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
+import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
+import com.huzzysnuzzy.discordlinked.storage.PlayerIp;
+import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
+import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -18,9 +22,13 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,21 +47,31 @@ public final class WebServer {
     private static final Duration ROLE_RECHECK = Duration.ofMinutes(5);
     private static final int MAX_BODY_BYTES = 16 * 1024;
     private static final int MAX_REASON_LENGTH = 500;
+    private static final int MAX_NOTE_LENGTH = 2000;
+    private static final int MAX_EXPORT_ROWS = 50_000;
+    private static final DateTimeFormatter EXPORT_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(ZoneId.systemDefault());
+    private static final DateTimeFormatter FILE_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm").withZone(ZoneId.systemDefault());
+    private static final DateTimeFormatter SHEET_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH.mm.ss").withZone(ZoneId.systemDefault());
     private static final int LOG_PAGE_SIZE = 100;
     private static final String SESSION_COOKIE = "dl_session";
     private static final String STATE_COOKIE = "dl_state";
 
     private static final Map<String, Set<String>> LOG_FILTERS = Map.of(
-            "admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.UNSUSPEND,
-                    EventTypes.KICK, EventTypes.WEB_LOGIN),
+            "admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
+                    EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT),
             "kicks", Set.of(EventTypes.KICK),
+            "notes", Set.of(EventTypes.NOTE),
             "links", Set.of(EventTypes.LINK, EventTypes.UNLINK),
-            "suspensions", Set.of(EventTypes.SUSPEND, EventTypes.UNSUSPEND, EventTypes.DENIED_SUSPENDED),
+            "suspensions", Set.of(EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT, EventTypes.UNSUSPEND,
+                    EventTypes.DENIED_SUSPENDED),
             "sessions", Set.of(EventTypes.JOIN, EventTypes.LEAVE, EventTypes.SERVER_SWITCH),
             "chat", Set.of(EventTypes.CHAT),
             "commands", Set.of(EventTypes.COMMAND),
             "denied", Set.of(EventTypes.DENIED_UNLINKED, EventTypes.DENIED_SUSPENDED),
-            "web", Set.of(EventTypes.WEB_LOGIN));
+            "web", Set.of(EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -67,6 +85,7 @@ public final class WebServer {
     private HttpServer server;
     private ExecutorService executor;
     private DiscordOAuth oauth;
+    private GoogleSheetsExporter sheets;
     private boolean secureCookies;
 
     public WebServer(DiscordLinked plugin) {
@@ -86,6 +105,16 @@ public final class WebServer {
                     throw new IOException("web/" + name + " missing from plugin jar");
                 }
                 files.put(name, in.readAllBytes());
+            }
+        }
+        if (!config.googleSpreadsheetId().isEmpty()) {
+            Path keyFile = plugin.dataDirectory().resolve(config.googleServiceAccountFile());
+            try {
+                sheets = GoogleSheetsExporter.load(config.googleSpreadsheetId(), keyFile);
+                plugin.logger().info("Google Sheets export enabled. Share the spreadsheet with {} as an Editor.",
+                        sheets.clientEmail());
+            } catch (IOException e) {
+                plugin.logger().warn("Google Sheets export disabled: {}", e.getMessage());
             }
         }
         oauth = new DiscordOAuth(config.oauthClientSecret(), config.webPublicUrl() + "/callback");
@@ -163,11 +192,16 @@ public final class WebServer {
                     .put("id", String.valueOf(session.user.id()))
                     .put("name", session.user.name())
                     .put("avatar", session.user.avatarUrl())
-                    .put("csrf", session.csrfToken));
+                    .put("csrf", session.csrfToken)
+                    .put("sheetsEnabled", sheets != null));
             case "GET /api/linked" -> sendJson(ex, 200, linkedList());
+            case "GET /api/search" -> sendJson(ex, 200, search(query(ex)));
+            case "GET /api/player" -> playerPage(ex, query(ex));
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
-            case "POST /api/unlink", "POST /api/suspend", "POST /api/unsuspend", "POST /api/kick" ->
-                    handleAction(ex, path, session);
+            case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
+            case "POST /api/logs/export-sheets" -> exportSheets(ex, session);
+            case "POST /api/unlink", "POST /api/suspend", "POST /api/suspension/edit", "POST /api/unsuspend",
+                 "POST /api/kick", "POST /api/note" -> handleAction(ex, path, session);
             default -> sendJson(ex, 404, error("Unknown endpoint"));
         }
     }
@@ -259,46 +293,117 @@ public final class WebServer {
 
     // ---- API ----
 
+    /** The fields every player row shares: identity, link, Discord status, online state and suspension. */
+    private DataObject playerJson(UUID uuid, String name, LinkedAccount linked, Suspension suspension)
+            throws SQLException {
+        Optional<Player> online = plugin.proxy().getPlayer(uuid);
+        DataObject row = DataObject.empty()
+                .put("uuid", uuid.toString())
+                .put("minecraftName", name)
+                .put("linked", linked != null)
+                .put("online", online.isPresent())
+                .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""));
+        if (linked != null) {
+            if (linked.discordName() == null) {
+                plugin.bot().refreshProfile(linked.discordId());
+            }
+            DiscordBot.MemberInfo member = plugin.bot().memberInfo(linked.discordId());
+            row.put("discordId", String.valueOf(linked.discordId()))
+                    .put("discordName", linked.discordName() == null ? "Unknown user" : linked.discordName())
+                    .put("discordAvatar", linked.discordAvatar() == null
+                            ? DiscordOAuth.avatarUrl(linked.discordId(), null) : linked.discordAvatar())
+                    .put("linkedAt", linked.linkedAt().toEpochMilli())
+                    .put("lastSeen", linked.lastSeen() == null ? null : linked.lastSeen().toEpochMilli())
+                    .put("isAdmin", member != null && member.admin())
+                    .put("inGuild", member == null || member.inGuild());
+        } else {
+            Instant lastActivity = plugin.database().lastActivity(uuid);
+            row.put("lastSeen", lastActivity == null ? null : lastActivity.toEpochMilli())
+                    .put("isAdmin", false)
+                    .put("inGuild", true);
+        }
+        row.put("suspension", suspension == null ? null : suspensionJson(suspension));
+        return row;
+    }
+
+    private static DataObject suspensionJson(Suspension s) {
+        return DataObject.empty()
+                .put("id", s.id())
+                .put("reason", s.reason())
+                .put("createdBy", s.createdBy())
+                .put("createdAt", s.createdAt().toEpochMilli())
+                .put("expiresAt", s.expiresAt().toEpochMilli())
+                .put("liftedAt", s.liftedAt() == null ? null : s.liftedAt().toEpochMilli())
+                .put("liftedBy", s.liftedBy())
+                .put("liftReason", s.liftReason())
+                .put("active", s.isActive());
+    }
+
     private DataArray linkedList() throws SQLException {
         Map<UUID, Suspension> suspensions = plugin.database().activeSuspensions();
         DataArray result = DataArray.empty();
         for (LinkedAccount account : plugin.database().allLinked()) {
-            if (account.discordName() == null) {
-                plugin.bot().refreshProfile(account.discordId());
-            }
-            Optional<Player> online = plugin.proxy().getPlayer(account.uuid());
-            DataObject row = DataObject.empty()
-                    .put("uuid", account.uuid().toString())
-                    .put("minecraftName", account.minecraftName())
-                    .put("discordId", String.valueOf(account.discordId()))
-                    .put("discordName", account.discordName() == null ? "Unknown user" : account.discordName())
-                    .put("discordAvatar", account.discordAvatar() == null
-                            ? DiscordOAuth.avatarUrl(account.discordId(), null) : account.discordAvatar())
-                    .put("linkedAt", account.linkedAt().toEpochMilli())
-                    .put("lastSeen", account.lastSeen() == null ? null : account.lastSeen().toEpochMilli())
-                    .put("online", online.isPresent())
-                    .put("server", online.flatMap(Player::getCurrentServer)
-                            .map(s -> s.getServerInfo().getName()).orElse(""));
-            Suspension suspension = suspensions.get(account.uuid());
-            if (suspension == null) {
-                row.putNull("suspension");
-            } else {
-                row.put("suspension", DataObject.empty()
-                        .put("reason", suspension.reason())
-                        .put("createdBy", suspension.createdBy())
-                        .put("createdAt", suspension.createdAt().toEpochMilli())
-                        .put("expiresAt", suspension.expiresAt().toEpochMilli()));
-            }
-            result.add(row);
+            result.add(playerJson(account.uuid(), account.minecraftName(), account, suspensions.get(account.uuid())));
         }
         return result;
     }
 
-    private DataObject logs(Map<String, String> query) throws SQLException {
+    private DataArray search(Map<String, String> query) throws SQLException {
+        String q = query.getOrDefault("q", "").trim();
+        DataArray result = DataArray.empty();
+        if (q.isEmpty()) {
+            return result;
+        }
+        for (PlayerRef ref : plugin.database().searchPlayers(q, 20)) {
+            LinkedAccount linked = ref.discordId() == null ? null : plugin.database().findByUuid(ref.uuid()).orElse(null);
+            result.add(playerJson(ref.uuid(), ref.name(), linked,
+                    plugin.database().activeSuspension(ref.uuid()).orElse(null)));
+        }
+        return result;
+    }
+
+    private void playerPage(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+        UUID uuid = parseUuid(query.get("uuid"));
+        Optional<PlayerRef> ref = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
+        if (ref.isEmpty()) {
+            sendJson(ex, 404, error("No player with that UUID has ever joined"));
+            return;
+        }
+        LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);
+        DataObject player = playerJson(uuid, ref.get().name(), linked,
+                plugin.database().activeSuspension(uuid).orElse(null));
+
+        DataArray suspensions = DataArray.empty();
+        for (Suspension s : plugin.database().suspensions(uuid)) {
+            suspensions.add(suspensionJson(s));
+        }
+        DataArray notes = DataArray.empty();
+        for (PlayerNote note : plugin.database().notes(uuid)) {
+            notes.add(DataObject.empty().put("note", note.note()).put("author", note.author())
+                    .put("createdAt", note.createdAt().toEpochMilli()));
+        }
+        DataArray ips = DataArray.empty();
+        for (PlayerIp ip : plugin.database().ips(uuid)) {
+            DataArray others = DataArray.empty();
+            for (UUID other : plugin.database().playersOnIp(ip.ip(), uuid)) {
+                plugin.database().findPlayer(other).ifPresent(o -> others.add(DataObject.empty()
+                        .put("uuid", o.uuid().toString()).put("name", o.name()).put("linked", o.discordId() != null)));
+            }
+            ips.add(DataObject.empty().put("ip", ip.ip()).put("firstSeen", ip.firstSeen().toEpochMilli())
+                    .put("lastSeen", ip.lastSeen().toEpochMilli()).put("times", ip.times()).put("others", others));
+        }
+        sendJson(ex, 200, DataObject.empty().put("player", player).put("suspensions", suspensions)
+                .put("notes", notes).put("ips", ips));
+    }
+
+    private List<AuditEntry> findLogs(Map<String, String> query, long before, int limit) throws SQLException {
         Set<String> types = LOG_FILTERS.getOrDefault(query.getOrDefault("filter", "all"), Set.of());
-        String search = query.getOrDefault("q", "").trim();
-        long before = parseLong(query.get("before"));
-        List<AuditEntry> entries = plugin.database().searchEvents(types, search, before, LOG_PAGE_SIZE);
+        return plugin.database().searchEvents(types, query.getOrDefault("q", "").trim(),
+                parseUuid(query.get("uuid")), before, limit);
+    }
+
+    private DataObject logs(Map<String, String> query) throws SQLException {
+        List<AuditEntry> entries = findLogs(query, parseLong(query.get("before")), LOG_PAGE_SIZE);
         DataArray rows = DataArray.empty();
         for (AuditEntry entry : entries) {
             rows.add(DataObject.empty()
@@ -312,86 +417,182 @@ public final class WebServer {
                     .put("detail", entry.detail() == null ? "" : entry.detail()));
         }
         DataObject result = DataObject.empty().put("entries", rows);
-        if (entries.size() == LOG_PAGE_SIZE) {
-            result.put("nextBefore", entries.get(entries.size() - 1).id());
-        } else {
-            result.putNull("nextBefore");
-        }
+        result.put("nextBefore", entries.size() == LOG_PAGE_SIZE ? entries.get(entries.size() - 1).id() : null);
         return result;
     }
 
-    private void handleAction(HttpExchange ex, String path, Sessions.Session session) throws IOException, SQLException {
-        DataObject body;
-        try {
-            byte[] bytes = ex.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
-            if (bytes.length > MAX_BODY_BYTES) {
-                sendJson(ex, 413, error("Request too large"));
-                return;
+    private static final List<String> EXPORT_HEADER =
+            List.of("Time", "Event", "Player", "UUID", "Discord ID", "By", "Details");
+
+    private List<List<String>> exportRows(Map<String, String> query) throws SQLException {
+        List<List<String>> rows = new ArrayList<>();
+        for (AuditEntry e : findLogs(query, 0, MAX_EXPORT_ROWS)) {
+            rows.add(List.of(EXPORT_TIME.format(e.timestamp()), e.eventType(),
+                    e.minecraftName() == null ? "" : e.minecraftName(),
+                    e.uuid() == null ? "" : e.uuid().toString(),
+                    e.discordId() == null ? "" : String.valueOf(e.discordId()),
+                    e.actor() == null ? "" : e.actor(),
+                    e.detail() == null ? "" : e.detail()));
+        }
+        return rows;
+    }
+
+    private void exportCsv(HttpExchange ex, Map<String, String> query, Sessions.Session session)
+            throws IOException, SQLException {
+        StringBuilder csv = new StringBuilder();
+        List<List<String>> rows = new ArrayList<>();
+        rows.add(EXPORT_HEADER);
+        rows.addAll(exportRows(query));
+        for (List<String> row : rows) {
+            for (int i = 0; i < row.size(); i++) {
+                if (i > 0) {
+                    csv.append(',');
+                }
+                csv.append(csvCell(row.get(i)));
             }
-            body = DataObject.fromJson(bytes);
+            csv.append("\r\n");
+        }
+        plugin.audit().log(null, null, session.user.id(), EventTypes.LOG_EXPORT,
+                "CSV, " + (rows.size() - 1) + " rows, filter=" + query.getOrDefault("filter", "all"), session.user.actor());
+        ex.getResponseHeaders().set("Content-Disposition",
+                "attachment; filename=\"discordlinked-logs-" + FILE_TIME.format(Instant.now()) + ".csv\"");
+        // BOM so Excel reads UTF-8 correctly; Google Sheets ignores it.
+        byte[] body = ("﻿" + csv).getBytes(StandardCharsets.UTF_8);
+        send(ex, 200, "text/csv; charset=utf-8", body);
+    }
+
+    /** Quotes a CSV field, and stops spreadsheet apps treating chat like "=HYPERLINK(...)" as a formula. */
+    private static String csvCell(String value) {
+        if (!value.isEmpty() && "=+-@\t\r".indexOf(value.charAt(0)) >= 0) {
+            value = "'" + value;
+        }
+        if (value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+
+    private void exportSheets(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        if (sheets == null) {
+            sendJson(ex, 400, error("Google Sheets export isn't set up. See the README."));
+            return;
+        }
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Map<String, String> query = new HashMap<>();
+        for (String key : List.of("filter", "q", "uuid")) {
+            query.put(key, body.getString(key, ""));
+        }
+        List<List<String>> rows = exportRows(query);
+        String title = "Logs " + query.get("filter").replaceAll("[^a-z]", "") + " " + SHEET_TIME.format(Instant.now());
+        try {
+            String url = sheets.export(title.replace("  ", " "), EXPORT_HEADER, rows);
+            plugin.audit().log(null, null, session.user.id(), EventTypes.LOG_EXPORT,
+                    "Google Sheets, " + rows.size() + " rows, filter=" + query.get("filter"), session.user.actor());
+            sendJson(ex, 200, DataObject.empty().put("url", url).put("rows", rows.size()));
+        } catch (IOException e) {
+            plugin.logger().warn("Google Sheets export failed: {}", e.getMessage());
+            sendJson(ex, 502, error(e.getMessage()));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            sendJson(ex, 503, error("Export interrupted"));
+        }
+    }
+
+    /** Reads a small JSON body, or sends an error and returns null. */
+    private DataObject readJson(HttpExchange ex) throws IOException {
+        byte[] bytes = ex.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
+        if (bytes.length > MAX_BODY_BYTES) {
+            sendJson(ex, 413, error("Request too large"));
+            return null;
+        }
+        try {
+            return DataObject.fromJson(bytes);
         } catch (ParsingException e) {
             sendJson(ex, 400, error("Invalid JSON"));
-            return;
+            return null;
         }
+    }
 
-        UUID uuid;
-        try {
-            uuid = UUID.fromString(body.getString("uuid", ""));
-        } catch (IllegalArgumentException e) {
-            sendJson(ex, 400, error("Invalid player"));
+    private void handleAction(HttpExchange ex, String path, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
             return;
         }
-        String reason = body.getString("reason", "").trim();
+        UUID uuid = parseUuid(body.getString("uuid", ""));
+        Optional<PlayerRef> player = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
+        if (player.isEmpty()) {
+            sendJson(ex, 404, error("Unknown player"));
+            return;
+        }
+        boolean isNote = path.equals("/api/note");
+        String reason = body.getString(isNote ? "note" : "reason", "").trim();
+        int maxLength = isNote ? MAX_NOTE_LENGTH : MAX_REASON_LENGTH;
         if (reason.isEmpty()) {
-            sendJson(ex, 400, error("A reason is required"));
+            sendJson(ex, 400, error(isNote ? "The note is empty" : "A reason is required"));
             return;
         }
-        if (reason.length() > MAX_REASON_LENGTH) {
-            sendJson(ex, 400, error("Reason is too long (max " + MAX_REASON_LENGTH + " characters)"));
-            return;
-        }
-        Optional<LinkedAccount> account = plugin.database().findByUuid(uuid);
-        if (account.isEmpty()) {
-            sendJson(ex, 404, error("That player is no longer linked"));
+        if (reason.length() > maxLength) {
+            sendJson(ex, 400, error("Too long (max " + maxLength + " characters)"));
             return;
         }
         String actor = session.user.actor() + " (website)";
+        PlayerRef target = player.get();
 
         switch (path) {
             case "/api/unlink" -> {
-                if (!plugin.unlink(account.get(), actor, reason)) {
-                    sendJson(ex, 409, error("Already unlinked"));
+                Optional<LinkedAccount> account = plugin.database().findByUuid(uuid);
+                if (account.isEmpty() || !plugin.unlink(account.get(), actor, reason, true)) {
+                    sendJson(ex, 409, error("That player isn't linked"));
                     return;
                 }
             }
-            case "/api/suspend" -> {
-                long days = body.getLong("days", 0);
-                long hours = body.getLong("hours", 0);
-                if (days < 0 || hours < 0 || days > 3650 || hours > 10_000 || days + hours == 0) {
+            case "/api/suspend", "/api/suspension/edit" -> {
+                Duration duration = parseDuration(body);
+                if (duration == null) {
                     sendJson(ex, 400, error("Enter a duration of at least 1 hour"));
                     return;
                 }
-                if (plugin.database().activeSuspension(uuid).isPresent()) {
-                    sendJson(ex, 409, error("Player is already suspended"));
+                boolean suspended = plugin.database().activeSuspension(uuid).isPresent();
+                if (path.equals("/api/suspend")) {
+                    if (suspended) {
+                        sendJson(ex, 409, error("Player is already suspended. Use Edit instead."));
+                        return;
+                    }
+                    plugin.suspend(target, duration, reason, actor);
+                } else if (!plugin.editSuspension(target, duration, reason, actor)) {
+                    sendJson(ex, 409, error("Player is not suspended"));
                     return;
                 }
-                plugin.suspend(account.get(), Duration.ofDays(days).plusHours(hours), reason, actor);
             }
             case "/api/kick" -> {
-                if (!plugin.kick(account.get(), reason, actor)) {
+                if (!plugin.kick(target, reason, actor)) {
                     sendJson(ex, 409, error("Player is not online"));
                     return;
                 }
             }
             case "/api/unsuspend" -> {
-                if (!plugin.unsuspend(account.get(), reason, actor)) {
+                if (!plugin.unsuspend(target, reason, actor)) {
                     sendJson(ex, 409, error("Player is not suspended"));
                     return;
                 }
             }
+            case "/api/note" -> plugin.addNote(target, reason, actor);
             default -> throw new IllegalStateException(path);
         }
         sendJson(ex, 200, DataObject.empty().put("ok", true));
+    }
+
+    /** Days + hours from the request body, or null if out of range. */
+    private static Duration parseDuration(DataObject body) {
+        long days = body.getLong("days", 0);
+        long hours = body.getLong("hours", 0);
+        if (days < 0 || hours < 0 || days > 3650 || hours > 10_000 || days + hours == 0) {
+            return null;
+        }
+        return Duration.ofDays(days).plusHours(hours);
     }
 
     // ---- HTTP helpers ----
@@ -475,6 +676,14 @@ public final class WebServer {
             }
         }
         return result;
+    }
+
+    private static UUID parseUuid(String value) {
+        try {
+            return value == null || value.isEmpty() ? null : UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private static long parseLong(String value) {

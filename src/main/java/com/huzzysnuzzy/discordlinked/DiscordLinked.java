@@ -8,6 +8,8 @@ import com.huzzysnuzzy.discordlinked.link.LinkCodeManager;
 import com.huzzysnuzzy.discordlinked.listener.PlayerListener;
 import com.huzzysnuzzy.discordlinked.storage.Database;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
+import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
+import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
 import com.huzzysnuzzy.discordlinked.web.WebServer;
 import com.velocitypowered.api.event.Subscribe;
@@ -17,6 +19,7 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
 
@@ -35,7 +38,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.4.0";
+    public static final String VERSION = "0.5.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -102,9 +105,10 @@ public final class DiscordLinked {
     /**
      * Removes a link, strips the Discord role and kicks the player if they're online.
      *
-     * @param actor who did it, shown in the logs
+     * @param actor        who did it, shown in the logs
+     * @param notifyPlayer whether to DM the player (false when they unlinked themselves)
      */
-    public boolean unlink(LinkedAccount account, String actor, String reason) throws SQLException {
+    public boolean unlink(LinkedAccount account, String actor, String reason, boolean notifyPlayer) throws SQLException {
         if (!database.unlink(account.uuid())) {
             return false;
         }
@@ -112,36 +116,91 @@ public final class DiscordLinked {
         audit.log(account.uuid(), account.minecraftName(), account.discordId(), EventTypes.UNLINK, reason, actor);
         proxy.getPlayer(account.uuid()).ifPresent(player -> player.disconnect(
                 messages.minecraft("minecraft.kick.unlinked")));
+        if (notifyPlayer) {
+            notifyPlayer(PlayerRef.of(account), "discord.dm.unlink", "reason", reason);
+        }
         return true;
     }
 
     /** Blocks the player from joining until the duration passes, and kicks them if online. */
-    public Suspension suspend(LinkedAccount account, Duration duration, String reason, String actor) throws SQLException {
-        Suspension suspension = database.addSuspension(account.uuid(), reason, actor, Instant.now().plus(duration));
-        audit.log(account.uuid(), account.minecraftName(), account.discordId(), EventTypes.SUSPEND,
+    public Suspension suspend(PlayerRef player, Duration duration, String reason, String actor) throws SQLException {
+        Suspension suspension = database.addSuspension(player.uuid(), reason, actor, Instant.now().plus(duration));
+        audit.log(player.uuid(), player.name(), player.discordId(), EventTypes.SUSPEND,
                 "for " + TimeFormat.duration(duration) + " (until " + TimeFormat.dateTime(suspension.expiresAt()) + "): "
                         + reason, actor);
-        proxy.getPlayer(account.uuid()).ifPresent(player -> player.disconnect(suspendedMessage(suspension)));
+        proxy.getPlayer(player.uuid()).ifPresent(online -> online.disconnect(suspendedMessage(suspension)));
+        notifyPlayer(player, "discord.dm.suspend", "reason", reason, "duration", TimeFormat.duration(duration),
+                "expires", discordTimestamp(suspension.expiresAt()));
         return suspension;
     }
 
-    /** Kicks an online player. Returns false if they aren't online. */
-    public boolean kick(LinkedAccount account, String reason, String actor) {
-        Optional<Player> player = proxy.getPlayer(account.uuid());
-        if (player.isEmpty()) {
+    /** Changes the active suspension's reason and sets it to end {@code fromNow}. False if not suspended. */
+    public boolean editSuspension(PlayerRef player, Duration fromNow, String reason, String actor) throws SQLException {
+        Optional<Suspension> current = database.activeSuspension(player.uuid());
+        Instant newEnd = Instant.now().plus(fromNow);
+        if (current.isEmpty() || !database.editSuspension(current.get().id(), reason, newEnd)) {
             return false;
         }
-        player.get().disconnect(messages.minecraft("minecraft.kick.kicked", "reason", reason));
-        audit.log(account.uuid(), account.minecraftName(), account.discordId(), EventTypes.KICK, reason, actor);
+        Suspension old = current.get();
+        StringBuilder detail = new StringBuilder("ends ").append(TimeFormat.dateTime(old.expiresAt()))
+                .append(" -> ").append(TimeFormat.dateTime(newEnd));
+        if (!old.reason().equals(reason)) {
+            detail.append("; reason \"").append(old.reason()).append("\" -> \"").append(reason).append('"');
+        }
+        audit.log(player.uuid(), player.name(), player.discordId(), EventTypes.SUSPEND_EDIT, detail.toString(), actor);
+        notifyPlayer(player, "discord.dm.suspend-edit", "reason", reason, "duration", TimeFormat.duration(fromNow),
+                "expires", discordTimestamp(newEnd));
         return true;
     }
 
-    public boolean unsuspend(LinkedAccount account, String reason, String actor) throws SQLException {
-        if (!database.liftSuspension(account.uuid(), actor, reason)) {
+    public boolean unsuspend(PlayerRef player, String reason, String actor) throws SQLException {
+        if (!database.liftSuspension(player.uuid(), actor, reason)) {
             return false;
         }
-        audit.log(account.uuid(), account.minecraftName(), account.discordId(), EventTypes.UNSUSPEND, reason, actor);
+        audit.log(player.uuid(), player.name(), player.discordId(), EventTypes.UNSUSPEND, reason, actor);
+        notifyPlayer(player, "discord.dm.unsuspend", "reason", reason);
         return true;
+    }
+
+    /** Kicks an online player. Returns false if they aren't online. */
+    public boolean kick(PlayerRef player, String reason, String actor) {
+        Optional<Player> online = proxy.getPlayer(player.uuid());
+        if (online.isEmpty()) {
+            return false;
+        }
+        online.get().disconnect(messages.minecraft("minecraft.kick.kicked", "reason", reason));
+        audit.log(player.uuid(), player.name(), player.discordId(), EventTypes.KICK, reason, actor);
+        notifyPlayer(player, "discord.dm.kick", "reason", reason);
+        return true;
+    }
+
+    /** Adds a private staff note. Players are never told about notes. */
+    public PlayerNote addNote(PlayerRef player, String note, String actor) throws SQLException {
+        PlayerNote added = database.addNote(player.uuid(), note, actor);
+        audit.log(player.uuid(), player.name(), player.discordId(), EventTypes.NOTE, note, actor);
+        return added;
+    }
+
+    /** DMs the player's linked Discord account, if DMs are on and the message isn't blank. */
+    private void notifyPlayer(PlayerRef player, String key, String... placeholders) {
+        if (!config.dmPlayers() || player.discordId() == null || messages.isEmpty(key)) {
+            return;
+        }
+        String[] values = new String[placeholders.length + 2];
+        values[0] = "player";
+        values[1] = player.name();
+        System.arraycopy(placeholders, 0, values, 2, placeholders.length);
+        for (int i = 1; i < values.length; i += 2) {
+            if (!values[i - 1].equals("expires")) {
+                values[i] = MarkdownSanitizer.escape(values[i]);
+            }
+        }
+        bot.sendDirectMessage(player.discordId(), messages.discord(key, values));
+    }
+
+    /** Shown in each reader's own time zone by Discord. */
+    private static String discordTimestamp(Instant instant) {
+        return "<t:" + instant.getEpochSecond() + ":f>";
     }
 
     public Component suspendedMessage(Suspension suspension) {
@@ -161,6 +220,10 @@ public final class DiscordLinked {
 
     public PluginConfig config() {
         return config;
+    }
+
+    public Path dataDirectory() {
+        return dataDirectory;
     }
 
     public Messages messages() {

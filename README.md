@@ -34,13 +34,26 @@ and the role is checked again every 5 minutes while they're logged in.
 
 - **Linked**: every linked player with their Minecraft head, Discord avatar, names, UUID/ID and status
   (online with server, or offline with when they were last seen, e.g. "Offline · 3 days ago").
-  Buttons to **kick** (online players), **remove a link**, **suspend** (days + hours) or **unsuspend**.
-  All of them need a reason.
-- **Logs**: every event, newest first, filterable (admin actions, suspensions, joins, chat, commands, denied
-  logins, website logins) and searchable by player or admin.
+  Sort by name, online, recently seen, link date, suspended or admins. Names are **gold** for admins
+  (their Discord account has `admin-role-id`) and **dark red** for suspended players.
+- **Find any player**: the search box in the top bar finds everyone who has ever connected, linked or not,
+  by Minecraft name, UUID, Discord name or Discord ID.
+- **Player page** (click any name): profile with a NameMC link, Discord details, current suspension,
+  staff notes, full suspension history, IP addresses with other accounts seen on the same IP, and the
+  player's complete activity log.
+- **Actions**: kick (online players), suspend (days + hours), edit a suspension (new length and reason),
+  unsuspend, add a staff note, remove a link. All need a reason or note text.
+- **Logs**: every event, newest first, filterable and searchable, with **Download CSV** and
+  **Export to Google Sheets** buttons (also on each player page for just that player).
 
 Suspended players are kicked if online and can't join until the suspension ends, even with
-`discordlinked.bypass`. Every admin action is logged with a timestamp and who did it.
+`discordlinked.bypass`. Unlinked players can be suspended too (e.g. alts), which stops them joining once
+they link. Every admin action is logged with a timestamp and who did it.
+
+When `dm-players=true`, players get a Discord DM when they're suspended, kicked, unsuspended, their
+suspension is edited, or staff unlink them. Edit or turn off each message (`discord.dm.*`) in
+`messages.properties`. Players who block DMs from server members won't get them; that's only logged.
+Notes are never sent to players.
 
 ### Setting it up
 
@@ -53,6 +66,23 @@ Suspended players are kicked if online and can't join until the suspension ends,
 Over plain `http://` the login cookie isn't encrypted in transit. For anything beyond testing, put the panel
 behind HTTPS (e.g. a reverse proxy such as Caddy or nginx, with `web-bind-address=127.0.0.1`) and use the
 `https://` address as `web-public-url`.
+
+### Google Sheets export (optional)
+
+The **Download CSV** button needs no setup: open the file in Google Sheets with File → Import.
+For one-click export straight into a spreadsheet:
+
+1. Go to https://console.cloud.google.com, create a project (any name), then open
+   **APIs & Services → Library**, search **Google Sheets API** and click **Enable**.
+2. **APIs & Services → Credentials → Create credentials → Service account**. Give it any name and click
+   **Done** (no roles needed). Open it, go to **Keys → Add key → Create new key → JSON**. A file downloads.
+3. Put that file in `plugins/discordlinked/` as `google-service-account.json`. Treat it like a password.
+4. Create a Google spreadsheet, click **Share**, and add the service account's email (the `client_email`
+   in the file, ending in `.iam.gserviceaccount.com`) as an **Editor**.
+5. Copy the spreadsheet ID from its URL (`docs.google.com/spreadsheets/d/<ID>/edit`) into
+   `google-sheets-spreadsheet-id` in `config.properties`, and restart the proxy.
+
+Each export adds a new tab named after the filter and time. Up to 50,000 rows per export.
 
 ## Customizing messages
 
@@ -89,7 +119,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.4.0.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.5.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup

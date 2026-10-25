@@ -1,13 +1,15 @@
 'use strict';
 
-const state = { me: null, linked: [], logsBefore: null, logsLoading: false };
+const state = { me: null, linked: [], logsBefore: null, logsLoading: false, player: null, playerLogsBefore: null };
 
 const EVENT_LABELS = {
   LINK: ['Linked', 'good'],
   UNLINK: ['Unlinked', 'bad'],
   SUSPEND: ['Suspended', 'bad'],
-  KICK: ['Kicked', 'warn'],
+  SUSPEND_EDIT: ['Suspension edited', 'warn'],
   UNSUSPEND: ['Unsuspended', 'good'],
+  KICK: ['Kicked', 'warn'],
+  NOTE: ['Note', 'info'],
   JOIN: ['Join', 'info'],
   LEAVE: ['Leave', ''],
   SERVER_SWITCH: ['Server switch', ''],
@@ -16,6 +18,7 @@ const EVENT_LABELS = {
   DENIED_UNLINKED: ['Denied: not linked', 'warn'],
   DENIED_SUSPENDED: ['Denied: suspended', 'warn'],
   WEB_LOGIN: ['Website login', 'info'],
+  LOG_EXPORT: ['Log export', 'info'],
 };
 
 // ---- Helpers ----
@@ -79,12 +82,12 @@ function timeAgo(ms) {
 }
 
 let toastTimer;
-function toast(message) {
+function toast(message, link) {
   const node = $('toast');
-  node.textContent = message;
+  node.replaceChildren(message, link ? el('a', { href: link.href, target: '_blank', rel: 'noopener' }, link.text) : '');
   node.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, 3500);
+  toastTimer = setTimeout(() => { node.hidden = true; }, link ? 12000 : 3500);
 }
 
 function copyButton(text) {
@@ -95,17 +98,49 @@ function copyButton(text) {
   }, text);
 }
 
+const playerHref = (uuid) => `#/player/${uuid}`;
+const headUrl = (uuid, size) => `https://mc-heads.net/avatar/${uuid}/${size}`;
+
+/** Gold for admins, dark red for suspended players (suspended wins). */
+function nameClass(p) {
+  if (p.suspension) return 'name-suspended';
+  if (p.isAdmin) return 'name-admin';
+  return '';
+}
+
+function playerName(p, extraClass = '') {
+  return el('a', { class: `name ${nameClass(p)} ${extraClass}`, href: playerHref(p.uuid) }, p.minecraftName);
+}
+
+function statusPills(p) {
+  const pills = [];
+  if (p.suspension) {
+    pills.push(el('span', { class: 'pill suspended' }, `Suspended · ${formatRemaining(p.suspension.expiresAt)} left`));
+  }
+  if (p.online) {
+    pills.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
+  } else if (!p.suspension) {
+    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never joined';
+    pills.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}` : null }, seen));
+  }
+  return pills;
+}
+
 // ---- Action dialog ----
 
 let dialogHandler = null;
 
-function openDialog({ title, text, confirmLabel, confirmClass, duration, onConfirm }) {
+function openDialog({ title, text, confirmLabel, confirmClass, duration, label, value, maxLength, onConfirm }) {
   $('dialog-title').textContent = title;
   $('dialog-text').textContent = text;
   $('duration-fields').hidden = !duration;
-  $('dur-days').value = 1;
-  $('dur-hours').value = 0;
-  $('dialog-reason').value = '';
+  $('dur-days').value = duration ? duration.days : 1;
+  $('dur-hours').value = duration ? duration.hours : 0;
+  $('dialog-label').textContent = label || 'Reason (required)';
+  const reason = $('dialog-reason');
+  reason.value = value || '';
+  reason.maxLength = maxLength || 500;
+  reason.rows = maxLength > 500 ? 5 : 3;
   $('dialog-error').hidden = true;
   const confirm = $('dialog-confirm');
   confirm.textContent = confirmLabel;
@@ -113,7 +148,7 @@ function openDialog({ title, text, confirmLabel, confirmClass, duration, onConfi
   confirm.disabled = false;
   dialogHandler = onConfirm;
   $('action-dialog').showModal();
-  $('dialog-reason').focus();
+  reason.focus();
 }
 
 $('action-form').addEventListener('submit', async (event) => {
@@ -121,7 +156,7 @@ $('action-form').addEventListener('submit', async (event) => {
   const reason = $('dialog-reason').value.trim();
   const error = $('dialog-error');
   if (!reason) {
-    error.textContent = 'Please enter a reason.';
+    error.textContent = 'Please fill this in.';
     error.hidden = false;
     return;
   }
@@ -137,7 +172,7 @@ $('action-form').addEventListener('submit', async (event) => {
   try {
     await dialogHandler({ reason, days, hours });
     $('action-dialog').close();
-    await loadLinked();
+    refreshCurrentView();
   } catch (e) {
     error.textContent = e.message;
     error.hidden = false;
@@ -146,65 +181,25 @@ $('action-form').addEventListener('submit', async (event) => {
 });
 $('dialog-cancel').addEventListener('click', () => $('action-dialog').close());
 
-// ---- Linked view ----
+// ---- Actions (shared by the Linked list and the player page) ----
 
-async function loadLinked() {
-  try {
-    state.linked = await api('/api/linked');
-    renderLinked();
-  } catch (e) {
-    toast(e.message);
-  }
-}
-
-function renderLinked() {
-  const query = $('linked-search').value.trim().toLowerCase();
-  const rows = state.linked.filter((p) => !query || [p.minecraftName, p.uuid, p.discordName, p.discordId]
-    .some((value) => value.toLowerCase().includes(query)));
-  $('linked-count').textContent = `(${state.linked.length})`;
-  $('linked-body').replaceChildren(...rows.map(linkedRow));
-  const empty = $('linked-empty');
-  empty.textContent = state.linked.length ? 'No players match your search.' : 'No linked players yet.';
-  empty.hidden = rows.length > 0;
-}
-
-function linkedRow(p) {
-  const status = [];
-  if (p.suspension) {
-    status.push(el('span', { class: 'pill suspended' }, `Suspended · ${formatRemaining(p.suspension.expiresAt)} left`));
-    status.push(el('div', { class: 'suspension-note' },
-      `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by ${p.suspension.createdBy}`));
-  } else if (p.online) {
-    status.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
-  } else {
-    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never joined';
-    status.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}` : null }, seen));
-  }
-
-  const actions = el('div', { class: 'actions' },
-    p.online && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => kickDialog(p) }, 'Kick'),
+function actionButtons(p) {
+  const small = (cls, label, handler) => el('button', { class: `btn ${cls} btn-small`, type: 'button', onclick: handler }, label);
+  return el('div', { class: 'actions' },
+    p.online && small('btn-ghost', 'Kick', () => kickDialog(p)),
     p.suspension
-      ? el('button', { class: 'btn btn-success btn-small', type: 'button', onclick: () => unsuspendDialog(p) }, 'Unsuspend')
-      : el('button', { class: 'btn btn-warning btn-small', type: 'button', onclick: () => suspendDialog(p) }, 'Suspend'),
-    el('button', { class: 'btn btn-danger btn-small', type: 'button', onclick: () => unlinkDialog(p) }, 'Remove link'));
-
-  return el('tr', {},
-    el('td', {}, el('div', { class: 'identity' },
-      el('img', { class: 'head', src: `https://mc-heads.net/avatar/${p.uuid}/72`, alt: '', loading: 'lazy' }),
-      el('div', {}, el('div', { class: 'name' }, p.minecraftName), copyButton(p.uuid)))),
-    el('td', {}, el('div', { class: 'identity' },
-      el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' }),
-      el('div', {}, el('div', { class: 'name' }, p.discordName), copyButton(p.discordId)))),
-    el('td', {}, status),
-    el('td', { class: 'nowrap muted' }, formatTime(p.linkedAt)),
-    el('td', {}, actions));
+      ? [small('btn-ghost', 'Edit suspension', () => editSuspensionDialog(p)),
+        small('btn-success', 'Unsuspend', () => unsuspendDialog(p))]
+      : small('btn-warning', 'Suspend', () => suspendDialog(p)),
+    small('btn-ghost', 'Note', () => noteDialog(p)),
+    p.linked && small('btn-danger', 'Remove link', () => unlinkDialog(p)));
 }
 
 function suspendDialog(p) {
   openDialog({
     title: `Suspend ${p.minecraftName}`,
-    text: 'They will be kicked if online and blocked from joining until the suspension ends.',
-    confirmLabel: 'Suspend', confirmClass: 'btn-warning', duration: true,
+    text: 'They will be kicked if online, blocked from joining until it ends, and messaged on Discord.',
+    confirmLabel: 'Suspend', confirmClass: 'btn-warning', duration: { days: 1, hours: 0 },
     onConfirm: async ({ reason, days, hours }) => {
       await api('/api/suspend', { uuid: p.uuid, reason, days, hours });
       toast(`${p.minecraftName} suspended`);
@@ -212,14 +207,17 @@ function suspendDialog(p) {
   });
 }
 
-function kickDialog(p) {
+function editSuspensionDialog(p) {
+  const hoursLeft = Math.max(1, Math.ceil((p.suspension.expiresAt - Date.now()) / 3600000));
   openDialog({
-    title: `Kick ${p.minecraftName}`,
-    text: `Disconnects ${p.minecraftName}${p.server ? ` from ${p.server}` : ''}. They can rejoin straight away.`,
-    confirmLabel: 'Kick', confirmClass: 'btn-warning',
-    onConfirm: async ({ reason }) => {
-      await api('/api/kick', { uuid: p.uuid, reason });
-      toast(`${p.minecraftName} kicked`);
+    title: `Edit suspension for ${p.minecraftName}`,
+    text: `Currently ends ${formatTime(p.suspension.expiresAt)}. The new length is counted from now.`,
+    confirmLabel: 'Save changes', confirmClass: 'btn-warning',
+    duration: { days: Math.floor(hoursLeft / 24), hours: hoursLeft % 24 },
+    value: p.suspension.reason,
+    onConfirm: async ({ reason, days, hours }) => {
+      await api('/api/suspension/edit', { uuid: p.uuid, reason, days, hours });
+      toast(`Suspension for ${p.minecraftName} updated`);
     },
   });
 }
@@ -236,6 +234,30 @@ function unsuspendDialog(p) {
   });
 }
 
+function kickDialog(p) {
+  openDialog({
+    title: `Kick ${p.minecraftName}`,
+    text: `Disconnects ${p.minecraftName}${p.server ? ` from ${p.server}` : ''}. They can rejoin straight away.`,
+    confirmLabel: 'Kick', confirmClass: 'btn-warning',
+    onConfirm: async ({ reason }) => {
+      await api('/api/kick', { uuid: p.uuid, reason });
+      toast(`${p.minecraftName} kicked`);
+    },
+  });
+}
+
+function noteDialog(p) {
+  openDialog({
+    title: `Add a note to ${p.minecraftName}`,
+    text: 'Notes are only visible to staff. The player is not told.',
+    confirmLabel: 'Add note', label: 'Note', maxLength: 2000,
+    onConfirm: async ({ reason }) => {
+      await api('/api/note', { uuid: p.uuid, note: reason });
+      toast('Note added');
+    },
+  });
+}
+
 function unlinkDialog(p) {
   openDialog({
     title: `Remove link for ${p.minecraftName}`,
@@ -248,18 +270,87 @@ function unlinkDialog(p) {
   });
 }
 
-$('linked-search').addEventListener('input', renderLinked);
+// ---- Linked view ----
 
-// ---- Logs view ----
+const SORTS = {
+  'name-asc': (a, b) => a.minecraftName.localeCompare(b.minecraftName, undefined, { sensitivity: 'base' }),
+  'name-desc': (a, b) => b.minecraftName.localeCompare(a.minecraftName, undefined, { sensitivity: 'base' }),
+  online: (a, b) => (b.online - a.online) || SORTS.seen(a, b),
+  seen: (a, b) => (b.online - a.online) || ((b.lastSeen || 0) - (a.lastSeen || 0)),
+  'linked-new': (a, b) => b.linkedAt - a.linkedAt,
+  'linked-old': (a, b) => a.linkedAt - b.linkedAt,
+  suspended: (a, b) => (!!b.suspension - !!a.suspension) || SORTS['name-asc'](a, b),
+  admins: (a, b) => (b.isAdmin - a.isAdmin) || SORTS['name-asc'](a, b),
+};
+
+try {
+  const saved = localStorage.getItem('dl-sort');
+  if (saved && SORTS[saved]) $('linked-sort').value = saved;
+} catch (e) { /* storage unavailable */ }
+
+async function loadLinked() {
+  try {
+    state.linked = await api('/api/linked');
+    renderLinked();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function renderLinked() {
+  const query = $('linked-search').value.trim().toLowerCase();
+  const rows = state.linked
+    .filter((p) => !query || [p.minecraftName, p.uuid, p.discordName, p.discordId]
+      .some((value) => value.toLowerCase().includes(query)))
+    .sort(SORTS[$('linked-sort').value] || SORTS['name-asc']);
+  $('linked-count').textContent = `(${state.linked.length})`;
+  $('linked-body').replaceChildren(...rows.map(linkedRow));
+  const empty = $('linked-empty');
+  empty.textContent = state.linked.length ? 'No players match your filter.' : 'No linked players yet.';
+  empty.hidden = rows.length > 0;
+}
+
+function linkedRow(p) {
+  const status = statusPills(p);
+  if (p.suspension) {
+    status.push(el('div', { class: 'suspension-note' },
+      `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by ${p.suspension.createdBy}`));
+  }
+  if (!p.inGuild) status.push(el('div', { class: 'suspension-note' }, 'Not in the Discord server'));
+
+  return el('tr', {},
+    el('td', {}, el('div', { class: 'identity' },
+      el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
+      el('div', {}, playerName(p), copyButton(p.uuid)))),
+    el('td', {}, el('div', { class: 'identity' },
+      el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' }),
+      el('div', {}, el('div', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName), copyButton(p.discordId)))),
+    el('td', {}, status),
+    el('td', { class: 'nowrap muted' }, formatTime(p.linkedAt)),
+    el('td', {}, actionButtons(p)));
+}
+
+$('linked-search').addEventListener('input', renderLinked);
+$('linked-sort').addEventListener('change', () => {
+  try { localStorage.setItem('dl-sort', $('linked-sort').value); } catch (e) { /* storage unavailable */ }
+  renderLinked();
+});
+
+// ---- Logs (the Logs page and each player page share this) ----
+
+function logParams(uuid) {
+  if (uuid) return new URLSearchParams({ filter: 'all', q: '', uuid });
+  return new URLSearchParams({ filter: $('logs-filter').value, q: $('logs-search').value.trim() });
+}
 
 async function loadLogs(reset) {
   if (state.logsLoading) return;
   state.logsLoading = true;
-  const params = new URLSearchParams({ filter: $('logs-filter').value, q: $('logs-search').value.trim() });
+  const params = logParams();
   if (!reset && state.logsBefore) params.set('before', state.logsBefore);
   try {
     const data = await api(`/api/logs?${params}`);
-    const rows = data.entries.map(logRow);
+    const rows = data.entries.map((entry) => logRow(entry, true));
     if (reset) $('logs-body').replaceChildren(...rows);
     else $('logs-body').append(...rows);
     state.logsBefore = data.nextBefore;
@@ -272,14 +363,38 @@ async function loadLogs(reset) {
   }
 }
 
-function logRow(entry) {
+function logRow(entry, showPlayer) {
   const [label, tone] = EVENT_LABELS[entry.type] || [entry.type, ''];
+  const player = entry.uuid
+    ? el('a', { class: 'player-link', href: playerHref(entry.uuid) }, entry.player || entry.uuid)
+    : (entry.player || '—');
   return el('tr', {},
     el('td', { class: 'nowrap muted' }, formatTime(entry.time)),
     el('td', {}, el('span', { class: `badge ${tone}` }, label)),
-    el('td', { class: 'nowrap' }, entry.player || '—'),
+    showPlayer && el('td', { class: 'nowrap' }, player),
     el('td', {}, entry.actor || '—'),
     el('td', { class: 'detail' }, entry.detail || ''));
+}
+
+function downloadCsv(uuid) {
+  location.href = `/api/logs/export.csv?${logParams(uuid)}`;
+}
+
+async function exportSheets(button, uuid) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Exporting…';
+  try {
+    const params = logParams(uuid);
+    const data = await api('/api/logs/export-sheets',
+      { filter: params.get('filter'), q: params.get('q'), uuid: params.get('uuid') || '' });
+    toast(`Exported ${data.rows} rows.`, { href: data.url, text: 'Open spreadsheet' });
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 let searchTimer;
@@ -289,22 +404,248 @@ $('logs-search').addEventListener('input', () => {
 });
 $('logs-filter').addEventListener('change', () => loadLogs(true));
 $('logs-more').addEventListener('click', () => loadLogs(false));
+$('logs-csv').addEventListener('click', () => downloadCsv());
+$('logs-sheets').addEventListener('click', (e) => exportSheets(e.currentTarget));
+
+// ---- Player page ----
+
+async function loadPlayer(uuid) {
+  const view = $('view-player');
+  if (!state.player || state.player.player.uuid !== uuid) view.replaceChildren(el('p', { class: 'empty' }, 'Loading…'));
+  try {
+    state.player = await api(`/api/player?uuid=${encodeURIComponent(uuid)}`);
+    renderPlayer();
+    loadPlayerLogs(true);
+  } catch (e) {
+    view.replaceChildren(el('a', { class: 'back', href: '#/linked' }, '← Back'), el('p', { class: 'empty' }, e.message));
+  }
+}
+
+function renderPlayer() {
+  const { player: p, suspensions, notes, ips } = state.player;
+  const badges = [
+    p.isAdmin && el('span', { class: 'badge warn' }, 'Admin'),
+    p.linked ? el('span', { class: 'badge good' }, 'Linked') : el('span', { class: 'badge' }, 'Not linked'),
+    p.linked && !p.inGuild && el('span', { class: 'badge bad' }, 'Left the Discord server'),
+    ...statusPills(p),
+  ];
+
+  const profile = el('div', { class: 'card profile' },
+    el('img', { class: 'head-large', src: headUrl(p.uuid, 192), alt: '' }),
+    el('div', { class: 'info' },
+      el('h1', { class: nameClass(p) }, p.minecraftName),
+      el('div', { class: 'badges' }, badges),
+      copyButton(p.uuid),
+      el('div', { class: 'actions' },
+        el('a', { class: 'btn btn-ghost btn-small', href: `https://namemc.com/profile/${p.uuid}`, target: '_blank', rel: 'noopener' },
+          'View on NameMC ↗'))),
+    actionButtons(p));
+
+  const discord = el('div', { class: 'card panel' },
+    el('h2', {}, 'Discord'),
+    p.linked
+      ? el('div', { class: 'identity' },
+        el('img', { class: 'avatar', src: p.discordAvatar, alt: '' }),
+        el('div', {}, el('div', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName), copyButton(p.discordId)))
+      : el('p', { class: 'muted' }, 'This player has no linked Discord account.'),
+    el('dl', { class: 'kv' },
+      p.linked && [el('dt', {}, 'Linked'), el('dd', {}, formatTime(p.linkedAt))],
+      el('dt', {}, 'Last seen'),
+      el('dd', {}, p.online ? 'Online now' : (p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never'))));
+
+  const s = p.suspension;
+  const suspension = el('div', { class: 'card panel' },
+    el('h2', {}, 'Suspension'),
+    s
+      ? el('dl', { class: 'kv' },
+        el('dt', {}, 'Status'), el('dd', { class: 'name-suspended' }, `Suspended · ${formatRemaining(s.expiresAt)} left`),
+        el('dt', {}, 'Reason'), el('dd', {}, s.reason),
+        el('dt', {}, 'Ends'), el('dd', {}, formatTime(s.expiresAt)),
+        el('dt', {}, 'By'), el('dd', {}, s.createdBy),
+        el('dt', {}, 'Since'), el('dd', {}, formatTime(s.createdAt)))
+      : el('p', { class: 'muted' }, `Not suspended. ${suspensions.length} past suspension${suspensions.length === 1 ? '' : 's'}.`));
+
+  const notesSection = [
+    el('h2', { class: 'section-title' }, `Notes (${notes.length})`,
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => noteDialog(p) }, 'Add note')),
+    notes.length
+      ? el('div', { class: 'notes' }, notes.map((n) => el('div', { class: 'note' },
+        el('p', {}, n.note), el('div', { class: 'meta' }, `${n.author} · ${formatTime(n.createdAt)}`))))
+      : el('p', { class: 'muted' }, 'No notes yet.'),
+  ];
+
+  const historySection = [
+    el('h2', { class: 'section-title' }, `Suspension history (${suspensions.length})`),
+    suspensions.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+      el('thead', {}, el('tr', {}, ['Started', 'Ends', 'Reason', 'By', 'Outcome'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, suspensions.map((x) => el('tr', {},
+        el('td', { class: 'nowrap muted' }, formatTime(x.createdAt)),
+        el('td', { class: 'nowrap' }, formatTime(x.expiresAt)),
+        el('td', { class: 'detail' }, x.reason),
+        el('td', {}, x.createdBy),
+        el('td', { class: 'detail' }, x.active
+          ? el('span', { class: 'badge bad' }, 'Active')
+          : x.liftedAt
+            ? `Lifted ${formatTime(x.liftedAt)} by ${x.liftedBy}: "${x.liftReason}"`
+            : 'Expired'))))))
+      : el('p', { class: 'muted' }, 'Never suspended.'),
+  ];
+
+  const ipSection = [
+    el('h2', { class: 'section-title' }, `IP addresses (${ips.length})`),
+    ips.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+      el('thead', {}, el('tr', {}, ['IP', 'First seen', 'Last seen', 'Times', 'Other accounts on this IP'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ips.map((ip) => el('tr', {},
+        el('td', { class: 'mono' }, ip.ip),
+        el('td', { class: 'nowrap muted' }, formatTime(ip.firstSeen)),
+        el('td', { class: 'nowrap muted' }, formatTime(ip.lastSeen)),
+        el('td', {}, ip.times),
+        el('td', {}, ip.others.length
+          ? el('div', { class: 'others' }, ip.others.map((o) => el('a', { class: 'chip', href: playerHref(o.uuid) }, o.name)))
+          : el('span', { class: 'muted' }, 'None')))))))
+      : el('p', { class: 'muted' }, 'No IPs recorded yet.'),
+  ];
+
+  const sheetsButton = state.me.sheetsEnabled && el('button', {
+    class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => exportSheets(e.currentTarget, p.uuid),
+  }, 'Export to Google Sheets');
+  const activitySection = [
+    el('h2', { class: 'section-title' }, 'Activity',
+      el('div', { class: 'actions' },
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => downloadCsv(p.uuid) }, 'Download CSV'),
+        sheetsButton)),
+    el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+      el('thead', {}, el('tr', {}, ['Time', 'Event', 'By', 'Details'].map((h) => el('th', {}, h)))),
+      el('tbody', { id: 'player-logs' }))),
+    el('div', { class: 'more' }, el('button', {
+      class: 'btn btn-ghost', type: 'button', id: 'player-logs-more', hidden: true, onclick: () => loadPlayerLogs(false),
+    }, 'Load more')),
+  ];
+
+  $('view-player').replaceChildren(
+    el('a', { class: 'back', href: '#/linked' }, '← All linked players'),
+    profile,
+    el('div', { class: 'grid' }, discord, suspension),
+    ...notesSection, ...historySection, ...ipSection, ...activitySection);
+}
+
+async function loadPlayerLogs(reset) {
+  const uuid = state.player.player.uuid;
+  const params = logParams(uuid);
+  if (!reset && state.playerLogsBefore) params.set('before', state.playerLogsBefore);
+  try {
+    const data = await api(`/api/logs?${params}`);
+    const body = $('player-logs');
+    if (!body) return;
+    const rows = data.entries.map((entry) => logRow(entry, false));
+    if (reset) body.replaceChildren(...rows);
+    else body.append(...rows);
+    if (!body.children.length) body.append(el('tr', {}, el('td', { colspan: 4, class: 'empty' }, 'Nothing logged yet.')));
+    state.playerLogsBefore = data.nextBefore;
+    $('player-logs-more').hidden = !data.nextBefore;
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+// ---- Global player search ----
+
+let globalTimer;
+let globalResults = [];
+let globalActive = -1;
+
+function renderGlobalResults(query) {
+  const box = $('global-results');
+  if (!query) {
+    box.hidden = true;
+    return;
+  }
+  box.replaceChildren(...(globalResults.length
+    ? globalResults.map((p, i) => el('a', {
+      class: `search-result ${i === globalActive ? 'active' : ''}`, href: playerHref(p.uuid), role: 'option',
+      onclick: closeGlobalSearch,
+    },
+    el('img', { class: 'head', src: headUrl(p.uuid, 56), alt: '' }),
+    el('div', { class: 'grow' },
+      el('div', { class: `name ${nameClass(p)}` }, p.minecraftName),
+      el('div', { class: 'sub' }, p.linked ? `Linked · ${p.discordName}` : 'Not linked')),
+    statusPills(p)))
+    : [el('div', { class: 'search-empty' }, 'No players found')]));
+  box.hidden = false;
+}
+
+function closeGlobalSearch() {
+  $('global-results').hidden = true;
+  $('global-search').value = '';
+  globalResults = [];
+  globalActive = -1;
+}
+
+$('global-search').addEventListener('input', () => {
+  clearTimeout(globalTimer);
+  const query = $('global-search').value.trim();
+  if (!query) {
+    renderGlobalResults('');
+    return;
+  }
+  globalTimer = setTimeout(async () => {
+    try {
+      globalResults = await api(`/api/search?q=${encodeURIComponent(query)}`);
+      globalActive = globalResults.length ? 0 : -1;
+      if ($('global-search').value.trim() === query) renderGlobalResults(query);
+    } catch (e) {
+      toast(e.message);
+    }
+  }, 250);
+});
+
+$('global-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeGlobalSearch();
+    e.currentTarget.blur();
+  } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && globalResults.length) {
+    e.preventDefault();
+    globalActive = (globalActive + (e.key === 'ArrowDown' ? 1 : -1) + globalResults.length) % globalResults.length;
+    renderGlobalResults($('global-search').value.trim());
+  } else if (e.key === 'Enter' && globalResults[globalActive]) {
+    location.hash = playerHref(globalResults[globalActive].uuid);
+    closeGlobalSearch();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.global-search')) $('global-results').hidden = true;
+});
 
 // ---- Navigation ----
 
+function currentRoute() {
+  const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
+  if (match) return { view: 'player', uuid: match[1].toLowerCase() };
+  return { view: location.hash === '#/logs' ? 'logs' : 'linked' };
+}
+
+function refreshCurrentView() {
+  const route = currentRoute();
+  if (route.view === 'linked') loadLinked();
+  else if (route.view === 'player') loadPlayer(route.uuid);
+}
+
 function showView() {
-  const view = location.hash === '#/logs' ? 'logs' : 'linked';
-  for (const name of ['linked', 'logs']) $(`view-${name}`).hidden = name !== view;
-  document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
-  if (view === 'linked') loadLinked();
-  else loadLogs(true);
+  const route = currentRoute();
+  for (const name of ['linked', 'logs', 'player']) $(`view-${name}`).hidden = name !== route.view;
+  document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
+  if (route.view === 'logs') loadLogs(true);
+  else refreshCurrentView();
+  window.scrollTo(0, 0);
 }
 
 window.addEventListener('hashchange', showView);
 
-// Keep the Linked page fresh (online status, expiring suspensions).
+// Keep things fresh (online status, admin colours, expiring suspensions).
 setInterval(() => {
-  if (!$('view-linked').hidden && !$('action-dialog').open && !document.hidden) loadLinked();
+  if ($('action-dialog').open || document.hidden) return;
+  if (!$('view-linked').hidden) loadLinked();
 }, 30000);
 
 (async () => {
@@ -315,5 +656,8 @@ setInterval(() => {
   }
   $('me-name').textContent = state.me.name;
   $('me-avatar').src = state.me.avatar;
+  $('logs-sheets').hidden = !state.me.sheetsEnabled;
   showView();
+  // Admin status is looked up in the background; pick it up shortly after the first load.
+  setTimeout(() => { if (!$('view-linked').hidden) loadLinked(); }, 3000);
 })();

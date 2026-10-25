@@ -53,6 +53,7 @@ public final class PlayerListener {
                 plugin.audit().log(player.getUniqueId(), player.getUsername(),
                         account.map(LinkedAccount::discordId).orElse(null),
                         EventTypes.DENIED_SUSPENDED, "ip=" + ip(player));
+                recordIp(player);
                 return;
             }
 
@@ -75,6 +76,7 @@ public final class PlayerListener {
                     "code", code, "minutes", String.valueOf(plugin.config().codeExpiryMinutes()))));
             plugin.audit().log(player.getUniqueId(), player.getUsername(), null,
                     EventTypes.DENIED_UNLINKED, "issued code, ip=" + ip(player));
+            recordIp(player);
         });
     }
 
@@ -84,6 +86,7 @@ public final class PlayerListener {
         plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player),
                 EventTypes.JOIN, "ip=" + ip(player));
         updateLastSeen(player);
+        recordIp(player);
         plugin.bot().bridgeToDiscord("discord.bridge.join", player.getUsername(), "", "");
     }
 
@@ -134,6 +137,14 @@ public final class PlayerListener {
             plugin.database().updateLastSeen(player.getUniqueId());
         } catch (SQLException e) {
             plugin.logger().warn("Could not update last seen for {}", player.getUsername(), e);
+        }
+    }
+
+    private void recordIp(Player player) {
+        try {
+            plugin.database().recordIp(player.getUniqueId(), ip(player));
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not record IP for {}", player.getUsername(), e);
         }
     }
 
