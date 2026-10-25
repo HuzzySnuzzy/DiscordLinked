@@ -92,6 +92,33 @@ public final class Database implements AutoCloseable {
                     )""");
             st.execute("CREATE INDEX IF NOT EXISTS idx_notes_uuid ON player_notes (minecraft_uuid)");
         }
+        try (Statement st = connection.createStatement()) {
+            // Added in 0.8.0.
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS inventory_snapshots (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        minecraft_uuid TEXT NOT NULL,
+                        minecraft_name TEXT NOT NULL,
+                        server         TEXT NOT NULL,
+                        reason         TEXT NOT NULL,
+                        detail         TEXT,
+                        created_at     INTEGER NOT NULL,
+                        stacks         INTEGER NOT NULL,
+                        display        TEXT NOT NULL,
+                        data           BLOB NOT NULL
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_uuid ON inventory_snapshots (minecraft_uuid, created_at)");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_restores (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        minecraft_uuid TEXT NOT NULL,
+                        snapshot_id    INTEGER NOT NULL,
+                        include_ender  INTEGER NOT NULL,
+                        actor          TEXT NOT NULL,
+                        reason         TEXT NOT NULL,
+                        requested_at   INTEGER NOT NULL
+                    )""");
+        }
         if (!tableExists("player_ips")) {
             try (Statement st = connection.createStatement()) {
                 st.execute("""
@@ -473,12 +500,14 @@ public final class Database implements AutoCloseable {
 
     // ---- Audit log ----
 
-    public synchronized void logEvent(UUID uuid, String minecraftName, Long discordId,
-                                      String eventType, String detail, String actor) throws SQLException {
+    /** Returns the stored entry, with its id. */
+    public synchronized AuditEntry logEvent(UUID uuid, String minecraftName, Long discordId,
+                                            String eventType, String detail, String actor) throws SQLException {
+        Instant now = Instant.now();
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO audit_log (timestamp, minecraft_uuid, minecraft_name, discord_id, event_type, detail, actor) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
-            ps.setLong(1, Instant.now().toEpochMilli());
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+            ps.setLong(1, now.toEpochMilli());
             ps.setString(2, uuid == null ? null : uuid.toString());
             ps.setString(3, minecraftName);
             if (discordId == null) {
@@ -490,6 +519,10 @@ public final class Database implements AutoCloseable {
             ps.setString(6, detail);
             ps.setString(7, actor);
             ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                keys.next();
+                return new AuditEntry(keys.getLong(1), now, uuid, minecraftName, discordId, eventType, detail, actor);
+            }
         }
     }
 
@@ -540,6 +573,122 @@ public final class Database implements AutoCloseable {
             }
             return readEntries(ps);
         }
+    }
+
+    // ---- Inventory snapshots ----
+
+    public synchronized long addSnapshot(UUID uuid, String name, String server, String reason, String detail,
+                                         Instant createdAt, int stacks, String display, byte[] data) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO inventory_snapshots (minecraft_uuid, minecraft_name, server, reason, detail, created_at, "
+                        + "stacks, display, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, name);
+            ps.setString(3, server);
+            ps.setString(4, reason);
+            ps.setString(5, detail);
+            ps.setLong(6, createdAt.toEpochMilli());
+            ps.setInt(7, stacks);
+            ps.setString(8, display);
+            ps.setBytes(9, data);
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                keys.next();
+                return keys.getLong(1);
+            }
+        }
+    }
+
+    /** Keeps only the newest {@code keep} snapshots for a player. */
+    public synchronized void pruneSnapshots(UUID uuid, int keep) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM inventory_snapshots WHERE minecraft_uuid = ? AND id NOT IN "
+                        + "(SELECT id FROM inventory_snapshots WHERE minecraft_uuid = ? ORDER BY created_at DESC, id DESC LIMIT ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, uuid.toString());
+            ps.setInt(3, keep);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Newest first, without the item data. */
+    public synchronized List<InventorySnapshotRecord> snapshots(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT id, minecraft_uuid, minecraft_name, server, reason, detail, created_at, stacks FROM inventory_snapshots "
+                        + "WHERE minecraft_uuid = ? ORDER BY created_at DESC, id DESC")) {
+            ps.setString(1, uuid.toString());
+            List<InventorySnapshotRecord> result = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(readSnapshot(rs, false));
+                }
+            }
+            return result;
+        }
+    }
+
+    public synchronized Optional<InventorySnapshotRecord> snapshot(long id) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM inventory_snapshots WHERE id = ?")) {
+            ps.setLong(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(readSnapshot(rs, true)) : Optional.empty();
+            }
+        }
+    }
+
+    public synchronized long addPendingRestore(UUID uuid, long snapshotId, boolean includeEnder, String actor,
+                                               String reason) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO pending_restores (minecraft_uuid, snapshot_id, include_ender, actor, reason, requested_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, snapshotId);
+            ps.setInt(3, includeEnder ? 1 : 0);
+            ps.setString(4, actor);
+            ps.setString(5, reason);
+            ps.setLong(6, Instant.now().toEpochMilli());
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                keys.next();
+                return keys.getLong(1);
+            }
+        }
+    }
+
+    public synchronized Optional<PendingRestore> pendingRestore(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT * FROM pending_restores WHERE minecraft_uuid = ? ORDER BY id DESC LIMIT 1")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new PendingRestore(rs.getLong("id"), uuid, rs.getLong("snapshot_id"),
+                        rs.getInt("include_ender") != 0, rs.getString("actor"), rs.getString("reason")));
+            }
+        }
+    }
+
+    /** Removes every queued restore for the player (only the newest one is ever applied). */
+    public synchronized void clearPendingRestores(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM pending_restores WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            ps.executeUpdate();
+        }
+    }
+
+    private static InventorySnapshotRecord readSnapshot(ResultSet rs, boolean full) throws SQLException {
+        return new InventorySnapshotRecord(
+                rs.getLong("id"),
+                UUID.fromString(rs.getString("minecraft_uuid")),
+                rs.getString("minecraft_name"),
+                rs.getString("server"),
+                rs.getString("reason"),
+                rs.getString("detail"),
+                Instant.ofEpochMilli(rs.getLong("created_at")),
+                rs.getInt("stacks"),
+                full ? rs.getString("display") : null,
+                full ? rs.getBytes("data") : null);
     }
 
     // ---- Mapping ----

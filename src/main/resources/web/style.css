@@ -587,3 +587,39 @@ dialog[open] { animation: glass-in .18s ease-out; }
   .inv-gap { height: auto; }
   .slot-count { font-size: 10px; }
 }
+
+/* ---- Live updates ---- */
+.live-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.live-indicator::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.live-indicator.on { color: var(--success); }
+.live-indicator.on::before { background: var(--success); box-shadow: 0 0 0 3px rgba(31, 157, 85, .18); }
+@keyframes fresh-row { from { background: rgba(109, 120, 255, .22); } to { background: transparent; } }
+.table tr.fresh { animation: fresh-row 2.5s ease-out; }
+
+/* ---- Inventory modes & snapshots ---- */
+.inv-modes { display: inline-flex; font-size: 13px; }
+.inv-modes a { padding: 4px 12px; }
+.inv-start { justify-content: flex-start; margin-top: 10px; }
+.inv-livebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.inv-livebar .btn { margin-left: auto; }
+.snap-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; align-items: start; }
+.snap-list { display: grid; gap: 6px; max-height: 560px; overflow-y: auto; padding-right: 4px; }
+.snap-item {
+  text-align: left; font: inherit; color: var(--text); cursor: pointer; display: grid; gap: 3px;
+  padding: 10px 12px; border-radius: 14px; background: var(--glass-soft); border: 1px solid var(--glass-border);
+}
+.snap-item:hover { background: var(--glass-strong); }
+.snap-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.snap-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; }
+.snap-meta { font-size: 12px; color: var(--muted); }
+.snap-detail { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snap-preview { min-width: 0; }
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.check-row input { width: 16px; height: 16px; }
+@media (max-width: 900px) {
+  .snap-layout { grid-template-columns: 1fr; }
+  .snap-list { max-height: 260px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .table tr.fresh { animation: none; }
+}

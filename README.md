@@ -43,11 +43,22 @@ and the role is checked again every 5 minutes while they're logged in.
   player's complete activity log.
 - **Actions**: kick (online players), suspend (days + hours), edit a suspension (new length and reason),
   unsuspend, add a staff note, remove a link. All need a reason or note text.
-- **Inventory** (player page, and the Inventory button on Moderate cards): the player's live inventory,
-  armour, offhand and ender chest with item icons, stack sizes, durability, enchantments, custom names and
-  lore, plus what's inside shulker boxes; also their health, food, level, game mode and position. Online
-  players only, needs the companion plugin, and every view is logged. Item icons are loaded by your browser
-  from the `minecraft-textures` package on jsDelivr.
+- **Inventory** (player page, and the Inventory button on Moderate cards):
+  - **Live**: the player's inventory, armour, offhand and ender chest with item icons, stack sizes,
+    durability, enchantments, custom names and lore, plus what's inside shulker boxes; also their health,
+    food, level, game mode and position. Refreshes every few seconds while open. Online players only;
+    opening it is logged (the refreshes aren't).
+  - **Snapshots**: a full copy of the inventory is saved when a player **dies** (with the death message),
+    **joins**, **quits** or **changes world**, and whenever an admin clicks **Save snapshot**. Preview any
+    snapshot and **restore** it (reason required, optionally including the ender chest). The player's
+    current items are saved as a "Before restore" snapshot first, so a restore can be undone. If the player
+    is offline, the restore is applied when they next join. Restores are logged and posted to the log
+    channel. `inventory-snapshots-per-player` (default 100) sets how many are kept.
+  - Needs the companion plugin. Item icons are loaded by your browser from the `minecraft-textures`
+    package on jsDelivr.
+- **Live updates**: every page updates as things happen (new log rows appear instantly; the Linked,
+  Moderate and player pages refresh when someone joins, leaves, is suspended, and so on). The "Live" dot in
+  the top bar shows the connection.
 - **Logs**: every event, newest first, filterable and searchable, with **Download CSV** and
   **Export to Google Sheets** buttons (also on each player page for just that player).
 
@@ -170,7 +181,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.7.0.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.8.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup

@@ -29,7 +29,8 @@ public record PluginConfig(
         String googleSpreadsheetId,
         String googleServiceAccountFile,
         int spyMaxDistance,
-        String webAccess
+        String webAccess,
+        int snapshotsPerPlayer
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -56,7 +57,8 @@ public record PluginConfig(
                 props.getProperty("google-sheets-spreadsheet-id").trim(),
                 props.getProperty("google-service-account-file").trim(),
                 Integer.parseInt(props.getProperty("spy-max-distance").trim()),
-                props.getProperty("web-access").trim().toLowerCase()
+                props.getProperty("web-access").trim().toLowerCase(),
+                Integer.parseInt(props.getProperty("inventory-snapshots-per-player").trim())
         );
     }
 

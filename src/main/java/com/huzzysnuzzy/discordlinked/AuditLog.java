@@ -22,7 +22,7 @@ public final class AuditLog {
     private static final Set<String> DISCORD_EVENTS = Set.of(
             EventTypes.LINK, EventTypes.UNLINK, EventTypes.JOIN, EventTypes.LEAVE, EventTypes.DENIED_UNLINKED,
             EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT, EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE,
-            EventTypes.SPY_START, EventTypes.SPY_END);
+            EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_RESTORE);
 
     private final Database database;
     private final Logger logger;
@@ -32,12 +32,17 @@ public final class AuditLog {
         return thread;
     });
     private final Messages messages;
+    private final LiveEvents live = new LiveEvents();
     private volatile Consumer<String> discordSink = message -> { };
 
     public AuditLog(Database database, Messages messages, Logger logger) {
         this.database = database;
         this.messages = messages;
         this.logger = logger;
+    }
+
+    public LiveEvents live() {
+        return live;
     }
 
     public void setDiscordSink(Consumer<String> discordSink) {
@@ -52,7 +57,7 @@ public final class AuditLog {
     public void log(UUID uuid, String minecraftName, Long discordId, String eventType, String detail, String actor) {
         executor.execute(() -> {
             try {
-                database.logEvent(uuid, minecraftName, discordId, eventType, detail, actor);
+                live.log(database.logEvent(uuid, minecraftName, discordId, eventType, detail, actor));
             } catch (SQLException e) {
                 logger.error("Failed to write audit event {} for {}", eventType, minecraftName, e);
             }
@@ -94,6 +99,9 @@ public final class AuditLog {
         public static final String SPY_START = "SPY_START";
         public static final String SPY_END = "SPY_END";
         public static final String INVENTORY_VIEW = "INVENTORY_VIEW";
+        public static final String DEATH = "DEATH";
+        public static final String INVENTORY_SNAPSHOT = "INVENTORY_SNAPSHOT";
+        public static final String INVENTORY_RESTORE = "INVENTORY_RESTORE";
         public static final String UNSUSPEND = "UNSUSPEND";
         public static final String WEB_LOGIN = "WEB_LOGIN";
 

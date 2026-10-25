@@ -45,6 +45,7 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
 
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
     private NamespacedKey stateKey;
+    private InventoryBridge inventory;
     private boolean folia;
 
     /** Where the target was last seen, copied by the target's own scheduler. */
@@ -93,6 +94,14 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
         getServer().getMessenger().registerIncomingPluginChannel(this, INVENTORY_CHANNEL, this);
         getServer().getMessenger().registerOutgoingPluginChannel(this, INVENTORY_CHANNEL);
         getServer().getPluginManager().registerEvents(this, this);
+        try {
+            SnapshotOutbox outbox = new SnapshotOutbox(this, getDataFolder().toPath().resolve("outbox"), getLogger());
+            inventory = new InventoryBridge(this, outbox);
+            getServer().getPluginManager().registerEvents(inventory, this);
+            getServer().getGlobalRegionScheduler().runAtFixedRate(this, task -> outbox.flush(), 100L, 100L);
+        } catch (java.io.IOException e) {
+            getLogger().severe("Inventory snapshots are disabled: " + e.getMessage());
+        }
         getLogger().info("Ready for DiscordLinked spy sessions" + (folia ? " (Folia)" : ""));
     }
 
@@ -112,8 +121,8 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
 
     @Override
     public void onPluginMessageReceived(String channel, Player carrier, byte[] message) {
-        if (INVENTORY_CHANNEL.equals(channel)) {
-            sendInventory(carrier, message);
+        if (INVENTORY_CHANNEL.equals(channel) && inventory != null) {
+            inventory.handle(carrier, message);
             return;
         }
         if (!CHANNEL.equals(channel)) {
@@ -314,36 +323,6 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
             getLogger().warning("Could not fully restore " + player.getName() + " after spying: " + e.getMessage());
             player.setGameMode(getServer().getDefaultGameMode());
         }
-    }
-
-    // ---- Inventory viewer ----
-
-    /** The proxy asks through the viewed player's own connection, so the carrier is that player. */
-    private void sendInventory(Player player, byte[] message) {
-        String requestId;
-        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(message))) {
-            if (!in.readUTF().equals("REQ")) {
-                return;
-            }
-            requestId = in.readUTF();
-        } catch (IOException e) {
-            getLogger().warning("Bad inventory request: " + e.getMessage());
-            return;
-        }
-        player.getScheduler().run(this, task -> {
-            byte[] json = InventorySnapshot.of(player).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            try {
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                DataOutputStream out = new DataOutputStream(bytes);
-                out.writeUTF("INV");
-                out.writeUTF(requestId);
-                out.writeInt(json.length);
-                out.write(json);
-                player.sendPluginMessage(this, INVENTORY_CHANNEL, bytes.toByteArray());
-            } catch (IOException e) {
-                throw new IllegalStateException(e);
-            }
-        }, null);
     }
 
     // ---- Helpers ----

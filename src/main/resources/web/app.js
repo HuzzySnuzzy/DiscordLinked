@@ -20,6 +20,9 @@ const EVENT_LABELS = {
   WEB_LOGIN: ['Website login', 'info'],
   LOG_EXPORT: ['Log export', 'info'],
   INVENTORY_VIEW: ['Inventory viewed', ''],
+  INVENTORY_SNAPSHOT: ['Snapshot saved', 'info'],
+  INVENTORY_RESTORE: ['Inventory restored', 'warn'],
+  DEATH: ['Death', 'bad'],
   SPY_START: ['Spy started', 'info'],
   SPY_END: ['Spy ended', ''],
 };
@@ -139,7 +142,10 @@ function statusPills(p) {
 
 let dialogHandler = null;
 
-function openDialog({ title, text, confirmLabel, confirmClass, duration, label, value, maxLength, onConfirm }) {
+function openDialog({ title, text, confirmLabel, confirmClass, duration, label, value, maxLength, checkbox, onConfirm }) {
+  $('dialog-check-row').hidden = !checkbox;
+  $('dialog-check-label').textContent = checkbox || '';
+  $('dialog-check').checked = false;
   $('dialog-title').textContent = title;
   $('dialog-text').textContent = text;
   $('duration-fields').hidden = !duration;
@@ -179,7 +185,7 @@ $('action-form').addEventListener('submit', async (event) => {
   const confirm = $('dialog-confirm');
   confirm.disabled = true;
   try {
-    await dialogHandler({ reason, days, hours });
+    await dialogHandler({ reason, days, hours, checked: $('dialog-check').checked });
     $('action-dialog').close();
     if (state.spy) pollSpy();
     else refreshCurrentView();
@@ -603,42 +609,199 @@ function itemName(item, textures) {
   return item.name || textures.get(item.id)?.readable || titleCase(item.id);
 }
 
-async function loadInventory() {
-  const box = $('inventory-box');
-  if (!box) return;
-  box.replaceChildren(el('p', { class: 'muted' }, 'Loading inventory…'));
+// Inventory panel: "Live" shows (and keeps refreshing) what they have now; "Snapshots" lists saved copies.
+const LIVE_INVENTORY_MS = 3000;
+let liveInventoryTimer = null;
+
+const SNAPSHOT_LABELS = {
+  DEATH: ['Death', 'bad'], JOIN: ['Join', 'info'], QUIT: ['Quit', ''], WORLD_CHANGE: ['World change', ''],
+  MANUAL: ['Manual', 'good'], BEFORE_RESTORE: ['Before restore', 'warn'],
+};
+
+function stopLiveInventory() {
+  clearTimeout(liveInventoryTimer);
+  liveInventoryTimer = null;
+}
+
+function inventoryState() {
+  state.inventory ||= { mode: 'live', tab: 'inventory', data: null, textures: new Map(), snapshots: null, snapshotId: null };
+  return state.inventory;
+}
+
+/** Opens the live view (logged once) and keeps it refreshed while it stays on screen. */
+async function loadInventory(refresh = false) {
+  const inv = inventoryState();
+  const uuid = state.player?.player.uuid;
+  if (!uuid || !$('inventory-box')) return stopLiveInventory();
+  inv.mode = 'live';
+  if (!refresh) renderInventory();
   try {
-    const data = await api(`/api/player/inventory?uuid=${encodeURIComponent(state.player.player.uuid)}`);
-    const textures = await loadTextures(data.mcVersion);
-    state.inventory = { data, textures, tab: 'inventory' };
-    renderInventory();
+    const data = await api(`/api/player/inventory?uuid=${encodeURIComponent(uuid)}${refresh ? '&live=1' : ''}`);
+    if (state.player?.player.uuid !== uuid || inv.mode !== 'live') return;
+    inv.textures = await loadTextures(data.mcVersion);
+    inv.data = data;
+    inv.updatedAt = Date.now();
+    inv.error = null;
   } catch (e) {
-    box.replaceChildren(el('p', { class: 'error' }, e.message));
+    inv.error = e.message;
+  }
+  renderInventory();
+  stopLiveInventory();
+  if (inv.mode === 'live' && state.player?.player.online && !inv.error) {
+    liveInventoryTimer = setTimeout(() => {
+      if (!document.hidden && $('inventory-box') && currentRoute().view === 'player') loadInventory(true);
+      else stopLiveInventory();
+    }, LIVE_INVENTORY_MS);
   }
 }
 
+async function loadSnapshots(selectId) {
+  const inv = inventoryState();
+  const uuid = state.player?.player.uuid;
+  stopLiveInventory();
+  inv.mode = 'snapshots';
+  try {
+    const result = await api(`/api/player/snapshots?uuid=${encodeURIComponent(uuid)}`);
+    if (state.player?.player.uuid !== uuid) return;
+    inv.snapshots = result.snapshots;
+    inv.pending = result.pendingRestore;
+    inv.error = null;
+    const id = selectId ?? inv.snapshotId ?? result.snapshots[0]?.id;
+    if (id) await previewSnapshot(id, false);
+  } catch (e) {
+    inv.error = e.message;
+  }
+  renderInventory();
+}
+
+async function previewSnapshot(id, render = true) {
+  const inv = inventoryState();
+  const snapshot = await api(`/api/player/snapshot?id=${id}`);
+  inv.snapshotId = id;
+  inv.preview = snapshot;
+  inv.textures = await loadTextures(snapshot.inventory.mcVersion);
+  if (render) renderInventory();
+}
+
+async function saveSnapshot() {
+  try {
+    await api('/api/player/snapshot/save', { uuid: state.player.player.uuid });
+    toast('Snapshot requested. It appears in the list in a moment.');
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function restoreDialog(snapshot) {
+  const p = state.player.player;
+  const [label] = SNAPSHOT_LABELS[snapshot.reason] || [snapshot.reason];
+  openDialog({
+    title: `Restore ${p.minecraftName}'s inventory`,
+    text: `Replaces their items with the ${label.toLowerCase()} snapshot from ${formatTime(snapshot.createdAt)}. `
+      + 'Their current items are saved as a "Before restore" snapshot first, so this can be undone.'
+      + (p.online ? '' : ' They are offline, so it happens when they next join.'),
+    confirmLabel: 'Restore', confirmClass: 'btn-warning',
+    checkbox: 'Also restore their ender chest',
+    onConfirm: async ({ reason, checked }) => {
+      const result = await api('/api/player/snapshot/restore', { id: snapshot.id, reason, includeEnderChest: checked });
+      toast(result.queued ? 'Restore queued for when they next join' : 'Inventory restored');
+    },
+  });
+}
+
 function inventorySection(p) {
+  const inv = state.inventory;
   const box = el('div', { id: 'inventory-box' });
+  const mode = inv?.mode || 'live';
+  const modes = el('div', { class: 'tabs inv-modes' },
+    el('a', { href: '#', class: mode === 'live' ? 'active' : '', onclick: (e) => { e.preventDefault(); loadInventory(); } }, 'Live'),
+    el('a', { href: '#', class: mode === 'snapshots' ? 'active' : '', onclick: (e) => { e.preventDefault(); loadSnapshots(); } }, 'Snapshots'));
   const section = el('div', { class: 'card panel inventory-panel' },
-    el('h2', {}, 'Inventory',
-      p.online && el('button', { class: 'btn btn-ghost btn-small', type: 'button', id: 'inventory-button', onclick: loadInventory },
-        state.inventory ? 'Refresh' : 'View inventory')),
+    el('h2', {}, 'Inventory', modes),
     box);
-  if (!p.online) box.append(el('p', { class: 'muted' }, 'The inventory can be viewed while the player is online.'));
-  else if (state.inventory) queueMicrotask(renderInventory);
-  else box.append(el('p', { class: 'muted' }, 'Shows their live inventory, armour, offhand and ender chest. Viewing is logged.'));
+  queueMicrotask(() => {
+    if (!state.inventory) {
+      box.replaceChildren(el('p', { class: 'muted' }, p.online
+        ? 'Live shows what they have right now and keeps updating. Snapshots are saved on death, join, quit and world change, and can be restored.'
+        : 'They are offline. Open Snapshots to see saved copies of their inventory.'),
+      el('div', { class: 'actions inv-start' },
+        p.online && el('button', { class: 'btn btn-small', type: 'button', onclick: () => loadInventory() }, 'View live inventory'),
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => loadSnapshots() }, 'Browse snapshots')));
+    } else {
+      renderInventory();
+    }
+  });
   return section;
 }
 
 function renderInventory() {
   const box = $('inventory-box');
-  if (!box || !state.inventory) return;
-  const { data, textures, tab } = state.inventory;
-  const slot = (item, extra = '') => inventorySlot(item, textures, extra);
+  const inv = state.inventory;
+  if (!box || !inv) return;
+  document.querySelectorAll('.inv-modes a').forEach((a, i) => a.classList.toggle('active', (i === 0) === (inv.mode === 'live')));
+  if (inv.mode === 'live') {
+    if (!state.player.player.online) {
+      box.replaceChildren(el('p', { class: 'muted' }, 'They are offline, so there is no live inventory. Open Snapshots instead.'));
+    } else if (inv.error) {
+      box.replaceChildren(el('p', { class: 'error' }, inv.error));
+    } else if (!inv.data) {
+      box.replaceChildren(el('p', { class: 'muted' }, 'Loading inventory…'));
+    } else {
+      box.replaceChildren(
+        el('div', { class: 'inv-livebar' },
+          el('span', { class: 'live-dot' }), el('span', { class: 'muted' }, 'Live · updates every few seconds'),
+          el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: saveSnapshot }, 'Save snapshot')),
+        ...inventoryView(inv.data, inv.textures));
+    }
+    return;
+  }
+
+  // Snapshots
+  if (inv.error) {
+    box.replaceChildren(el('p', { class: 'error' }, inv.error));
+    return;
+  }
+  if (!inv.snapshots) {
+    box.replaceChildren(el('p', { class: 'muted' }, 'Loading snapshots…'));
+    return;
+  }
+  if (!inv.snapshots.length) {
+    box.replaceChildren(el('p', { class: 'muted' }, 'No snapshots yet. They are saved on death, join, quit and world change (needs the DiscordLinkedSpy plugin).'));
+    return;
+  }
+  const list = el('div', { class: 'snap-list' }, inv.snapshots.map((snap) => {
+    const [label, tone] = SNAPSHOT_LABELS[snap.reason] || [snap.reason, ''];
+    return el('button', {
+      class: `snap-item ${snap.id === inv.snapshotId ? 'active' : ''}`, type: 'button',
+      onclick: () => previewSnapshot(snap.id).catch((e) => toast(e.message)),
+    },
+    el('div', { class: 'snap-top' }, el('span', { class: `badge ${tone}` }, label), el('span', { class: 'muted' }, timeAgo(snap.createdAt))),
+    el('div', { class: 'snap-meta' }, `${formatTime(snap.createdAt)} · ${snap.server} · ${snap.stacks} stacks`),
+    snap.detail && el('div', { class: 'snap-detail' }, snap.detail));
+  }));
+  const preview = inv.preview && inv.preview.id === inv.snapshotId ? inv.preview : null;
+  box.replaceChildren(...[
+    inv.pending && el('p', { class: 'self-status warn' },
+      `A restore of snapshot #${inv.pending.snapshotId} is queued for when they next join (by ${inv.pending.actor}).`),
+    el('div', { class: 'snap-layout' }, list,
+      el('div', { class: 'snap-preview' },
+        preview
+          ? [el('div', { class: 'inv-livebar' },
+            el('strong', {}, `Snapshot #${preview.id}`),
+            el('span', { class: 'muted' }, formatTime(preview.createdAt)),
+            el('button', { class: 'btn btn-warning btn-small', type: 'button', onclick: () => restoreDialog(preview) }, 'Restore this')),
+          ...inventoryView(preview.inventory, inv.textures)]
+          : el('p', { class: 'muted' }, 'Pick a snapshot to preview it.')))].filter(Boolean));
+}
+
+/** The Minecraft-style inventory grid for live data or a snapshot. */
+function inventoryView(data, textures) {
+  const inv = state.inventory;
+  const slot = (item, extra = '', path = '') => inventorySlot(item, textures, extra, path);
   const tabs = el('div', { class: 'tabs inv-tabs' },
     ['inventory', 'ender'].map((name) => el('a', {
-      href: '#', class: tab === name ? 'active' : '',
-      onclick: (e) => { e.preventDefault(); state.inventory.tab = name; renderInventory(); },
+      href: '#', class: inv.tab === name ? 'active' : '',
+      onclick: (e) => { e.preventDefault(); inv.tab = name; renderInventory(); },
     }, name === 'inventory' ? 'Inventory' : 'Ender chest')));
   const stats = el('div', { class: 'inv-stats' },
     el('span', { class: 'chip' }, `Health ${data.health} / 20`),
@@ -647,26 +810,32 @@ function renderInventory() {
     el('span', { class: 'chip' }, titleCase(data.gameMode.toLowerCase())),
     el('span', { class: 'chip mono' }, `${data.world} ${data.x}, ${data.y}, ${data.z}`),
     el('span', { class: 'muted' }, `on ${data.server}`));
-
   let body;
-  if (tab === 'ender') {
-    body = el('div', { class: 'inv-rows' }, el('div', { class: 'inv-grid' }, data.enderChest.map((i) => slot(i))));
+  if (inv.tab === 'ender') {
+    body = el('div', { class: 'inv-rows' }, el('div', { class: 'inv-grid' }, data.enderChest.map((i, n) => slot(i, '', `enderChest.${n}`))));
   } else {
     const armor = [...data.armor].reverse(); // helmet first
     body = el('div', { class: 'inv-layout' },
       el('div', { class: 'inv-side' },
-        armor.map((i, n) => slot(i, ['helmet', 'chestplate', 'leggings', 'boots'][n])),
-        el('div', { class: 'inv-gap' }), slot(data.offhand, 'offhand')),
+        armor.map((i, n) => slot(i, ['helmet', 'chestplate', 'leggings', 'boots'][n], `armor.${3 - n}`)),
+        el('div', { class: 'inv-gap' }), slot(data.offhand, 'offhand', 'offhand')),
       el('div', { class: 'inv-rows' },
-        el('div', { class: 'inv-grid' }, data.storage.slice(9).map((i) => slot(i))),
-        el('div', { class: 'inv-grid hotbar' }, data.storage.slice(0, 9).map((i, n) => slot(i, n === data.selectedSlot ? 'selected' : '')))));
+        el('div', { class: 'inv-grid' }, data.storage.slice(9).map((i, n) => slot(i, '', `storage.${n + 9}`))),
+        el('div', { class: 'inv-grid hotbar' }, data.storage.slice(0, 9).map((i, n) =>
+          slot(i, n === data.selectedSlot ? 'selected' : '', `storage.${n}`)))));
   }
-  box.replaceChildren(stats, tabs, body, el('div', { id: 'inv-contents' }));
-  const button = $('inventory-button');
-  if (button) button.textContent = 'Refresh';
+  const contents = el('div', { id: 'inv-contents' });
+  // Keep an opened shulker box open (and current) across live refreshes.
+  if (inv.openPath) {
+    const [group, index] = inv.openPath.split('.');
+    const item = index === undefined ? data[group] : data[group]?.[Number(index)];
+    if (item?.contents) queueMicrotask(() => showContents(item, textures));
+    else inv.openPath = null;
+  }
+  return [stats, tabs, body, contents];
 }
 
-function inventorySlot(item, textures, extra) {
+function inventorySlot(item, textures, extra, path = '') {
   const node = el('div', { class: `slot ${extra}`, tabindex: item ? 0 : -1, 'aria-label': item ? `${item.amount} × ${itemName(item, textures)}` : 'Empty slot' });
   if (!item) return node;
   const texture = textures.get(item.id)?.texture;
@@ -693,7 +862,10 @@ function inventorySlot(item, textures, extra) {
   node.addEventListener('blur', hideTooltip);
   node.addEventListener('click', () => {
     show();
-    if (item.contents) showContents(item, textures);
+    if (item.contents) {
+      state.inventory.openPath = path || null;
+      showContents(item, textures);
+    }
   });
   return node;
 }
@@ -708,8 +880,11 @@ function showContents(item, textures) {
   if (!target) return;
   target.replaceChildren(el('div', { class: 'inv-contents' },
     el('div', { class: 'inv-contents-title' }, `Inside ${itemName(item, textures)}`,
-      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => target.replaceChildren() }, 'Close')),
-    el('div', { class: 'inv-grid' }, item.contents.map((i) => inventorySlot(i, textures, '')))));
+      el('button', {
+        class: 'btn btn-ghost btn-small', type: 'button',
+        onclick: () => { state.inventory.openPath = null; target.replaceChildren(); },
+      }, 'Close')),
+    el('div', { class: 'inv-grid' }, item.contents.map((i) => inventorySlot(i, textures, '', '')))));
 }
 
 let tooltip;
@@ -940,7 +1115,7 @@ function renderSpyLock(s) {
   const starting = s.state === 'starting';
   const pct = s.distance >= 0 ? Math.min(100, (s.distance / s.maxDistance) * 100) : 0;
   const observed = `"(observed via spy for …)" is added to your reason automatically.`;
-  $('spy-card').replaceChildren(
+  $('spy-card').replaceChildren(...[
     el('div', { class: 'spy-eyebrow' }, el('span', { class: `live-dot ${starting ? 'pending' : ''}` }),
       starting ? 'Starting spy session…' : 'Spy session running'),
     el('img', { class: 'head-large spy-head', src: headUrl(t.uuid, 192), alt: '' }),
@@ -968,7 +1143,7 @@ function renderSpyLock(s) {
           confirmLabel: 'Suspend', confirmClass: 'btn-danger', duration: { days: 1, hours: 0 },
           onConfirm: ({ reason, days, hours }) => api('/api/spy/suspend', { reason, days, hours }),
         }),
-      }, 'Suspend')));
+      }, 'Suspend'))].filter(Boolean));
   // CSP blocks inline styles, so the meter width is set through the CSSOM.
   const fill = $('spy-card').querySelector('.meter-fill');
   if (fill) fill.style.width = `${fill.dataset.pct}%`;
@@ -995,6 +1170,76 @@ async function endSpy() {
     toast(e.message);
   }
   pollSpy();
+}
+
+// ---- Live updates: one event stream for every page ----
+
+// Events that can change what the list/player pages show.
+const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK', 'SUSPEND', 'SUSPEND_EDIT',
+  'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED']);
+const pendingRefresh = {};
+
+/** Coalesces bursts of events into one refresh. */
+function soon(key, fn, ms = 700) {
+  clearTimeout(pendingRefresh[key]);
+  pendingRefresh[key] = setTimeout(fn, ms);
+}
+
+function onLiveLog(entry) {
+  const route = currentRoute();
+  if (route.view === 'logs') prependLog(entry);
+  else if (route.view === 'linked' && STATUS_EVENTS.has(entry.type)) soon('linked', loadLinked);
+  else if (route.view === 'moderate' && STATUS_EVENTS.has(entry.type)) soon('moderate', loadModerate);
+  else if (route.view === 'player' && entry.uuid === route.uuid) {
+    prependPlayerLog(entry);
+    if (STATUS_EVENTS.has(entry.type)) soon('player', () => loadPlayer(route.uuid));
+  }
+}
+
+function onLivePlayer(change) {
+  const route = currentRoute();
+  if (route.view === 'player' && change.uuid === route.uuid && change.kind === 'snapshot'
+      && state.inventory?.mode === 'snapshots') {
+    soon('snapshots', () => loadSnapshots());
+  }
+}
+
+function prependLog(entry) {
+  const filter = $('logs-filter').value;
+  const query = $('logs-search').value.trim().toLowerCase();
+  if (filter !== 'all' && !entry.filters.includes(filter)) return;
+  if (query && !`${entry.player} ${entry.actor}`.toLowerCase().includes(query)) return;
+  const body = $('logs-body');
+  const row = logRow(entry, true);
+  row.classList.add('fresh');
+  body.prepend(row);
+  while (body.children.length > 500) body.lastElementChild.remove();
+  $('logs-empty').hidden = true;
+}
+
+function prependPlayerLog(entry) {
+  const body = $('player-logs');
+  if (!body) return;
+  body.querySelector('td.empty')?.parentElement.remove();
+  const row = logRow(entry, false);
+  row.classList.add('fresh');
+  body.prepend(row);
+}
+
+function connectLive() {
+  if (!window.EventSource) return;
+  const indicator = $('live-indicator');
+  const events = new EventSource('/api/events');
+  events.addEventListener('open', () => {
+    indicator.classList.add('on');
+    indicator.title = 'Live: pages update as things happen';
+  });
+  events.addEventListener('error', () => {
+    indicator.classList.remove('on');
+    indicator.title = 'Reconnecting… pages still refresh every so often';
+  });
+  events.addEventListener('log', (e) => onLiveLog(JSON.parse(e.data)));
+  events.addEventListener('player', (e) => onLivePlayer(JSON.parse(e.data)));
 }
 
 // ---- Navigation ----
@@ -1045,6 +1290,7 @@ setInterval(() => {
   $('logs-sheets').hidden = !state.me.sheetsEnabled;
   showView();
   pollSpy();
+  connectLive();
   // Admin status is looked up in the background; pick it up shortly after the first load.
   setTimeout(() => { if (!$('view-linked').hidden) loadLinked(); }, 3000);
 })();

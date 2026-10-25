@@ -2,7 +2,11 @@ package com.huzzysnuzzy.discordlinked.web;
 
 import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
+import com.huzzysnuzzy.discordlinked.LiveEvents;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
+import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
+import com.huzzysnuzzy.discordlinked.storage.InventorySnapshotRecord;
+import com.huzzysnuzzy.discordlinked.storage.PendingRestore;
 import com.huzzysnuzzy.discordlinked.TimeFormat;
 import com.huzzysnuzzy.discordlinked.spy.SpyManager;
 import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
@@ -41,7 +45,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -57,7 +64,7 @@ public final class WebServer {
     private static final int MAX_BODY_BYTES = 16 * 1024;
     private static final int MAX_REASON_LENGTH = 500;
     /** The only requests allowed while the admin is in a spy session. */
-    private static final Set<String> SPY_ALLOWED = Set.of("GET /api/me", "GET /api/spy",
+    private static final Set<String> SPY_ALLOWED = Set.of("GET /api/me", "GET /api/spy", "GET /api/events",
             "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend");
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final int MAX_EXPORT_ROWS = 50_000;
@@ -74,7 +81,8 @@ public final class WebServer {
     private static final Map<String, Set<String>> LOG_FILTERS = Map.ofEntries(
             Map.entry("admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
                     EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT,
-                    EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_VIEW)),
+                    EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_VIEW,
+                    EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE)),
             Map.entry("kicks", Set.of(EventTypes.KICK)),
             Map.entry("notes", Set.of(EventTypes.NOTE)),
             Map.entry("links", Set.of(EventTypes.LINK, EventTypes.UNLINK)),
@@ -86,7 +94,9 @@ public final class WebServer {
             Map.entry("denied", Set.of(EventTypes.DENIED_UNLINKED, EventTypes.DENIED_SUSPENDED)),
             Map.entry("web", Set.of(EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT)),
             Map.entry("spy", Set.of(EventTypes.SPY_START, EventTypes.SPY_END)),
-            Map.entry("inventory", Set.of(EventTypes.INVENTORY_VIEW)));
+            Map.entry("inventory", Set.of(EventTypes.INVENTORY_VIEW, EventTypes.INVENTORY_SNAPSHOT,
+                    EventTypes.INVENTORY_RESTORE)),
+            Map.entry("deaths", Set.of(EventTypes.DEATH)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -138,7 +148,8 @@ public final class WebServer {
         // Through the tunnel only Cloudflare (via the local cloudflared) talks to us, so stay off the network.
         String bindAddress = config.webTunnel() ? "127.0.0.1" : config.webBindAddress();
         server = HttpServer.create(new InetSocketAddress(bindAddress, config.webPort()), 0);
-        executor = Executors.newFixedThreadPool(4, r -> {
+        // Cached rather than fixed: each open page holds one thread for its live event stream.
+        executor = Executors.newCachedThreadPool(r -> {
             Thread thread = new Thread(r, "DiscordLinked-Web");
             thread.setDaemon(true);
             return thread;
@@ -291,6 +302,11 @@ public final class WebServer {
             case "GET /api/search" -> sendJson(ex, 200, search(query(ex)));
             case "GET /api/player" -> playerPage(ex, query(ex));
             case "GET /api/player/inventory" -> inventory(ex, query(ex), session);
+            case "GET /api/player/snapshots" -> snapshots(ex, query(ex));
+            case "GET /api/player/snapshot" -> snapshotPreview(ex, query(ex));
+            case "POST /api/player/snapshot/save" -> snapshotSave(ex, session);
+            case "POST /api/player/snapshot/restore" -> snapshotRestore(ex, session);
+            case "GET /api/events" -> liveEvents(ex, session);
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
             case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
             case "POST /api/logs/export-sheets" -> exportSheets(ex, session);
@@ -562,19 +578,197 @@ public final class WebServer {
         List<AuditEntry> entries = findLogs(query, parseLong(query.get("before")), LOG_PAGE_SIZE);
         DataArray rows = DataArray.empty();
         for (AuditEntry entry : entries) {
-            rows.add(DataObject.empty()
-                    .put("id", entry.id())
-                    .put("time", entry.timestamp().toEpochMilli())
-                    .put("type", entry.eventType())
-                    .put("player", entry.minecraftName() == null ? "" : entry.minecraftName())
-                    .put("uuid", entry.uuid() == null ? "" : entry.uuid().toString())
-                    .put("discordId", entry.discordId() == null ? "" : String.valueOf(entry.discordId()))
-                    .put("actor", entry.actor() == null ? "" : entry.actor())
-                    .put("detail", entry.detail() == null ? "" : entry.detail()));
+            rows.add(logJson(entry));
         }
         DataObject result = DataObject.empty().put("entries", rows);
         result.put("nextBefore", entries.size() == LOG_PAGE_SIZE ? entries.get(entries.size() - 1).id() : null);
         return result;
+    }
+
+    private static DataObject logJson(AuditEntry entry) {
+        DataArray filters = DataArray.empty();
+        LOG_FILTERS.forEach((name, types) -> {
+            if (types.contains(entry.eventType())) {
+                filters.add(name);
+            }
+        });
+        return DataObject.empty()
+                .put("id", entry.id())
+                .put("time", entry.timestamp().toEpochMilli())
+                .put("type", entry.eventType())
+                .put("player", entry.minecraftName() == null ? "" : entry.minecraftName())
+                .put("uuid", entry.uuid() == null ? "" : entry.uuid().toString())
+                .put("discordId", entry.discordId() == null ? "" : String.valueOf(entry.discordId()))
+                .put("actor", entry.actor() == null ? "" : entry.actor())
+                .put("detail", entry.detail() == null ? "" : entry.detail())
+                .put("filters", filters);
+    }
+
+    // ---- Live updates (Server-Sent Events) ----
+
+    private static final int MAX_LIVE_STREAMS = 32;
+    private final Set<LiveStream> liveStreams = ConcurrentHashMap.newKeySet();
+
+    /** One open page. Events are queued here and written by that page's request thread. */
+    private static final class LiveStream implements LiveEvents.Listener {
+        final BlockingQueue<String> queue = new LinkedBlockingQueue<>(1000);
+
+        @Override
+        public void onLog(AuditEntry entry) {
+            queue.offer("event: log\ndata: " + logJson(entry) + "\n\n");
+        }
+
+        @Override
+        public void onPlayerChange(String kind, UUID player) {
+            queue.offer("event: player\ndata: " + DataObject.empty().put("kind", kind).put("uuid", player.toString()) + "\n\n");
+        }
+    }
+
+    private void liveEvents(HttpExchange ex, Sessions.Session session) throws IOException {
+        if (liveStreams.size() >= MAX_LIVE_STREAMS) {
+            sendJson(ex, 503, error("Too many open pages"));
+            return;
+        }
+        ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+        ex.getResponseHeaders().set("X-Accel-Buffering", "no");
+        ex.sendResponseHeaders(200, 0);
+        LiveStream stream = new LiveStream();
+        liveStreams.add(stream);
+        plugin.audit().live().subscribe(stream);
+        var out = ex.getResponseBody();
+        try {
+            out.write("retry: 3000\n\n".getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            while (!Thread.currentThread().isInterrupted()) {
+                // A comment every 20s keeps proxies (and the Cloudflare tunnel) from closing the stream.
+                String message = stream.queue.poll(20, TimeUnit.SECONDS);
+                if (sessions.get(session.token) == null) {
+                    break;
+                }
+                StringBuilder batch = new StringBuilder(message == null ? ": ping\n\n" : message);
+                String more;
+                while ((more = stream.queue.poll()) != null) {
+                    batch.append(more);
+                }
+                out.write(batch.toString().getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            // the page was closed
+        } finally {
+            plugin.audit().live().unsubscribe(stream);
+            liveStreams.remove(stream);
+        }
+    }
+
+    // ---- Inventory snapshots ----
+
+    private DataObject snapshotJson(InventorySnapshotRecord s) {
+        return DataObject.empty()
+                .put("id", s.id())
+                .put("reason", s.reason())
+                .put("detail", s.detail() == null ? "" : s.detail())
+                .put("server", s.server())
+                .put("createdAt", s.createdAt().toEpochMilli())
+                .put("stacks", s.stacks());
+    }
+
+    private void snapshots(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+        UUID uuid = parseUuid(query.get("uuid"));
+        if (uuid == null) {
+            sendJson(ex, 400, error("Invalid player"));
+            return;
+        }
+        DataArray list = DataArray.empty();
+        for (InventorySnapshotRecord s : plugin.database().snapshots(uuid)) {
+            list.add(snapshotJson(s));
+        }
+        Optional<PendingRestore> pending = plugin.database().pendingRestore(uuid);
+        sendJson(ex, 200, DataObject.empty().put("snapshots", list).put("pendingRestore", pending.map(p -> DataObject.empty()
+                .put("snapshotId", p.snapshotId()).put("actor", p.actor()).put("reason", p.reason())).orElse(null)));
+    }
+
+    private void snapshotPreview(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+        Optional<InventorySnapshotRecord> snapshot = plugin.database().snapshot(parseLong(query.get("id")));
+        if (snapshot.isEmpty()) {
+            sendJson(ex, 404, error("That snapshot no longer exists"));
+            return;
+        }
+        DataObject display;
+        try {
+            display = DataObject.fromJson(snapshot.get().display());
+        } catch (ParsingException e) {
+            sendJson(ex, 500, error("This snapshot can't be displayed"));
+            return;
+        }
+        sendJson(ex, 200, snapshotJson(snapshot.get()).put("inventory", display.put("server", snapshot.get().server())));
+    }
+
+    private void snapshotSave(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        UUID uuid = parseUuid(body.getString("uuid", ""));
+        Optional<Player> player = uuid == null ? Optional.empty() : plugin.proxy().getPlayer(uuid);
+        if (player.isEmpty() || !plugin.inventories().snapshotNow(player.get(), session.user.actor() + " (website)")) {
+            sendJson(ex, 409, error("Snapshots can only be taken while the player is online"));
+            return;
+        }
+        Optional<PlayerRef> ref = resolvePlayer(uuid);
+        plugin.audit().log(uuid, player.get().getUsername(), ref.map(PlayerRef::discordId).orElse(null),
+                EventTypes.INVENTORY_SNAPSHOT, "saved a snapshot", session.user.actor() + " (website)");
+        sendJson(ex, 200, DataObject.empty().put("ok", true));
+    }
+
+    private void snapshotRestore(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Optional<InventorySnapshotRecord> found = plugin.database().snapshot(body.getLong("id", 0));
+        if (found.isEmpty()) {
+            sendJson(ex, 404, error("That snapshot no longer exists"));
+            return;
+        }
+        String reason = body.getString("reason", "").trim();
+        if (reason.isEmpty() || reason.length() > MAX_REASON_LENGTH) {
+            sendJson(ex, 400, error(reason.isEmpty() ? "A reason is required" : "Reason is too long"));
+            return;
+        }
+        boolean includeEnder = body.getBoolean("includeEnderChest", false);
+        InventorySnapshotRecord snapshot = found.get();
+        String actor = session.user.actor() + " (website)";
+        Long discordId = resolvePlayer(snapshot.uuid()).map(PlayerRef::discordId).orElse(null);
+        String what = InventoryRequests.describe(snapshot) + (includeEnder ? " incl. ender chest" : "");
+        Optional<Player> player = plugin.proxy().getPlayer(snapshot.uuid());
+        if (player.isEmpty()) {
+            plugin.database().clearPendingRestores(snapshot.uuid());
+            plugin.database().addPendingRestore(snapshot.uuid(), snapshot.id(), includeEnder, actor, reason);
+            plugin.audit().log(snapshot.uuid(), snapshot.minecraftName(), discordId, EventTypes.INVENTORY_RESTORE,
+                    what + ", queued until they next join: " + reason, actor);
+            sendJson(ex, 200, DataObject.empty().put("ok", true).put("queued", true));
+            return;
+        }
+        String outcome;
+        try {
+            outcome = plugin.inventories().restore(player.get(), snapshot, includeEnder).get(12, TimeUnit.SECONDS);
+        } catch (TimeoutException | ExecutionException e) {
+            outcome = "no reply from the server. Is the DiscordLinkedSpy plugin installed there?";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            outcome = "interrupted";
+        }
+        boolean ok = outcome.equals("ok");
+        plugin.audit().log(snapshot.uuid(), snapshot.minecraftName(), discordId, EventTypes.INVENTORY_RESTORE,
+                what + (ok ? ", applied: " : ", FAILED (" + outcome + "): ") + reason, actor);
+        if (!ok) {
+            sendJson(ex, 502, error("Restore failed: " + outcome));
+            return;
+        }
+        sendJson(ex, 200, DataObject.empty().put("ok", true).put("queued", false));
     }
 
     private static final List<String> EXPORT_HEADER =
@@ -697,9 +891,12 @@ public final class WebServer {
             sendJson(ex, 502, error("Got an unreadable inventory from " + server));
             return;
         }
-        Optional<PlayerRef> ref = resolvePlayer(uuid);
-        plugin.audit().log(uuid, ref.map(PlayerRef::name).orElse(player.get().getUsername()),
-                ref.map(PlayerRef::discordId).orElse(null), EventTypes.INVENTORY_VIEW, "on " + server, session.user.actor());
+        // Only log opening the viewer, not every live refresh while it stays open.
+        if (!"1".equals(query.get("live"))) {
+            Optional<PlayerRef> ref = resolvePlayer(uuid);
+            plugin.audit().log(uuid, ref.map(PlayerRef::name).orElse(player.get().getUsername()),
+                    ref.map(PlayerRef::discordId).orElse(null), EventTypes.INVENTORY_VIEW, "on " + server, session.user.actor());
+        }
         sendJson(ex, 200, snapshot.put("server", server));
     }
 

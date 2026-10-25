@@ -22,6 +22,7 @@
       <div id="global-results" class="search-results" role="listbox" hidden></div>
     </div>
     <div class="me">
+      <span id="live-indicator" class="live-indicator" title="Connecting…">Live</span>
       <img id="me-avatar" class="avatar" alt="">
       <span id="me-name"></span>
       <a href="/logout" class="btn btn-ghost btn-small">Log out</a>
@@ -75,7 +76,8 @@
           <option value="denied">Denied logins</option>
           <option value="web">Website logins &amp; exports</option>
           <option value="spy">Spy sessions</option>
-          <option value="inventory">Inventory views</option>
+          <option value="inventory">Inventory views, snapshots &amp; restores</option>
+          <option value="deaths">Deaths</option>
         </select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
         <button id="logs-csv" class="btn btn-ghost btn-small" type="button">Download CSV</button>
@@ -118,6 +120,7 @@
       <label class="reason"><span id="dialog-label">Reason (required)</span>
         <textarea id="dialog-reason" required maxlength="500" rows="3"></textarea>
       </label>
+      <label id="dialog-check-row" class="check-row" hidden><input type="checkbox" id="dialog-check"> <span id="dialog-check-label"></span></label>
       <p id="dialog-error" class="error" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" id="dialog-cancel">Cancel</button>

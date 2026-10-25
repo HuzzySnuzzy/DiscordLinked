@@ -29,7 +29,11 @@ import java.util.zip.GZIPInputStream;
  */
 final class CloudflareTunnel {
 
-    private static final Pattern URL = Pattern.compile("https://[a-z0-9-]+\\.trycloudflare\\.com");
+    /**
+     * A quick tunnel address is random words joined by hyphens. cloudflared's own error messages mention
+     * https://api.trycloudflare.com, which must not be mistaken for the website's address.
+     */
+    private static final Pattern URL = Pattern.compile("https://(?!api\\.)[a-z0-9]+(?:-[a-z0-9]+)+\\.trycloudflare\\.com");
     private static final String RELEASES = "https://github.com/cloudflare/cloudflared/releases/latest/download/";
 
     private final Path binDirectory;
