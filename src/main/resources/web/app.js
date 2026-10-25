@@ -100,7 +100,11 @@ function toast(message, link) {
   node.replaceChildren(message, link ? el('a', { href: link.href, target: '_blank', rel: 'noopener' }, link.text) : '');
   node.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, link ? 12000 : 3500);
+  node.classList.remove('leaving');
+  toastTimer = setTimeout(() => {
+    node.classList.add('leaving');
+    toastTimer = setTimeout(() => { node.hidden = true; node.classList.remove('leaving'); }, reducedMotion() ? 0 : 220);
+  }, link ? 12000 : 3500);
 }
 
 function copyButton(text) {
@@ -187,7 +191,7 @@ $('action-form').addEventListener('submit', async (event) => {
   confirm.disabled = true;
   try {
     await dialogHandler({ reason, days, hours, checked: $('dialog-check').checked });
-    $('action-dialog').close();
+    closeDialog();
     if (state.spy) pollSpy();
     else refreshCurrentView();
   } catch (e) {
@@ -196,7 +200,22 @@ $('action-form').addEventListener('submit', async (event) => {
     confirm.disabled = false;
   }
 });
-$('dialog-cancel').addEventListener('click', () => $('action-dialog').close());
+$('dialog-cancel').addEventListener('click', closeDialog);
+
+/** Plays the closing animation, then closes. */
+function closeDialog() {
+  const dialog = $('action-dialog');
+  if (!dialog.open || dialog.classList.contains('closing')) return;
+  if (reducedMotion()) {
+    dialog.close();
+    return;
+  }
+  dialog.classList.add('closing');
+  setTimeout(() => {
+    dialog.classList.remove('closing');
+    dialog.close();
+  }, 180);
+}
 
 // ---- Actions (shared by the Linked list and the player page) ----
 
@@ -431,7 +450,7 @@ $('logs-sheets').addEventListener('click', (e) => exportSheets(e.currentTarget))
 
 async function loadPlayer(uuid) {
   const view = $('view-player');
-  if (!state.player || state.player.player.uuid !== uuid) view.replaceChildren(el('p', { class: 'empty' }, 'Loading…'));
+  if (!state.player || state.player.player.uuid !== uuid) view.replaceChildren(el('p', { class: 'empty shimmer' }, 'Loading…'));
   try {
     const changed = !state.player || state.player.player.uuid !== uuid;
     state.player = await api(`/api/player?uuid=${encodeURIComponent(uuid)}`);
@@ -746,7 +765,7 @@ function renderInventory() {
     } else if (inv.error) {
       box.replaceChildren(el('p', { class: 'error' }, inv.error));
     } else if (!inv.data) {
-      box.replaceChildren(el('p', { class: 'muted' }, 'Loading inventory…'));
+      box.replaceChildren(el('p', { class: 'muted shimmer' }, 'Loading inventory…'));
     } else {
       box.replaceChildren(
         el('div', { class: 'inv-livebar' },
@@ -763,7 +782,7 @@ function renderInventory() {
     return;
   }
   if (!inv.snapshots) {
-    box.replaceChildren(el('p', { class: 'muted' }, 'Loading snapshots…'));
+    box.replaceChildren(el('p', { class: 'muted shimmer' }, 'Loading snapshots…'));
     return;
   }
   if (!inv.snapshots.length) {
@@ -1381,6 +1400,75 @@ function connectLive() {
   events.addEventListener('player', (e) => onLivePlayer(JSON.parse(e.data)));
 }
 
+// ---- Motion: page entrances, liquid tab pills, ripples ----
+
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Cards and rows rise in one after another when a page opens (not on live refreshes). */
+function playEnter(section) {
+  if (!section || reducedMotion()) return;
+  section.classList.remove('entering');
+  void section.offsetWidth; // restart the animation
+  section.classList.add('entering');
+  clearTimeout(section.enterTimer);
+  section.enterTimer = setTimeout(() => section.classList.remove('entering'), 1200);
+}
+
+/** A glass pill that glides (with a little liquid squash) to the active tab of every .tabs group. */
+function updateTabPills() {
+  document.querySelectorAll('.tabs').forEach((tabs) => {
+    const active = tabs.querySelector('a.active');
+    let pill = tabs.querySelector(':scope > .tab-pill');
+    if (!active) {
+      pill?.classList.add('gone');
+      return;
+    }
+    if (!pill) {
+      pill = el('span', { class: 'tab-pill', 'aria-hidden': 'true' });
+      tabs.prepend(pill);
+      tabs.classList.add('has-pill');
+      pill.classList.add('instant');
+    }
+    const x = active.offsetLeft;
+    const w = active.offsetWidth;
+    if (pill.dataset.x === String(x) && pill.dataset.w === String(w) && !pill.classList.contains('gone')) return;
+    const moved = pill.dataset.x !== undefined && !pill.classList.contains('instant');
+    pill.dataset.x = x;
+    pill.dataset.w = w;
+    pill.classList.remove('gone');
+    pill.style.width = `${w}px`;
+    pill.style.transform = `translateX(${x}px)`;
+    if (moved && !reducedMotion()) {
+      pill.classList.remove('squish');
+      void pill.offsetWidth;
+      pill.classList.add('squish');
+    }
+    requestAnimationFrame(() => pill.classList.remove('instant'));
+  });
+}
+
+let pillFrame = 0;
+new MutationObserver(() => {
+  cancelAnimationFrame(pillFrame);
+  pillFrame = requestAnimationFrame(updateTabPills);
+}).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+window.addEventListener('resize', updateTabPills);
+
+/** A liquid ripple from the point where a button is pressed. */
+document.addEventListener('pointerdown', (e) => {
+  const button = e.target.closest('.btn, .tabs a, .icon-btn, .snap-item, .search-result');
+  if (!button || button.disabled || reducedMotion()) return;
+  const rect = button.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height) * 2.2;
+  const ripple = el('span', { class: 'ripple', 'aria-hidden': 'true' });
+  ripple.style.width = ripple.style.height = `${size}px`;
+  ripple.style.left = `${e.clientX - rect.left - size / 2}px`;
+  ripple.style.top = `${e.clientY - rect.top - size / 2}px`;
+  button.append(ripple);
+  ripple.addEventListener('animationend', () => ripple.remove());
+  setTimeout(() => ripple.remove(), 1000); // in case the animation never ends (e.g. a download started)
+});
+
 // ---- Navigation ----
 
 function currentRoute() {
@@ -1405,6 +1493,7 @@ function showView() {
   if (route.view === 'logs') loadLogs(true);
   else refreshCurrentView();
   window.scrollTo(0, 0);
+  playEnter($(`view-${route.view}`));
 }
 
 window.addEventListener('hashchange', showView);
