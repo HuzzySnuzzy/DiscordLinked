@@ -19,11 +19,13 @@ import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
+import net.dv8tion.jda.api.events.session.ShutdownEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.requests.CloseCode;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 
@@ -64,6 +66,17 @@ public final class DiscordBot extends ListenerAdapter {
     public void shutdown() {
         if (jda != null) {
             jda.shutdown();
+        }
+    }
+
+    @Override
+    public void onShutdown(ShutdownEvent event) {
+        if (event.getCloseCode() == CloseCode.DISALLOWED_INTENTS) {
+            plugin.logger().error("Discord refused the login: discord-to-minecraft=true needs \"Message Content Intent\". "
+                    + "Turn it on at https://discord.com/developers/applications -> your app -> Bot -> "
+                    + "Privileged Gateway Intents, then restart the proxy. Or set discord-to-minecraft=false.");
+        } else if (event.getCloseCode() == CloseCode.AUTHENTICATION_FAILED) {
+            plugin.logger().error("Discord refused the bot token. Check bot-token in config.properties.");
         }
     }
 
