@@ -212,3 +212,166 @@ textarea { resize: vertical; width: 100%; }
   .global-search { order: 5; max-width: none; flex-basis: 100%; }
   .profile .head-large { width: 72px; height: 72px; }
 }
+
+/* =====================================================================
+   Liquid Glass
+   Frosted, translucent surfaces floating over a soft colour field, with
+   specular top edges and pill-shaped controls. Falls back to solid
+   surfaces when blur isn't supported or reduced transparency is asked for.
+   ===================================================================== */
+:root {
+  --glass: rgba(255, 255, 255, .55);
+  --glass-strong: rgba(255, 255, 255, .72);
+  --glass-soft: rgba(255, 255, 255, .38);
+  --glass-border: rgba(255, 255, 255, .7);
+  --glass-edge: rgba(255, 255, 255, .9);
+  --glass-line: rgba(20, 30, 60, .08);
+  --glass-shadow: 0 1px 1px rgba(20, 30, 60, .04), 0 8px 32px rgba(40, 50, 110, .12);
+  --glass-blur: blur(22px) saturate(180%);
+  --field-1: #8ea2ff;
+  --field-2: #7fdcd0;
+  --field-3: #f3a6d8;
+  --field-base: #eef1f9;
+  --field-strength: .8;
+  --radius: 20px;
+  --muted: #586070;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --glass: rgba(28, 32, 46, .52);
+    --glass-strong: rgba(30, 34, 50, .74);
+    --glass-soft: rgba(255, 255, 255, .06);
+    --glass-border: rgba(255, 255, 255, .12);
+    --glass-edge: rgba(255, 255, 255, .22);
+    --glass-line: rgba(255, 255, 255, .07);
+    --glass-shadow: 0 1px 1px rgba(0, 0, 0, .3), 0 10px 40px rgba(0, 0, 0, .45);
+    --field-1: #3b2f9e;
+    --field-2: #0f6b6b;
+    --field-3: #7a1f63;
+    --field-base: #090b12;
+    --field-strength: .75;
+    --muted: #a3aaba;
+  }
+}
+
+body { background: var(--field-base); }
+
+/* The colour field the glass refracts: three soft blobs, fixed behind everything. */
+body::before {
+  content: ""; position: fixed; inset: -20vmax; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(38vmax 38vmax at 18% 12%, var(--field-1), transparent 70%),
+    radial-gradient(34vmax 34vmax at 85% 25%, var(--field-3), transparent 70%),
+    radial-gradient(40vmax 40vmax at 55% 95%, var(--field-2), transparent 70%);
+  opacity: var(--field-strength); filter: blur(30px);
+}
+
+/* Shared glass recipe */
+.card, .table-wrap, .topbar, dialog, .search-results, .toast {
+  background-color: var(--glass);
+  background-image: linear-gradient(160deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, 0) 38%);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+}
+.card, .table-wrap { border-radius: var(--radius); }
+
+/* Floating top bar */
+.topbar {
+  top: 12px; margin: 12px auto 0; max-width: 1232px; width: calc(100% - 32px);
+  border-radius: 22px; padding: 8px 10px 8px 18px; background-color: var(--glass-strong);
+}
+.tabs { background: var(--glass-soft); border-radius: 999px; padding: 3px; box-shadow: inset 0 1px 2px var(--glass-line); }
+.tabs a { border-radius: 999px; padding: 6px 14px; }
+.tabs a.active {
+  background: var(--glass-strong); color: var(--text);
+  box-shadow: inset 0 1px 0 var(--glass-edge), 0 1px 4px rgba(0, 0, 0, .12);
+}
+.tabs a:hover:not(.active) { background: transparent; color: var(--text); }
+
+/* Tables become rows of frosted glass */
+.table th { background: transparent; border-bottom-color: var(--glass-line); }
+.table td { border-bottom-color: var(--glass-line); }
+.table tbody tr { transition: background-color .15s ease; }
+.table tbody tr:hover { background: var(--glass-soft); }
+
+/* Inputs: recessed glass */
+input, select, textarea {
+  background: var(--glass-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 2px var(--glass-line);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.global-search input, .toolbar input[type=search], .toolbar select { border-radius: 999px; padding-left: 14px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--glass-strong); }
+
+/* Buttons: pills with a lit top edge */
+.btn {
+  border-radius: 999px; padding: 8px 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 2px 8px rgba(0, 0, 0, .12);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, 0) 60%);
+  transition: transform .12s ease, filter .12s ease, box-shadow .12s ease;
+}
+.btn:hover { filter: brightness(1.06) saturate(1.05); }
+.btn:active { transform: scale(.97); }
+.btn-small { padding: 5px 12px; }
+.btn-ghost {
+  background-color: var(--glass-soft); color: var(--text); border-color: var(--glass-border);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
+.btn-ghost:hover { background-color: var(--glass-strong); }
+
+/* Pills, badges, chips */
+.pill, .badge, .chip {
+  background: var(--glass-soft); border: 1px solid var(--glass-border); border-radius: 999px;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.badge { padding: 2px 9px; }
+.chip:hover { background: var(--glass-strong); }
+
+/* Avatars sit in a thin glass ring */
+.avatar, .head, .head-large { box-shadow: 0 0 0 1px var(--glass-border), 0 2px 8px rgba(0, 0, 0, .15); }
+.head { border-radius: 9px; }
+.profile .head-large { border-radius: 18px; }
+
+/* Notes and panels */
+.note { background: var(--glass-soft); border: 1px solid var(--glass-border); border-radius: 14px; }
+.search-results { border-radius: 18px; background-color: var(--glass-strong); padding: 6px; }
+.search-result { border-radius: 12px; }
+.search-result:hover, .search-result.active { background: var(--glass-soft); }
+
+/* Dialog: thick glass over a blurred page */
+dialog { border-radius: 24px; background-color: var(--glass-strong); }
+dialog::backdrop { background: rgba(10, 14, 30, .25); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+dialog[open] { animation: glass-in .18s ease-out; }
+@keyframes glass-in { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+
+.toast { color: var(--text); border-radius: 999px; padding: 10px 18px; background-color: var(--glass-strong); }
+.toast a { color: var(--accent); }
+
+/* Login / message card */
+.login-card { border-radius: 28px; padding: 36px 30px; }
+.btn-discord { padding: 12px; }
+
+@media (max-width: 720px) {
+  .topbar { border-radius: 20px; top: 8px; margin-top: 8px; width: calc(100% - 16px); padding: 8px 12px; }
+}
+
+/* Solid fallbacks: no blur support, or the viewer prefers less transparency. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-soft: var(--surface-2); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-soft: var(--surface-2); }
+  body::before { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  dialog[open] { animation: none; }
+  .btn, .table tbody tr { transition: none; }
+  .btn:active { transform: none; }
+}
