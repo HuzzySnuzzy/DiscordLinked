@@ -1,0 +1,86 @@
+package com.huzzysnuzzy.discordlinked;
+
+import com.huzzysnuzzy.discordlinked.storage.Database;
+import org.slf4j.Logger;
+
+import java.sql.SQLException;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+
+/**
+ * Records player activity to the database off the event threads,
+ * and mirrors important events to the Discord log channel.
+ */
+public final class AuditLog {
+
+    /** Events worth posting to the Discord log channel; chat and commands stay in the database only. */
+    private static final Set<String> DISCORD_EVENTS = Set.of(
+            EventTypes.LINK, EventTypes.UNLINK, EventTypes.JOIN, EventTypes.LEAVE, EventTypes.DENIED_UNLINKED);
+
+    private final Database database;
+    private final Logger logger;
+    private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "DiscordLinked-Audit");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private volatile Consumer<String> discordSink = message -> { };
+
+    public AuditLog(Database database, Logger logger) {
+        this.database = database;
+        this.logger = logger;
+    }
+
+    public void setDiscordSink(Consumer<String> discordSink) {
+        this.discordSink = discordSink;
+    }
+
+    public void log(UUID uuid, String minecraftName, Long discordId, String eventType, String detail) {
+        executor.execute(() -> {
+            try {
+                database.logEvent(uuid, minecraftName, discordId, eventType, detail);
+            } catch (SQLException e) {
+                logger.error("Failed to write audit event {} for {}", eventType, minecraftName, e);
+            }
+        });
+        if (DISCORD_EVENTS.contains(eventType)) {
+            StringBuilder message = new StringBuilder("**").append(eventType).append("** `")
+                    .append(minecraftName).append('`');
+            if (discordId != null) {
+                message.append(" <@").append(discordId).append('>');
+            }
+            // Other details (like IPs) stay in the database only.
+            if (EventTypes.UNLINK.equals(eventType) && detail != null) {
+                message.append(" — ").append(detail);
+            }
+            discordSink.accept(message.toString());
+        }
+    }
+
+    public void shutdown() {
+        executor.shutdown();
+        try {
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public static final class EventTypes {
+        public static final String LINK = "LINK";
+        public static final String UNLINK = "UNLINK";
+        public static final String JOIN = "JOIN";
+        public static final String LEAVE = "LEAVE";
+        public static final String SERVER_SWITCH = "SERVER_SWITCH";
+        public static final String CHAT = "CHAT";
+        public static final String COMMAND = "COMMAND";
+        public static final String DENIED_UNLINKED = "DENIED_UNLINKED";
+
+        private EventTypes() {
+        }
+    }
+}
