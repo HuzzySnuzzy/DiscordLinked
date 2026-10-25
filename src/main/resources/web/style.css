@@ -220,7 +220,7 @@ textarea { resize: vertical; width: 100%; }
    surfaces when blur isn't supported or reduced transparency is asked for.
    ===================================================================== */
 :root {
-  --glass: rgba(255, 255, 255, .55);
+  --glass: rgba(255, 255, 255, .68);
   --glass-strong: rgba(255, 255, 255, .72);
   --glass-soft: rgba(255, 255, 255, .38);
   --glass-border: rgba(255, 255, 255, .7);
@@ -241,7 +241,7 @@ textarea { resize: vertical; width: 100%; }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --glass: rgba(28, 32, 46, .52);
+    --glass: rgba(24, 28, 42, .7);
     --glass-strong: rgba(30, 34, 50, .74);
     --glass-soft: rgba(255, 255, 255, .06);
     --glass-border: rgba(255, 255, 255, .12);
@@ -673,9 +673,11 @@ dialog[open] { animation: glass-in .18s ease-out; }
 }
 
 /* Pages glide in; cards and rows rise one after another. */
-@keyframes view-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
-section.entering { animation: view-in .45s var(--flow) both; }
+/* No opacity/transform on the section itself: that would hide the backdrop from the cards' glass blur
+   while it runs, so the frames would change look when it ends. Clipping keeps the rising cards from
+   briefly making the page scrollable; the margin leaves room for their shadows. */
+section.entering { overflow: clip; overflow-clip-margin: 24px; }
 section.entering .card, section.entering .table tbody tr, section.entering .mod-card,
 section.entering .settings-group, section.entering .note {
   animation: rise-in .55s var(--flow) both;
