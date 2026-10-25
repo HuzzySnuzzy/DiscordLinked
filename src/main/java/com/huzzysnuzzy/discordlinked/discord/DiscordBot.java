@@ -11,6 +11,7 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.User;
@@ -20,6 +21,7 @@ import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEve
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.events.session.ShutdownEvent;
+import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
@@ -34,6 +36,8 @@ import java.sql.SQLException;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** The Discord side: slash commands for linking and admin lookups, plus the log channel. */
 public final class DiscordBot extends ListenerAdapter {
@@ -42,6 +46,7 @@ public final class DiscordBot extends ListenerAdapter {
 
     private final DiscordLinked plugin;
     private JDA jda;
+    private final Set<Long> profileRefreshes = ConcurrentHashMap.newKeySet();
 
     public DiscordBot(DiscordLinked plugin) {
         this.plugin = plugin;
@@ -190,7 +195,8 @@ public final class DiscordBot extends ListenerAdapter {
             return;
         }
 
-        plugin.database().link(link.uuid(), link.username(), discordId);
+        plugin.database().link(link.uuid(), link.username(), discordId,
+                event.getUser().getEffectiveName(), event.getUser().getEffectiveAvatarUrl());
         plugin.linkCodes().consume(code);
         addLinkedRole(discordId);
         plugin.audit().log(link.uuid(), link.username(), discordId, EventTypes.LINK, null);
@@ -203,7 +209,7 @@ public final class DiscordBot extends ListenerAdapter {
             event.reply(msg("discord.unlink.not-linked")).setEphemeral(true).queue();
             return;
         }
-        plugin.unlink(account.get(), "self (Discord)");
+        plugin.unlink(account.get(), actor(event.getUser()), "Unlinked themselves with /unlink");
         event.reply(msg("discord.unlink.success", "player", account.get().minecraftName())).setEphemeral(true).queue();
     }
 
@@ -269,7 +275,7 @@ public final class DiscordBot extends ListenerAdapter {
             event.reply(msg("discord.not-found", "player", player)).setEphemeral(true).queue();
             return;
         }
-        plugin.unlink(account.get(), "admin " + event.getUser().getName() + " (Discord)");
+        plugin.unlink(account.get(), actor(event.getUser()), "Discord /forceunlink");
         event.reply(msg("discord.forceunlink.success", "player", account.get().minecraftName())).setEphemeral(true).queue();
     }
 
@@ -298,6 +304,52 @@ public final class DiscordBot extends ListenerAdapter {
         if (channel != null) {
             channel.sendMessage(truncate(message)).setAllowedMentions(EnumSet.noneOf(Message.MentionType.class)).queue();
         }
+    }
+
+    public boolean isReady() {
+        return jda != null && jda.getStatus() == JDA.Status.CONNECTED && guild() != null;
+    }
+
+    /** The application's ID, which is also its OAuth2 client ID. */
+    public String applicationId() {
+        return jda.getSelfUser().getApplicationId();
+    }
+
+    /**
+     * Whether the user is in the guild and has the admin role. Blocks on a REST call,
+     * so never call this from a JDA thread.
+     */
+    public boolean hasAdminRole(long userId) {
+        Guild guild = guild();
+        long roleId = plugin.config().adminRoleId();
+        if (guild == null || roleId == 0L) {
+            return false;
+        }
+        try {
+            Member member = guild.retrieveMemberById(userId).complete();
+            return member.getRoles().stream().anyMatch(role -> role.getIdLong() == roleId);
+        } catch (ErrorResponseException e) {
+            return false; // not a member of the guild
+        }
+    }
+
+    /** Fetches and stores a linked user's current Discord name and avatar in the background. */
+    public void refreshProfile(long discordId) {
+        if (jda == null || !profileRefreshes.add(discordId)) {
+            return;
+        }
+        jda.retrieveUserById(discordId).queue(user -> {
+            profileRefreshes.remove(discordId);
+            try {
+                plugin.database().updateDiscordProfile(discordId, user.getEffectiveName(), user.getEffectiveAvatarUrl());
+            } catch (SQLException e) {
+                plugin.logger().warn("Could not store Discord profile for {}", discordId, e);
+            }
+        }, error -> profileRefreshes.remove(discordId));
+    }
+
+    private static String actor(User user) {
+        return user.getName() + " (" + user.getId() + ")";
     }
 
     /** A Discord message with player-supplied values markdown-escaped. */

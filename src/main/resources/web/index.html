@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DiscordLinked Admin</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/linked"><img src="/favicon.svg" alt=""> DiscordLinked</a>
+    <nav class="tabs">
+      <a href="#/linked" data-view="linked">Linked</a>
+      <a href="#/logs" data-view="logs">Logs</a>
+    </nav>
+    <div class="me">
+      <img id="me-avatar" class="avatar" alt="">
+      <span id="me-name"></span>
+      <a href="/logout" class="btn btn-ghost btn-small">Log out</a>
+    </div>
+  </header>
+
+  <main class="content">
+    <section id="view-linked" hidden>
+      <div class="toolbar">
+        <h1>Linked players <span id="linked-count" class="count"></span></h1>
+        <input id="linked-search" type="search" placeholder="Search name, UUID or Discord…" aria-label="Search linked players">
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Minecraft</th><th>Discord</th><th>Status</th><th>Linked</th><th class="actions-col">Actions</th></tr>
+          </thead>
+          <tbody id="linked-body"></tbody>
+        </table>
+        <p id="linked-empty" class="empty" hidden>No linked players yet.</p>
+      </div>
+    </section>
+
+    <section id="view-logs" hidden>
+      <div class="toolbar">
+        <h1>Logs</h1>
+        <select id="logs-filter" aria-label="Filter logs">
+          <option value="all">All events</option>
+          <option value="admin">Admin actions</option>
+          <option value="links">Links &amp; unlinks</option>
+          <option value="suspensions">Suspensions</option>
+          <option value="sessions">Joins, leaves &amp; switches</option>
+          <option value="chat">Chat</option>
+          <option value="commands">Commands</option>
+          <option value="denied">Denied logins</option>
+          <option value="web">Website logins</option>
+        </select>
+        <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Time</th><th>Event</th><th>Player</th><th>By</th><th>Details</th></tr>
+          </thead>
+          <tbody id="logs-body"></tbody>
+        </table>
+        <p id="logs-empty" class="empty" hidden>Nothing logged yet.</p>
+      </div>
+      <div class="more"><button id="logs-more" class="btn btn-ghost" hidden>Load more</button></div>
+    </section>
+  </main>
+
+  <dialog id="action-dialog">
+    <form id="action-form">
+      <h2 id="dialog-title"></h2>
+      <p id="dialog-text" class="muted"></p>
+      <div id="duration-fields" class="duration">
+        <label>Days <input type="number" id="dur-days" min="0" max="3650" value="1"></label>
+        <label>Hours <input type="number" id="dur-hours" min="0" max="999" value="0"></label>
+      </div>
+      <label class="reason">Reason (required)
+        <textarea id="dialog-reason" required maxlength="500" rows="3"></textarea>
+      </label>
+      <p id="dialog-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" id="dialog-cancel">Cancel</button>
+        <button type="submit" class="btn" id="dialog-confirm">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

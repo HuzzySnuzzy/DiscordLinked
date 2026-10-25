@@ -17,7 +17,14 @@ public record PluginConfig(
         boolean discordToMinecraft,
         int codeExpiryMinutes,
         boolean logChat,
-        boolean logCommands
+        boolean logCommands,
+        boolean webEnabled,
+        String webBindAddress,
+        int webPort,
+        String webPublicUrl,
+        String oauthClientId,
+        String oauthClientSecret,
+        long adminRoleId
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -32,13 +39,24 @@ public record PluginConfig(
                 parseBoolean(props, "discord-to-minecraft"),
                 Integer.parseInt(props.getProperty("code-expiry-minutes").trim()),
                 parseBoolean(props, "log-chat"),
-                parseBoolean(props, "log-commands")
+                parseBoolean(props, "log-commands"),
+                parseBoolean(props, "web-enabled"),
+                props.getProperty("web-bind-address").trim(),
+                Integer.parseInt(props.getProperty("web-port").trim()),
+                stripTrailingSlash(props.getProperty("web-public-url").trim()),
+                props.getProperty("discord-client-id").trim(),
+                props.getProperty("discord-client-secret").trim(),
+                parseId(props, "admin-role-id")
         );
     }
 
     private static long parseId(Properties props, String key) {
         String value = props.getProperty(key, "").trim();
         return value.isEmpty() ? 0L : Long.parseLong(value);
+    }
+
+    private static String stripTrailingSlash(String url) {
+        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 
     private static boolean parseBoolean(Properties props, String key) {

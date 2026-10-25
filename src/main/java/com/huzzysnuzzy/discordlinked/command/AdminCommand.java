@@ -52,7 +52,7 @@ public final class AdminCommand implements SimpleCommand {
                         "linked_at", LINKED_AT_FORMAT.format(a.linkedAt())));
             } else {
                 String by = source instanceof Player p ? p.getUsername() : "console";
-                plugin.unlink(a, "admin " + by + " (in-game)");
+                plugin.unlink(a, by + " (in-game)", "/dlink unlink");
                 source.sendMessage(plugin.messages().minecraft("minecraft.command.unlinked", "player", a.minecraftName()));
             }
         } catch (SQLException e) {

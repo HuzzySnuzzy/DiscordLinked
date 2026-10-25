@@ -20,7 +20,8 @@ public final class AuditLog {
 
     /** Events worth posting to the Discord log channel; chat and commands stay in the database only. */
     private static final Set<String> DISCORD_EVENTS = Set.of(
-            EventTypes.LINK, EventTypes.UNLINK, EventTypes.JOIN, EventTypes.LEAVE, EventTypes.DENIED_UNLINKED);
+            EventTypes.LINK, EventTypes.UNLINK, EventTypes.JOIN, EventTypes.LEAVE, EventTypes.DENIED_UNLINKED,
+            EventTypes.SUSPEND, EventTypes.UNSUSPEND);
 
     private final Database database;
     private final Logger logger;
@@ -43,9 +44,14 @@ public final class AuditLog {
     }
 
     public void log(UUID uuid, String minecraftName, Long discordId, String eventType, String detail) {
+        log(uuid, minecraftName, discordId, eventType, detail, null);
+    }
+
+    /** @param actor who performed an admin action, e.g. "Name (discord id)"; null for player activity */
+    public void log(UUID uuid, String minecraftName, Long discordId, String eventType, String detail, String actor) {
         executor.execute(() -> {
             try {
-                database.logEvent(uuid, minecraftName, discordId, eventType, detail);
+                database.logEvent(uuid, minecraftName, discordId, eventType, detail, actor);
             } catch (SQLException e) {
                 logger.error("Failed to write audit event {} for {}", eventType, minecraftName, e);
             }
@@ -53,7 +59,8 @@ public final class AuditLog {
         String key = "discord.log." + eventType.toLowerCase();
         if (DISCORD_EVENTS.contains(eventType) && !messages.isEmpty(key)) {
             discordSink.accept(messages.discord(key,
-                    "player", MarkdownSanitizer.escape(minecraftName),
+                    "player", minecraftName == null ? "-" : MarkdownSanitizer.escape(minecraftName),
+                    "actor", actor == null ? "-" : MarkdownSanitizer.escape(actor),
                     "discord", discordId == null ? "-" : "<@" + discordId + ">",
                     "detail", detail == null ? "" : MarkdownSanitizer.escape(detail)));
         }
@@ -77,6 +84,10 @@ public final class AuditLog {
         public static final String CHAT = "CHAT";
         public static final String COMMAND = "COMMAND";
         public static final String DENIED_UNLINKED = "DENIED_UNLINKED";
+        public static final String DENIED_SUSPENDED = "DENIED_SUSPENDED";
+        public static final String SUSPEND = "SUSPEND";
+        public static final String UNSUSPEND = "UNSUSPEND";
+        public static final String WEB_LOGIN = "WEB_LOGIN";
 
         private EventTypes() {
         }

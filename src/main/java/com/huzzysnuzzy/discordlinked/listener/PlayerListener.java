@@ -3,6 +3,7 @@ package com.huzzysnuzzy.discordlinked.listener;
 import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
+import com.huzzysnuzzy.discordlinked.storage.Suspension;
 import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.ResultedEvent.ComponentResult;
 import com.velocitypowered.api.event.Subscribe;
@@ -36,11 +37,22 @@ public final class PlayerListener {
             }
             Player player = event.getPlayer();
             Optional<LinkedAccount> account;
+            Optional<Suspension> suspension;
             try {
                 account = plugin.database().findByUuid(player.getUniqueId());
+                suspension = plugin.database().activeSuspension(player.getUniqueId());
             } catch (SQLException e) {
                 plugin.logger().error("Database lookup failed for {}", player.getUsername(), e);
                 event.setResult(ComponentResult.denied(plugin.messages().minecraft("minecraft.kick.database-error")));
+                return;
+            }
+
+            // Suspensions apply even to players with the bypass permission.
+            if (suspension.isPresent()) {
+                event.setResult(ComponentResult.denied(plugin.suspendedMessage(suspension.get())));
+                plugin.audit().log(player.getUniqueId(), player.getUsername(),
+                        account.map(LinkedAccount::discordId).orElse(null),
+                        EventTypes.DENIED_SUSPENDED, "ip=" + ip(player));
                 return;
             }
 
