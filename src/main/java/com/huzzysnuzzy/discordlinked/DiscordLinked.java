@@ -23,7 +23,7 @@ import java.time.Duration;
 @Plugin(
         id = "discordlinked",
         name = "DiscordLinked",
-        version = "0.1.0",
+        version = "0.2.0",
         description = "Requires players to link a Discord account and tracks their activity",
         authors = {"HuzzySnuzzy"}
 )
@@ -49,9 +49,9 @@ public final class DiscordLinked {
 
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) throws Exception {
-        config = PluginConfig.load(dataDirectory);
+        config = PluginConfig.load(dataDirectory, logger);
         database = new Database(dataDirectory.resolve("data.db"));
-        messages = Messages.load(dataDirectory);
+        messages = Messages.load(dataDirectory, logger);
         linkCodes = new LinkCodeManager(Duration.ofMinutes(config.codeExpiryMinutes()));
         audit = new AuditLog(database, messages, logger);
         bot = new DiscordBot(this);
@@ -62,7 +62,8 @@ public final class DiscordLinked {
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),
                 new AdminCommand(this));
-        logger.info("DiscordLinked enabled");
+        logger.info("DiscordLinked {} enabled (chat bridge: minecraft->discord={}, discord->minecraft={})",
+                "0.2.0", config.minecraftToDiscord(), config.discordToMinecraft());
     }
 
     @Subscribe

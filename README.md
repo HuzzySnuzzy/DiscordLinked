@@ -62,7 +62,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.1.0.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.2.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup

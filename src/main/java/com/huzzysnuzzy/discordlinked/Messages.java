@@ -4,6 +4,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -27,8 +28,8 @@ public final class Messages {
         this.props = props;
     }
 
-    public static Messages load(Path dataDirectory) throws IOException {
-        return new Messages(ConfigFiles.load(dataDirectory, "messages.properties"));
+    public static Messages load(Path dataDirectory, Logger logger) throws IOException {
+        return new Messages(ConfigFiles.load(dataDirectory, "messages.properties", logger));
     }
 
     /**

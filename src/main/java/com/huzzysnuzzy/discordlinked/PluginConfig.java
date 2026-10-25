@@ -1,5 +1,7 @@
 package com.huzzysnuzzy.discordlinked;
 
+import org.slf4j.Logger;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Properties;
@@ -18,8 +20,8 @@ public record PluginConfig(
         boolean logCommands
 ) {
 
-    public static PluginConfig load(Path dataDirectory) throws IOException {
-        Properties props = ConfigFiles.load(dataDirectory, "config.properties");
+    public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
+        Properties props = ConfigFiles.load(dataDirectory, "config.properties", logger);
         return new PluginConfig(
                 props.getProperty("bot-token").trim(),
                 parseId(props, "guild-id"),
