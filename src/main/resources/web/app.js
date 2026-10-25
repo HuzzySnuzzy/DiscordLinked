@@ -61,6 +61,8 @@ async function api(path, body) {
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 const formatTime = (ms) => dateFormat.format(new Date(ms));
+const shortDateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
+const shortDate = (ms) => shortDateFormat.format(new Date(ms));
 
 function formatRemaining(ms) {
   const minutes = Math.max(1, Math.ceil((ms - Date.now()) / 60000));
@@ -318,16 +320,19 @@ function linkedRow(p) {
   }
   if (!p.inGuild) status.push(el('div', { class: 'suspension-note' }, 'Not in the Discord server'));
 
+  // The cell-* classes let the phone layout turn each row into a card.
   return el('tr', {},
-    el('td', {}, el('div', { class: 'identity' },
+    el('td', { class: 'cell-mc' }, el('div', { class: 'identity' },
       el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
       el('div', {}, playerName(p), copyButton(p.uuid)))),
-    el('td', {}, el('div', { class: 'identity' },
+    el('td', { class: 'cell-discord' }, el('div', { class: 'identity' },
       el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' }),
       el('div', {}, el('div', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName), copyButton(p.discordId)))),
-    el('td', {}, status),
-    el('td', { class: 'nowrap muted' }, formatTime(p.linkedAt)),
-    el('td', {}, actionButtons(p)));
+    el('td', { class: 'cell-status' }, status),
+    el('td', { class: 'cell-linked nowrap muted', title: formatTime(p.linkedAt) },
+      el('span', { class: 'when-long' }, formatTime(p.linkedAt)),
+      el('span', { class: 'when-short' }, shortDate(p.linkedAt))),
+    el('td', { class: 'cell-actions' }, actionButtons(p)));
 }
 
 $('linked-search').addEventListener('input', renderLinked);

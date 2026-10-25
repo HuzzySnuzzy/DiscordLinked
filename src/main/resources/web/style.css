@@ -375,3 +375,61 @@ dialog[open] { animation: glass-in .18s ease-out; }
   .btn, .table tbody tr { transition: none; }
   .btn:active { transform: none; }
 }
+
+.when-short { display: none; }
+
+/* ---- Linked list on phones: one card per player ---- */
+@media (max-width: 760px) {
+  #view-linked .table-wrap {
+    background: none; border: none; box-shadow: none; overflow: visible;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  .linked-table, .linked-table tbody { display: block; }
+  .linked-table thead { display: none; }
+  .linked-table tbody { display: grid; gap: 10px; }
+  .linked-table tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center;
+    padding: 14px; border-radius: 18px;
+    background-color: var(--glass);
+    background-image: linear-gradient(160deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, 0) 38%);
+    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+  }
+  .linked-table tbody tr:hover { background-color: var(--glass); }
+  .linked-table td { display: block; padding: 0; border: none; min-width: 0; }
+  .linked-table .identity, .linked-table .identity > div { min-width: 0; }
+  .linked-table .identity .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .linked-table .when-long { display: none; }
+  .linked-table .when-short { display: inline; }
+
+  /* Row 1: head + name, status on the right. Row 2: Discord + link date. Row 3: actions. */
+  .linked-table .cell-mc { grid-column: 1; grid-row: 1; }
+  .linked-table .cell-status { grid-column: 2; grid-row: 1; text-align: right; }
+  .linked-table .cell-discord { grid-column: 1; grid-row: 2; }
+  .linked-table .cell-linked { grid-column: 2; grid-row: 2; text-align: right; font-size: 12px; }
+  .linked-table .cell-linked::before { content: "Linked "; }
+  .linked-table .cell-actions { grid-column: 1 / -1; grid-row: 3; padding-top: 4px; border-top: 1px solid var(--glass-line); }
+  .linked-table .cell-actions .actions { justify-content: flex-start; padding-top: 8px; }
+
+  /* Keep it scannable: IDs live on the player page. */
+  .linked-table .copy { display: none; }
+  .linked-table .cell-mc .name { font-size: 16px; }
+  .linked-table .cell-discord .avatar { width: 22px; height: 22px; }
+  .linked-table .cell-discord .name { font-weight: 500; color: var(--muted); }
+  .linked-table .cell-discord .name.name-admin { color: var(--gold); }
+  .linked-table .cell-status .pill { font-size: 11px; }
+  .linked-table .suspension-note { display: none; }
+  .linked-table .btn-small { padding: 6px 12px; }
+  .brand-text { display: none; }
+}
+
+/* Very narrow phones: let the status drop under the name. */
+@media (max-width: 340px) {
+  .linked-table tr { grid-template-columns: 1fr; }
+  .linked-table .cell-status, .linked-table .cell-linked { grid-column: 1; text-align: left; }
+  .linked-table .cell-status { grid-row: 2; }
+  .linked-table .cell-discord { grid-row: 3; }
+  .linked-table .cell-linked { grid-row: 4; }
+  .linked-table .cell-actions { grid-row: 5; }
+}
