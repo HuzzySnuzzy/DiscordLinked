@@ -107,13 +107,33 @@ function toast(message, link) {
   }, link ? 12000 : 3500);
 }
 
-function copyButton(text) {
+/** The clipboard API only works on https; the old textarea trick also works on plain http. */
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const area = el('textarea', { readonly: '', class: 'offscreen' });
+  area.value = text;
+  document.body.append(area);
+  area.select();
+  const ok = document.execCommand('copy');
+  area.remove();
+  return ok ? Promise.resolve() : Promise.reject(new Error('copy failed'));
+}
+
+function copyButton(text, what) {
   return el('button', {
-    class: 'copy mono', type: 'button', title: 'Click to copy',
-    onclick: () => navigator.clipboard.writeText(text)
-      .then(() => toast('Copied'), () => toast('Copying needs https — select the text instead')),
+    class: 'copy mono', type: 'button', title: `Copy ${what}`,
+    onclick: (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      copyText(text).then(() => toast(`${what} copied`), () => toast('Couldn’t copy — select the text instead'));
+    },
   }, text);
 }
+
+const discordHref = (id) => `https://discord.com/users/${id}`;
+const discordLink = (p, ...children) =>
+  el('a', { class: 'discord-link', href: discordHref(p.discordId), target: '_blank', rel: 'noopener', title: 'Open Discord profile' }, ...children);
+const discordName = (p) => discordLink(p, el('span', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName));
 
 const playerHref = (uuid) => `#/player/${uuid}`;
 const headUrl = (uuid, size) => `https://mc-heads.net/avatar/${uuid}/${size}`;
@@ -358,10 +378,10 @@ function linkedRow(p) {
   return el('tr', {},
     el('td', { class: 'cell-mc' }, el('div', { class: 'identity' },
       el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
-      el('div', {}, playerName(p), copyButton(p.uuid)))),
+      el('div', {}, playerName(p), copyButton(p.uuid, 'UUID')))),
     el('td', { class: 'cell-discord' }, el('div', { class: 'identity' },
-      el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' }),
-      el('div', {}, el('div', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName), copyButton(p.discordId)))),
+      discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
+      el('div', {}, discordName(p), copyButton(p.discordId, 'User ID')))),
     el('td', { class: 'cell-status' }, status),
     el('td', { class: 'cell-linked nowrap muted', title: formatTime(p.linkedAt) },
       el('span', { class: 'when-long' }, formatTime(p.linkedAt)),
@@ -477,7 +497,7 @@ function renderPlayer() {
     el('div', { class: 'info' },
       el('h1', { class: nameClass(p) }, p.minecraftName),
       el('div', { class: 'badges' }, badges),
-      copyButton(p.uuid),
+      copyButton(p.uuid, 'UUID'),
       el('div', { class: 'actions' },
         el('a', { class: 'btn btn-ghost btn-small', href: `https://namemc.com/profile/${p.uuid}`, target: '_blank', rel: 'noopener' },
           'View on NameMC ↗'))),
@@ -487,8 +507,8 @@ function renderPlayer() {
     el('h2', {}, 'Discord'),
     p.linked
       ? el('div', { class: 'identity' },
-        el('img', { class: 'avatar', src: p.discordAvatar, alt: '' }),
-        el('div', {}, el('div', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName), copyButton(p.discordId)))
+        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '' })),
+        el('div', {}, discordName(p), copyButton(p.discordId, 'User ID')))
       : el('p', { class: 'muted' }, 'This player has no linked Discord account.'),
     el('dl', { class: 'kv' },
       p.linked && [el('dt', {}, 'Linked'), el('dd', {}, formatTime(p.linkedAt))],
@@ -1053,7 +1073,7 @@ function moderateCard(p, canSpy) {
       el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head mod-head', src: headUrl(p.uuid, 112), alt: '', loading: 'lazy' })),
       el('div', { class: 'mod-id' },
         playerName(p),
-        el('div', { class: 'sub' }, p.linked ? p.discordName : 'Not linked'),
+        el('div', { class: 'sub' }, p.linked ? discordLink(p, p.discordName) : 'Not linked'),
         el('div', { class: 'mod-meta' },
           el('span', { class: 'pill online' }, p.server || 'Connecting'),
           el('span', { class: 'muted mono' }, `${p.ping} ms`)))),
