@@ -231,6 +231,8 @@ textarea { resize: vertical; width: 100%; }
   --field-1: #8ea2ff;
   --field-2: #7fdcd0;
   --field-3: #f3a6d8;
+  --field-4: #ffd08a;
+  --field-5: #b79cff;
   --field-base: #eef1f9;
   --field-strength: .8;
   --radius: 20px;
@@ -249,6 +251,8 @@ textarea { resize: vertical; width: 100%; }
     --field-1: #3b2f9e;
     --field-2: #0f6b6b;
     --field-3: #7a1f63;
+    --field-4: #8a4b12;
+    --field-5: #4b1d8f;
     --field-base: #090b12;
     --field-strength: .75;
     --muted: #a3aaba;
@@ -257,14 +261,54 @@ textarea { resize: vertical; width: 100%; }
 
 body { background: var(--field-base); }
 
-/* The colour field the glass refracts: three soft blobs, fixed behind everything. */
-body::before {
-  content: ""; position: fixed; inset: -20vmax; z-index: -1; pointer-events: none;
-  background:
-    radial-gradient(38vmax 38vmax at 18% 12%, var(--field-1), transparent 70%),
-    radial-gradient(34vmax 34vmax at 85% 25%, var(--field-3), transparent 70%),
-    radial-gradient(40vmax 40vmax at 55% 95%, var(--field-2), transparent 70%);
-  opacity: var(--field-strength); filter: blur(30px);
+/* The colour field the glass refracts: five soft blobs that drift, stretch and fade like liquid.
+   Only transform and opacity animate, so the blur is drawn once and the GPU just moves it. */
+.liquid {
+  position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none;
+  opacity: var(--field-strength);
+}
+.liquid i {
+  position: absolute; width: 62vmax; height: 62vmax; border-radius: 50%;
+  filter: blur(40px); will-change: transform, opacity;
+  animation: var(--anim) ease-in-out infinite alternate;
+}
+.liquid i:nth-child(1) { background: radial-gradient(circle, var(--field-1) 0%, transparent 65%); left: -18vmax; top: -22vmax; --anim: drift-a 46s; }
+.liquid i:nth-child(2) { background: radial-gradient(circle, var(--field-3) 0%, transparent 65%); right: -20vmax; top: -10vmax; --anim: drift-b 58s; }
+.liquid i:nth-child(3) { background: radial-gradient(circle, var(--field-2) 0%, transparent 65%); left: 15vmax; bottom: -30vmax; --anim: drift-c 52s; }
+/* These two fade in and out, slowly shifting the overall colour. */
+.liquid i:nth-child(4) { background: radial-gradient(circle, var(--field-4) 0%, transparent 65%); left: 30vmax; top: 5vmax; --anim: drift-d 64s; }
+.liquid i:nth-child(5) { background: radial-gradient(circle, var(--field-5) 0%, transparent 65%); right: 5vmax; bottom: -25vmax; --anim: drift-e 72s; }
+.liquid i:nth-child(2) { animation-delay: -12s; }
+.liquid i:nth-child(3) { animation-delay: -25s; }
+.liquid i:nth-child(4) { animation-delay: -8s; }
+.liquid i:nth-child(5) { animation-delay: -30s; }
+
+@keyframes drift-a {
+  0%   { transform: translate(0, 0) scale(1, 1) rotate(0deg); }
+  50%  { transform: translate(22vw, 14vh) scale(1.25, .85) rotate(40deg); }
+  100% { transform: translate(8vw, 32vh) scale(.9, 1.2) rotate(90deg); }
+}
+@keyframes drift-b {
+  0%   { transform: translate(0, 0) scale(1.1, .9) rotate(0deg); }
+  50%  { transform: translate(-26vw, 20vh) scale(.85, 1.2) rotate(-50deg); }
+  100% { transform: translate(-10vw, 45vh) scale(1.2, 1) rotate(-100deg); }
+}
+@keyframes drift-c {
+  0%   { transform: translate(0, 0) scale(1, 1.1) rotate(0deg); }
+  50%  { transform: translate(18vw, -24vh) scale(1.3, .9) rotate(60deg); }
+  100% { transform: translate(-16vw, -10vh) scale(.95, 1.15) rotate(120deg); }
+}
+@keyframes drift-d {
+  0%   { transform: translate(0, 0) scale(.8); opacity: 0; }
+  40%  { opacity: .9; }
+  60%  { transform: translate(-24vw, 26vh) scale(1.15, .9); opacity: .7; }
+  100% { transform: translate(-40vw, 10vh) scale(1); opacity: 0; }
+}
+@keyframes drift-e {
+  0%   { transform: translate(0, 0) scale(1); opacity: .8; }
+  45%  { opacity: 0; }
+  70%  { transform: translate(-30vw, -30vh) scale(1.2, .85); opacity: .6; }
+  100% { transform: translate(-12vw, -48vh) scale(.9, 1.1); opacity: .9; }
 }
 
 /* Shared glass recipe */
@@ -368,9 +412,11 @@ dialog[open] { animation: glass-in .18s ease-out; }
 }
 @media (prefers-reduced-transparency: reduce) {
   :root { --glass: var(--surface); --glass-strong: var(--surface); --glass-soft: var(--surface-2); }
-  body::before { display: none; }
+  .liquid { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .liquid i { animation: none; }
+  .liquid i:nth-child(4), .liquid i:nth-child(5) { opacity: .5; }
   dialog[open] { animation: none; }
   .btn, .table tbody tr { transition: none; }
   .btn:active { transform: none; }
