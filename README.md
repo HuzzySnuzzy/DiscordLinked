@@ -80,8 +80,9 @@ players or change game modes:
 
 1. Download **DiscordLinked** from the GitHub Actions run; the zip contains two jars.
 2. `DiscordLinked-x.y.z.jar` goes in Velocity's `plugins/` folder as before.
-3. `DiscordLinkedSpy-x.y.z.jar` goes in the `plugins/` folder of **every Paper/Purpur server** behind the
-   proxy (1.20.4 or newer). It has no config.
+3. `DiscordLinkedSpy-x.y.z.jar` goes in the `plugins/` folder of **every Paper, Purpur or Folia server**
+   behind the proxy (1.20.4 or newer). It has no config. On Folia it schedules everything on each player's
+   own region thread, so the admin and the player can be in different regions.
 
 The proxy and the companion plugin talk over Minecraft's plugin messaging channel, and the proxy drops any
 such message sent by a player's client, so players can't trigger it. As with any Velocity network, make
@@ -151,7 +152,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.6.0.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.6.1.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup
