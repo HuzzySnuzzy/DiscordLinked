@@ -1,61 +1,36 @@
 package com.huzzysnuzzy.discordlinked;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
-/**
- * Settings loaded from {@code plugins/discordlinked/config.properties}.
- * A commented default file is copied there on first start.
- */
+/** Settings loaded from {@code plugins/discordlinked/config.properties}. */
 public record PluginConfig(
         String botToken,
         long guildId,
         long linkedRoleId,
         long logChannelId,
+        long chatChannelId,
+        boolean minecraftToDiscord,
+        boolean discordToMinecraft,
         int codeExpiryMinutes,
         boolean logChat,
-        boolean logCommands,
-        String kickMessage,
-        String unlinkedKickMessage
+        boolean logCommands
 ) {
 
-    private static final String FILE_NAME = "config.properties";
-
     public static PluginConfig load(Path dataDirectory) throws IOException {
-        Files.createDirectories(dataDirectory);
-        Path file = dataDirectory.resolve(FILE_NAME);
-        if (Files.notExists(file)) {
-            try (InputStream in = PluginConfig.class.getResourceAsStream("/" + FILE_NAME)) {
-                if (in == null) {
-                    throw new IOException("Default " + FILE_NAME + " missing from plugin jar");
-                }
-                Files.copy(in, file);
-            }
-        }
-
-        Properties props = new Properties();
-        try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            props.load(reader);
-        }
-
+        Properties props = ConfigFiles.load(dataDirectory, "config.properties");
         return new PluginConfig(
-                props.getProperty("bot-token", "").trim(),
+                props.getProperty("bot-token").trim(),
                 parseId(props, "guild-id"),
                 parseId(props, "linked-role-id"),
                 parseId(props, "log-channel-id"),
-                Integer.parseInt(props.getProperty("code-expiry-minutes", "10").trim()),
-                Boolean.parseBoolean(props.getProperty("log-chat", "true").trim()),
-                Boolean.parseBoolean(props.getProperty("log-commands", "true").trim()),
-                props.getProperty("kick-message",
-                        "<red>You must link your Discord account to join.</red>\n\n"
-                                + "Run <yellow>/link <code></yellow> in our Discord server."),
-                props.getProperty("unlinked-kick-message",
-                        "<red>Your Discord account was unlinked.</red>")
+                parseId(props, "chat-channel-id"),
+                parseBoolean(props, "minecraft-to-discord"),
+                parseBoolean(props, "discord-to-minecraft"),
+                Integer.parseInt(props.getProperty("code-expiry-minutes").trim()),
+                parseBoolean(props, "log-chat"),
+                parseBoolean(props, "log-commands")
         );
     }
 
@@ -64,7 +39,15 @@ public record PluginConfig(
         return value.isEmpty() ? 0L : Long.parseLong(value);
     }
 
+    private static boolean parseBoolean(Properties props, String key) {
+        return Boolean.parseBoolean(props.getProperty(key, "false").trim());
+    }
+
     public boolean botConfigured() {
         return !botToken.isEmpty() && guildId != 0L;
+    }
+
+    public boolean chatBridgeEnabled() {
+        return chatChannelId != 0L && (minecraftToDiscord || discordToMinecraft);
     }
 }

@@ -2,6 +2,7 @@ package com.huzzysnuzzy.discordlinked.discord;
 
 import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
+import com.huzzysnuzzy.discordlinked.PluginConfig;
 import com.huzzysnuzzy.discordlinked.link.LinkCodeManager.PendingLink;
 import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
@@ -16,12 +17,14 @@ import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.UserSnowflake;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 
 import java.awt.Color;
@@ -48,7 +51,12 @@ public final class DiscordBot extends ListenerAdapter {
                     + "and players will not be able to link.");
             return;
         }
-        jda = JDABuilder.createLight(plugin.config().botToken())
+        EnumSet<GatewayIntent> intents = GatewayIntent.getIntents(GatewayIntent.DEFAULT);
+        if (plugin.config().chatBridgeEnabled() && plugin.config().discordToMinecraft()) {
+            // Privileged: must also be switched on in the Developer Portal.
+            intents.add(GatewayIntent.MESSAGE_CONTENT);
+        }
+        jda = JDABuilder.createLight(plugin.config().botToken(), intents)
                 .addEventListeners(this)
                 .build();
     }
@@ -100,29 +108,72 @@ public final class DiscordBot extends ListenerAdapter {
             }
         } catch (SQLException e) {
             plugin.logger().error("Database error handling /{}", event.getName(), e);
-            event.reply("Something went wrong talking to the database.").setEphemeral(true).queue();
+            event.reply(msg("discord.database-error")).setEphemeral(true).queue();
         }
+    }
+
+    /** Discord -> Minecraft side of the chat bridge. */
+    @Override
+    public void onMessageReceived(MessageReceivedEvent event) {
+        PluginConfig config = plugin.config();
+        if (!config.chatBridgeEnabled() || !config.discordToMinecraft()
+                || event.getChannel().getIdLong() != config.chatChannelId()
+                || event.getAuthor().isBot() || event.isWebhookMessage()) {
+            return;
+        }
+        String content = event.getMessage().getContentDisplay().trim();
+        if (content.isEmpty()) {
+            return;
+        }
+        String name = event.getMember() != null ? event.getMember().getEffectiveName() : event.getAuthor().getEffectiveName();
+        String minecraftName = name;
+        try {
+            Optional<LinkedAccount> account = plugin.database().findByDiscordId(event.getAuthor().getIdLong());
+            if (account.isPresent()) {
+                minecraftName = account.get().minecraftName();
+            }
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not look up linked account for bridged message", e);
+        }
+        plugin.proxy().sendMessage(plugin.messages().minecraft("minecraft.bridge.chat",
+                "name", name, "minecraft_name", minecraftName, "message", content));
+    }
+
+    /** Minecraft -> Discord side of the chat bridge. Does nothing if disabled or the message is empty. */
+    public void bridgeToDiscord(String key, String player, String server, String message) {
+        PluginConfig config = plugin.config();
+        if (jda == null || !config.chatBridgeEnabled() || !config.minecraftToDiscord() || plugin.messages().isEmpty(key)) {
+            return;
+        }
+        TextChannel channel = jda.getTextChannelById(config.chatChannelId());
+        if (channel == null) {
+            return;
+        }
+        String text = plugin.messages().discord(key,
+                "player", MarkdownSanitizer.escape(player),
+                "server", MarkdownSanitizer.escape(server),
+                "message", MarkdownSanitizer.escape(message));
+        channel.sendMessage(truncate(text)).setAllowedMentions(EnumSet.noneOf(Message.MentionType.class)).queue();
     }
 
     private void handleLink(SlashCommandInteractionEvent event) throws SQLException {
         String code = event.getOption("code", OptionMapping::getAsString);
         Optional<PendingLink> pending = plugin.linkCodes().find(code);
         if (pending.isEmpty()) {
-            event.reply("That code is invalid or expired. Join the Minecraft server again to get a new one.")
-                    .setEphemeral(true).queue();
+            event.reply(msg("discord.link.invalid-code")).setEphemeral(true).queue();
             return;
         }
         long discordId = event.getUser().getIdLong();
         Optional<LinkedAccount> existing = plugin.database().findByDiscordId(discordId);
         if (existing.isPresent()) {
-            event.reply("Your Discord account is already linked to `" + existing.get().minecraftName()
-                    + "`. Use /unlink first.").setEphemeral(true).queue();
+            event.reply(msg("discord.link.already-linked-discord", "player", existing.get().minecraftName()))
+                    .setEphemeral(true).queue();
             return;
         }
         PendingLink link = pending.get();
         if (plugin.database().findByUuid(link.uuid()).isPresent()) {
             plugin.linkCodes().consume(code);
-            event.reply("That Minecraft account is already linked.").setEphemeral(true).queue();
+            event.reply(msg("discord.link.already-linked-minecraft")).setEphemeral(true).queue();
             return;
         }
 
@@ -130,18 +181,17 @@ public final class DiscordBot extends ListenerAdapter {
         plugin.linkCodes().consume(code);
         addLinkedRole(discordId);
         plugin.audit().log(link.uuid(), link.username(), discordId, EventTypes.LINK, null);
-        event.reply("Linked to **" + MarkdownSanitizer.escape(link.username()) + "**. You can join the server now!")
-                .setEphemeral(true).queue();
+        event.reply(msg("discord.link.success", "player", link.username())).setEphemeral(true).queue();
     }
 
     private void handleUnlink(SlashCommandInteractionEvent event) throws SQLException {
         Optional<LinkedAccount> account = plugin.database().findByDiscordId(event.getUser().getIdLong());
         if (account.isEmpty()) {
-            event.reply("Your Discord account isn't linked.").setEphemeral(true).queue();
+            event.reply(msg("discord.unlink.not-linked")).setEphemeral(true).queue();
             return;
         }
         plugin.unlink(account.get(), "self (Discord)");
-        event.reply("Unlinked from `" + account.get().minecraftName() + "`.").setEphemeral(true).queue();
+        event.reply(msg("discord.unlink.success", "player", account.get().minecraftName())).setEphemeral(true).queue();
     }
 
     private void handleWhois(SlashCommandInteractionEvent event) throws SQLException {
@@ -153,11 +203,12 @@ public final class DiscordBot extends ListenerAdapter {
         } else if (user != null) {
             account = plugin.database().findByDiscordId(user.getIdLong());
         } else {
-            event.reply("Give a `player` or a `user`.").setEphemeral(true).queue();
+            event.reply(msg("discord.whois.missing-argument")).setEphemeral(true).queue();
             return;
         }
         if (account.isEmpty()) {
-            event.reply("No linked account found.").setEphemeral(true).queue();
+            event.reply(msg("discord.not-found", "player", player != null ? player : user.getName()))
+                    .setEphemeral(true).queue();
             return;
         }
         LinkedAccount a = account.get();
@@ -165,10 +216,11 @@ public final class DiscordBot extends ListenerAdapter {
         EmbedBuilder embed = new EmbedBuilder()
                 .setTitle(a.minecraftName())
                 .setColor(online ? Color.GREEN : Color.GRAY)
-                .addField("Discord", "<@" + a.discordId() + "> (`" + a.discordId() + "`)", false)
-                .addField("UUID", "`" + a.uuid() + "`", false)
-                .addField("Linked", "<t:" + a.linkedAt().getEpochSecond() + ":f>", true)
-                .addField("Online", online ? "Yes" : "No", true);
+                .addField(msg("discord.whois.field.discord"), "<@" + a.discordId() + "> (`" + a.discordId() + "`)", false)
+                .addField(msg("discord.whois.field.uuid"), "`" + a.uuid() + "`", false)
+                .addField(msg("discord.whois.field.linked"), "<t:" + a.linkedAt().getEpochSecond() + ":f>", true)
+                .addField(msg("discord.whois.field.online"),
+                        msg(online ? "discord.whois.online-yes" : "discord.whois.online-no"), true);
         event.replyEmbeds(embed.build()).setEphemeral(true).queue();
     }
 
@@ -176,23 +228,24 @@ public final class DiscordBot extends ListenerAdapter {
         String player = event.getOption("player", OptionMapping::getAsString);
         Optional<LinkedAccount> account = plugin.database().findByName(player);
         if (account.isEmpty()) {
-            event.reply("No linked account found for `" + MarkdownSanitizer.sanitize(player) + "`.")
-                    .setEphemeral(true).queue();
+            event.reply(msg("discord.not-found", "player", player)).setEphemeral(true).queue();
             return;
         }
         List<AuditEntry> entries = plugin.database().recentEvents(account.get().uuid(), 20);
         StringBuilder body = new StringBuilder();
         for (AuditEntry entry : entries) {
-            String line = "<t:" + entry.timestamp().getEpochSecond() + ":R> **" + entry.eventType() + "**"
-                    + (entry.detail() == null ? "" : " " + MarkdownSanitizer.escape(entry.detail())) + "\n";
+            String line = plugin.messages().discord("discord.history.line",
+                    "time", "<t:" + entry.timestamp().getEpochSecond() + ":R>",
+                    "event", entry.eventType(),
+                    "detail", entry.detail() == null ? "" : MarkdownSanitizer.escape(entry.detail())) + "\n";
             if (body.length() + line.length() > 4000) {
                 break;
             }
             body.append(line);
         }
         EmbedBuilder embed = new EmbedBuilder()
-                .setTitle("Recent activity: " + account.get().minecraftName())
-                .setDescription(body.isEmpty() ? "No activity recorded." : body.toString());
+                .setTitle(truncate(plugin.messages().discord("discord.history.title", "player", account.get().minecraftName()), 256))
+                .setDescription(body.isEmpty() ? msg("discord.history.empty") : body.toString());
         event.replyEmbeds(embed.build()).setEphemeral(true).queue();
     }
 
@@ -200,11 +253,11 @@ public final class DiscordBot extends ListenerAdapter {
         String player = event.getOption("player", OptionMapping::getAsString);
         Optional<LinkedAccount> account = plugin.database().findByName(player);
         if (account.isEmpty()) {
-            event.reply("No linked account found.").setEphemeral(true).queue();
+            event.reply(msg("discord.not-found", "player", player)).setEphemeral(true).queue();
             return;
         }
         plugin.unlink(account.get(), "admin " + event.getUser().getName() + " (Discord)");
-        event.reply("Unlinked `" + account.get().minecraftName() + "`.").setEphemeral(true).queue();
+        event.reply(msg("discord.forceunlink.success", "player", account.get().minecraftName())).setEphemeral(true).queue();
     }
 
     public void addLinkedRole(long discordId) {
@@ -230,8 +283,25 @@ public final class DiscordBot extends ListenerAdapter {
         }
         TextChannel channel = jda.getTextChannelById(plugin.config().logChannelId());
         if (channel != null) {
-            channel.sendMessage(message).setAllowedMentions(EnumSet.noneOf(Message.MentionType.class)).queue();
+            channel.sendMessage(truncate(message)).setAllowedMentions(EnumSet.noneOf(Message.MentionType.class)).queue();
         }
+    }
+
+    /** A Discord message with player-supplied values markdown-escaped. */
+    private String msg(String key, String... placeholders) {
+        String[] escaped = placeholders.clone();
+        for (int i = 1; i < escaped.length; i += 2) {
+            escaped[i] = MarkdownSanitizer.escape(escaped[i]);
+        }
+        return truncate(plugin.messages().discord(key, escaped));
+    }
+
+    private static String truncate(String text) {
+        return truncate(text, Message.MAX_CONTENT_LENGTH);
+    }
+
+    private static String truncate(String text, int max) {
+        return text.length() <= max ? text : text.substring(0, max - 1) + "…";
     }
 
     private Guild guild() {

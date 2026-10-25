@@ -13,9 +13,6 @@ import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.player.PlayerChatEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.proxy.Player;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 
 import java.sql.SQLException;
 import java.util.Optional;
@@ -43,8 +40,7 @@ public final class PlayerListener {
                 account = plugin.database().findByUuid(player.getUniqueId());
             } catch (SQLException e) {
                 plugin.logger().error("Database lookup failed for {}", player.getUsername(), e);
-                event.setResult(ComponentResult.denied(
-                        Component.text("Account check failed, please try again shortly.")));
+                event.setResult(ComponentResult.denied(plugin.messages().minecraft("minecraft.kick.database-error")));
                 return;
             }
 
@@ -63,9 +59,8 @@ public final class PlayerListener {
             }
 
             String code = plugin.linkCodes().codeFor(player.getUniqueId(), player.getUsername());
-            Component message = MiniMessage.miniMessage().deserialize(
-                    plugin.config().kickMessage(), Placeholder.unparsed("code", code));
-            event.setResult(ComponentResult.denied(message));
+            event.setResult(ComponentResult.denied(plugin.messages().minecraft("minecraft.kick.link-required",
+                    "code", code, "minutes", String.valueOf(plugin.config().codeExpiryMinutes()))));
             plugin.audit().log(player.getUniqueId(), player.getUsername(), null,
                     EventTypes.DENIED_UNLINKED, "issued code, ip=" + ip(player));
         });
@@ -76,6 +71,7 @@ public final class PlayerListener {
         Player player = event.getPlayer();
         plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player),
                 EventTypes.JOIN, "ip=" + ip(player));
+        plugin.bot().bridgeToDiscord("discord.bridge.join", player.getUsername(), "", "");
     }
 
     @Subscribe
@@ -85,6 +81,7 @@ public final class PlayerListener {
         }
         Player player = event.getPlayer();
         plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player), EventTypes.LEAVE, null);
+        plugin.bot().bridgeToDiscord("discord.bridge.leave", player.getUsername(), "", "");
     }
 
     @Subscribe
@@ -95,13 +92,18 @@ public final class PlayerListener {
                 from + " -> " + event.getServer().getServerInfo().getName());
     }
 
-    @Subscribe
+    // Run last so mutes/filters from other plugins have already decided.
+    @Subscribe(priority = Short.MIN_VALUE)
     public void onChat(PlayerChatEvent event) {
-        if (!plugin.config().logChat()) {
-            return;
-        }
         Player player = event.getPlayer();
-        plugin.audit().log(player.getUniqueId(), player.getUsername(), null, EventTypes.CHAT, event.getMessage());
+        if (plugin.config().logChat()) {
+            plugin.audit().log(player.getUniqueId(), player.getUsername(), null, EventTypes.CHAT, event.getMessage());
+        }
+        // Don't mirror chat another plugin blocked (mutes, filters).
+        if (event.getResult().isAllowed()) {
+            String server = player.getCurrentServer().map(s -> s.getServerInfo().getName()).orElse("");
+            plugin.bot().bridgeToDiscord("discord.bridge.chat", player.getUsername(), server, event.getMessage());
+        }
     }
 
     @Subscribe

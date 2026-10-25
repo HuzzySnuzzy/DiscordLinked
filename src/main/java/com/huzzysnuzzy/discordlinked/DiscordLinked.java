@@ -14,7 +14,6 @@ import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
-import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.slf4j.Logger;
 
 import java.nio.file.Path;
@@ -35,6 +34,7 @@ public final class DiscordLinked {
     private final Path dataDirectory;
 
     private PluginConfig config;
+    private Messages messages;
     private Database database;
     private LinkCodeManager linkCodes;
     private AuditLog audit;
@@ -51,8 +51,9 @@ public final class DiscordLinked {
     public void onProxyInitialize(ProxyInitializeEvent event) throws Exception {
         config = PluginConfig.load(dataDirectory);
         database = new Database(dataDirectory.resolve("data.db"));
+        messages = Messages.load(dataDirectory);
         linkCodes = new LinkCodeManager(Duration.ofMinutes(config.codeExpiryMinutes()));
-        audit = new AuditLog(database, logger);
+        audit = new AuditLog(database, messages, logger);
         bot = new DiscordBot(this);
         audit.setDiscordSink(bot::sendLog);
         bot.start();
@@ -89,7 +90,7 @@ public final class DiscordLinked {
         bot.removeLinkedRole(account.discordId());
         audit.log(account.uuid(), account.minecraftName(), account.discordId(), EventTypes.UNLINK, "by " + by);
         proxy.getPlayer(account.uuid()).ifPresent(player -> player.disconnect(
-                MiniMessage.miniMessage().deserialize(config.unlinkedKickMessage())));
+                messages.minecraft("minecraft.kick.unlinked")));
     }
 
     public ProxyServer proxy() {
@@ -102,6 +103,10 @@ public final class DiscordLinked {
 
     public PluginConfig config() {
         return config;
+    }
+
+    public Messages messages() {
+        return messages;
     }
 
     public Database database() {

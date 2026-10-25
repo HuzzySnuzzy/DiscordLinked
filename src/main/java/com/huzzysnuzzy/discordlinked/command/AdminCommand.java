@@ -5,10 +5,10 @@ import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 
 import java.sql.SQLException;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
@@ -16,6 +16,8 @@ import java.util.Optional;
 public final class AdminCommand implements SimpleCommand {
 
     public static final String PERMISSION = "discordlinked.admin";
+    private static final DateTimeFormatter LINKED_AT_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
     private final DiscordLinked plugin;
 
@@ -28,7 +30,7 @@ public final class AdminCommand implements SimpleCommand {
         CommandSource source = invocation.source();
         String[] args = invocation.arguments();
         if (args.length != 2 || !List.of("lookup", "unlink").contains(args[0].toLowerCase())) {
-            source.sendMessage(Component.text("Usage: /dlink <lookup|unlink> <player>", NamedTextColor.RED));
+            source.sendMessage(plugin.messages().minecraft("minecraft.command.usage"));
             return;
         }
         plugin.proxy().getScheduler().buildTask(plugin, () -> run(source, args[0].toLowerCase(), args[1])).schedule();
@@ -38,22 +40,24 @@ public final class AdminCommand implements SimpleCommand {
         try {
             Optional<LinkedAccount> account = plugin.database().findByName(name);
             if (account.isEmpty()) {
-                source.sendMessage(Component.text(name + " is not linked.", NamedTextColor.YELLOW));
+                source.sendMessage(plugin.messages().minecraft("minecraft.command.not-linked", "player", name));
                 return;
             }
             LinkedAccount a = account.get();
             if (action.equals("lookup")) {
-                source.sendMessage(Component.text(a.minecraftName() + " (" + a.uuid() + ")", NamedTextColor.GOLD));
-                source.sendMessage(Component.text("Discord ID: " + a.discordId() + ", linked " + a.linkedAt(),
-                        NamedTextColor.GRAY));
+                source.sendMessage(plugin.messages().minecraft("minecraft.command.lookup",
+                        "player", a.minecraftName(),
+                        "uuid", a.uuid().toString(),
+                        "discord_id", String.valueOf(a.discordId()),
+                        "linked_at", LINKED_AT_FORMAT.format(a.linkedAt())));
             } else {
                 String by = source instanceof Player p ? p.getUsername() : "console";
                 plugin.unlink(a, "admin " + by + " (in-game)");
-                source.sendMessage(Component.text("Unlinked " + a.minecraftName() + ".", NamedTextColor.GREEN));
+                source.sendMessage(plugin.messages().minecraft("minecraft.command.unlinked", "player", a.minecraftName()));
             }
         } catch (SQLException e) {
             plugin.logger().error("Database error in /dlink", e);
-            source.sendMessage(Component.text("Database error, check the console.", NamedTextColor.RED));
+            source.sendMessage(plugin.messages().minecraft("minecraft.command.database-error"));
         }
     }
 

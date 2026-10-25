@@ -1,6 +1,7 @@
 package com.huzzysnuzzy.discordlinked;
 
 import com.huzzysnuzzy.discordlinked.storage.Database;
+import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import org.slf4j.Logger;
 
 import java.sql.SQLException;
@@ -28,10 +29,12 @@ public final class AuditLog {
         thread.setDaemon(true);
         return thread;
     });
+    private final Messages messages;
     private volatile Consumer<String> discordSink = message -> { };
 
-    public AuditLog(Database database, Logger logger) {
+    public AuditLog(Database database, Messages messages, Logger logger) {
         this.database = database;
+        this.messages = messages;
         this.logger = logger;
     }
 
@@ -47,17 +50,12 @@ public final class AuditLog {
                 logger.error("Failed to write audit event {} for {}", eventType, minecraftName, e);
             }
         });
-        if (DISCORD_EVENTS.contains(eventType)) {
-            StringBuilder message = new StringBuilder("**").append(eventType).append("** `")
-                    .append(minecraftName).append('`');
-            if (discordId != null) {
-                message.append(" <@").append(discordId).append('>');
-            }
-            // Other details (like IPs) stay in the database only.
-            if (EventTypes.UNLINK.equals(eventType) && detail != null) {
-                message.append(" — ").append(detail);
-            }
-            discordSink.accept(message.toString());
+        String key = "discord.log." + eventType.toLowerCase();
+        if (DISCORD_EVENTS.contains(eventType) && !messages.isEmpty(key)) {
+            discordSink.accept(messages.discord(key,
+                    "player", MarkdownSanitizer.escape(minecraftName),
+                    "discord", discordId == null ? "-" : "<@" + discordId + ">",
+                    "detail", detail == null ? "" : MarkdownSanitizer.escape(detail)));
         }
     }
 

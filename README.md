@@ -17,6 +17,27 @@ Stored in `plugins/discordlinked/data.db` (SQLite): links/unlinks, joins (with I
 chat and commands (both can be turned off). Links, unlinks, joins and leaves are also posted to the
 optional log channel (IPs are not posted).
 
+## Chat bridge
+
+Set `chat-channel-id` in `config.properties`, then turn on either direction independently:
+
+- `minecraft-to-discord=true` sends in-game chat, joins and leaves to the channel.
+- `discord-to-minecraft=true` shows messages from the channel to everyone in game. This needs
+  **Message Content Intent** switched on in the Developer Portal (your app → Bot), or the bot won't log in.
+
+Chat that another plugin blocks (mutes, filters) is not sent to Discord. Mentions like `@everyone` never ping.
+
+## Customizing messages
+
+Every message players or Discord users see is in `plugins/discordlinked/messages.properties`.
+
+- `minecraft.*` keys use [MiniMessage](https://docs.advntr.dev/minimessage/format.html), with placeholders like `<player>`.
+- `discord.*` keys use Discord markdown, with placeholders like `{player}`.
+- Leave a log or bridge message empty to turn it off (e.g. `discord.bridge.join=`).
+- Keys missing from your file use the built-in default, so updating the plugin won't break your file.
+
+Restart the proxy after editing.
+
 ## Commands
 
 Discord:
@@ -50,6 +71,6 @@ the jar from the run's **Artifacts** section.
 2. Under **OAuth2 → URL Generator** tick `bot` and `applications.commands`, plus the `Manage Roles`,
    `Send Messages` and `Embed Links` permissions. Open the URL and add the bot to your server.
 3. Drop the jar in Velocity's `plugins/` folder and start the proxy once. It creates
-   `plugins/discordlinked/config.properties`.
+   `plugins/discordlinked/config.properties` and `messages.properties`.
 4. Fill in `bot-token` and `guild-id` (and optionally `linked-role-id`, `log-channel-id`), then restart.
    If you use a linked role, drag the bot's role above it in Server Settings → Roles.
