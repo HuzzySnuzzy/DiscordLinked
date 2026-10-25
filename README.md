@@ -55,6 +55,38 @@ suspension is edited, or staff unlink them. Edit or turn off each message (`disc
 `messages.properties`. Players who block DMs from server members won't get them; that's only logged.
 Notes are never sent to players.
 
+### Moderate page & Spy
+
+**Moderate** shows everyone online right now as a grid of cards (head, name, server, ping, Discord name),
+filterable by server, with **Spy**, **Kick** and **Suspend** buttons.
+
+**Spy** puts *your own* Minecraft character in spectator mode next to the player:
+
+- Your Discord account must be linked, and you must be online on the server with that account.
+  If the player is on a different server, you're moved there first and back afterwards.
+- You must stay within `spy-max-distance` blocks (default 1000) of them. Going further, changing world or
+  server, or the player leaving ends the session.
+- You're hidden from the player you're spying on, and the action bar shows the distance and time.
+- While a session runs, the website is locked to a session panel with **End session**, **Kick** and
+  **Suspend**. Kick and suspend end the session, and "(observed via spy for 4m 12s)" is added to your
+  reason automatically.
+- When the session ends you're put back exactly as you were: location, game mode and flight. This also
+  happens if you disconnect, or if the server crashes mid-session (fixed the next time you join).
+- Every session's start and end, with its length and why it ended, is in the logs (**Spy sessions**
+  filter) and the Discord log channel.
+
+Spy needs the small companion plugin on the Minecraft servers, because Velocity itself can't teleport
+players or change game modes:
+
+1. Download **DiscordLinked** from the GitHub Actions run; the zip contains two jars.
+2. `DiscordLinked-x.y.z.jar` goes in Velocity's `plugins/` folder as before.
+3. `DiscordLinkedSpy-x.y.z.jar` goes in the `plugins/` folder of **every Paper/Purpur server** behind the
+   proxy (1.20.4 or newer). It has no config.
+
+The proxy and the companion plugin talk over Minecraft's plugin messaging channel, and the proxy drops any
+such message sent by a player's client, so players can't trigger it. As with any Velocity network, make
+sure your backend servers can't be joined directly, bypassing the proxy.
+
 ### Setting it up
 
 1. Developer Portal → your app → **OAuth2**: copy the **Client Secret** (reset it if needed), and under
@@ -119,7 +151,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.5.0.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.6.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup

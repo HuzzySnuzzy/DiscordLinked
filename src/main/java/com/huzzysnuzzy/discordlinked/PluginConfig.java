@@ -27,7 +27,8 @@ public record PluginConfig(
         long adminRoleId,
         boolean dmPlayers,
         String googleSpreadsheetId,
-        String googleServiceAccountFile
+        String googleServiceAccountFile,
+        int spyMaxDistance
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -52,7 +53,8 @@ public record PluginConfig(
                 parseId(props, "admin-role-id"),
                 parseBoolean(props, "dm-players"),
                 props.getProperty("google-sheets-spreadsheet-id").trim(),
-                props.getProperty("google-service-account-file").trim()
+                props.getProperty("google-service-account-file").trim(),
+                Integer.parseInt(props.getProperty("spy-max-distance").trim())
         );
     }
 

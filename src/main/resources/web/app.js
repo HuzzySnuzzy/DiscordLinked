@@ -19,6 +19,8 @@ const EVENT_LABELS = {
   DENIED_SUSPENDED: ['Denied: suspended', 'warn'],
   WEB_LOGIN: ['Website login', 'info'],
   LOG_EXPORT: ['Log export', 'info'],
+  SPY_START: ['Spy started', 'info'],
+  SPY_END: ['Spy ended', ''],
 };
 
 // ---- Helpers ----
@@ -53,6 +55,10 @@ async function api(path, body) {
   if (res.status === 401) {
     location.href = '/';
     throw new Error('Your session ended, please log in again.');
+  }
+  if (res.status === 423) {
+    pollSpy();
+    throw new Error('Finish your spy session first.');
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -174,7 +180,8 @@ $('action-form').addEventListener('submit', async (event) => {
   try {
     await dialogHandler({ reason, days, hours });
     $('action-dialog').close();
-    refreshCurrentView();
+    if (state.spy) pollSpy();
+    else refreshCurrentView();
   } catch (e) {
     error.textContent = e.message;
     error.hidden = false;
@@ -622,23 +629,213 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('.global-search')) $('global-results').hidden = true;
 });
 
+// ---- Moderate page ----
+
+async function loadModerate() {
+  try {
+    state.online = await api('/api/online');
+    renderModerate();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function renderModerate() {
+  const data = state.online;
+  if (!data) return;
+  const select = $('moderate-server');
+  const servers = [...new Set(data.players.map((p) => p.server).filter(Boolean))].sort();
+  const chosen = select.value;
+  select.replaceChildren(el('option', { value: '' }, 'All servers'), ...servers.map((s) => el('option', { value: s }, s)));
+  select.value = servers.includes(chosen) ? chosen : '';
+
+  const self = $('moderate-self');
+  const selfText = {
+    online: `Spy uses your Minecraft account ${data.selfName}. You'll be put in spectator and must stay within ${data.maxDistance} blocks.`,
+    offline: `Join the server as ${data.selfName} to use Spy.`,
+    unlinked: 'Spy needs your Discord account linked to a Minecraft account. Link it in-game first.',
+  }[data.selfStatus];
+  self.textContent = selfText;
+  self.className = `self-status ${data.selfStatus === 'online' ? '' : 'warn'}`;
+
+  const query = $('moderate-search').value.trim().toLowerCase();
+  const players = data.players
+    .filter((p) => !select.value || p.server === select.value)
+    .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
+    .sort(SORTS['name-asc']);
+  $('moderate-count').textContent = `(${data.players.length})`;
+  $('moderate-grid').replaceChildren(...players.map((p) => moderateCard(p, data.selfStatus === 'online')));
+  const empty = $('moderate-empty');
+  empty.textContent = data.players.length ? 'No players match your filter.' : 'Nobody is online right now.';
+  empty.hidden = players.length > 0;
+}
+
+function moderateCard(p, canSpy) {
+  const spyTitle = p.self ? "That's you" : canSpy ? `Spectate ${p.minecraftName}` : 'Join the server with your linked account first';
+  const small = (cls, label, handler, extra = {}) =>
+    el('button', { class: `btn ${cls} btn-small`, type: 'button', onclick: handler, ...extra }, label);
+  return el('div', { class: 'card mod-card' },
+    el('div', { class: 'mod-top' },
+      el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head mod-head', src: headUrl(p.uuid, 112), alt: '', loading: 'lazy' })),
+      el('div', { class: 'mod-id' },
+        playerName(p),
+        el('div', { class: 'sub' }, p.linked ? p.discordName : 'Not linked'),
+        el('div', { class: 'mod-meta' },
+          el('span', { class: 'pill online' }, p.server || 'Connecting'),
+          el('span', { class: 'muted mono' }, `${p.ping} ms`)))),
+    p.suspension && el('span', { class: 'pill suspended' }, `Suspended · ${formatRemaining(p.suspension.expiresAt)} left`),
+    el('div', { class: 'actions mod-actions' },
+      small('btn-spy', 'Spy', () => startSpy(p), { disabled: p.self || !canSpy, title: spyTitle }),
+      small('btn-ghost', 'Kick', () => kickDialog(p)),
+      p.suspension
+        ? small('btn-success', 'Unsuspend', () => unsuspendDialog(p))
+        : small('btn-warning', 'Suspend', () => suspendDialog(p))));
+}
+
+$('moderate-search').addEventListener('input', renderModerate);
+$('moderate-server').addEventListener('change', renderModerate);
+
+// ---- Spy sessions: while one runs, the whole site is locked behind this panel ----
+
+let spyTimer = null;
+
+async function startSpy(p) {
+  try {
+    await api('/api/spy/start', { uuid: p.uuid });
+    pollSpy();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function pollSpy() {
+  clearTimeout(spyTimer);
+  let data;
+  try {
+    data = await api('/api/spy');
+  } catch (e) {
+    spyTimer = setTimeout(pollSpy, 3000);
+    return;
+  }
+  if (data.ended) {
+    state.spy = null;
+    renderSpyEnded(data.ended);
+    return;
+  }
+  state.spy = data.session;
+  if (data.session) {
+    renderSpyLock(data.session);
+    spyTimer = setTimeout(pollSpy, 1000);
+  } else if (!$('spy-lock').hidden && !state.spyEndedShown) {
+    unlock();
+  }
+}
+
+function lock() {
+  $('spy-lock').hidden = false;
+  $('topbar').inert = true;
+  document.querySelector('main').inert = true;
+}
+
+function unlock() {
+  state.spyEndedShown = false;
+  $('spy-lock').hidden = true;
+  $('topbar').inert = false;
+  document.querySelector('main').inert = false;
+  refreshCurrentView();
+}
+
+/** Adds a full stop unless the text already ends with punctuation. */
+const sentence = (text) => (/[.!?]$/.test(text) ? text : `${text}.`);
+
+function clock(seconds) {
+  const m = Math.floor(seconds / 60), s = seconds % 60;
+  return seconds >= 3600 ? `${Math.floor(seconds / 3600)}:${String(m % 60).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function renderSpyLock(s) {
+  lock();
+  const t = s.target;
+  const starting = s.state === 'starting';
+  const pct = s.distance >= 0 ? Math.min(100, (s.distance / s.maxDistance) * 100) : 0;
+  const observed = `"(observed via spy for …)" is added to your reason automatically.`;
+  $('spy-card').replaceChildren(
+    el('div', { class: 'spy-eyebrow' }, el('span', { class: `live-dot ${starting ? 'pending' : ''}` }),
+      starting ? 'Starting spy session…' : 'Spy session running'),
+    el('img', { class: 'head-large spy-head', src: headUrl(t.uuid, 192), alt: '' }),
+    el('h2', { id: 'spy-title', class: `spy-name ${nameClass(t)}` }, t.minecraftName),
+    el('p', { class: 'muted' }, starting
+      ? `Moving you to ${s.server} and switching you to spectator…`
+      : `You're spectating on ${s.server}. The website is locked until you end the session.`),
+    !starting && el('div', { class: 'spy-stats' },
+      el('div', {}, el('div', { class: 'stat-label' }, 'Watching for'), el('div', { class: 'stat-value mono' }, clock(s.seconds))),
+      el('div', {}, el('div', { class: 'stat-label' }, 'Distance'),
+        el('div', { class: 'stat-value mono' }, s.distance >= 0 ? `${s.distance} / ${s.maxDistance}` : '…'),
+        el('div', { class: `meter ${pct > 80 ? 'danger' : ''}` }, el('i', { class: 'meter-fill', 'data-pct': Math.round(pct) })))),
+    el('div', { class: 'actions spy-actions' },
+      el('button', { class: 'btn btn-ghost', type: 'button', onclick: endSpy }, starting ? 'Cancel' : 'End session'),
+      !starting && el('button', {
+        class: 'btn btn-warning', type: 'button', onclick: () => openDialog({
+          title: `Kick ${t.minecraftName}`, text: `Ends the session and kicks them. ${observed}`,
+          confirmLabel: 'Kick', confirmClass: 'btn-warning',
+          onConfirm: ({ reason }) => api('/api/spy/kick', { reason }),
+        }),
+      }, 'Kick'),
+      !starting && !t.suspension && el('button', {
+        class: 'btn btn-danger', type: 'button', onclick: () => openDialog({
+          title: `Suspend ${t.minecraftName}`, text: `Ends the session and suspends them. ${observed}`,
+          confirmLabel: 'Suspend', confirmClass: 'btn-danger', duration: { days: 1, hours: 0 },
+          onConfirm: ({ reason, days, hours }) => api('/api/spy/suspend', { reason, days, hours }),
+        }),
+      }, 'Suspend')));
+  // CSP blocks inline styles, so the meter width is set through the CSSOM.
+  const fill = $('spy-card').querySelector('.meter-fill');
+  if (fill) fill.style.width = `${fill.dataset.pct}%`;
+}
+
+function renderSpyEnded(ended) {
+  lock();
+  state.spyEndedShown = true;
+  $('spy-card').replaceChildren(
+    el('div', { class: 'spy-eyebrow' }, el('span', { class: 'live-dot off' }), ended.failed ? "Spy session didn't start" : 'Spy session ended'),
+    el('img', { class: 'head-large spy-head', src: headUrl(ended.uuid, 192), alt: '' }),
+    el('h2', { id: 'spy-title', class: 'spy-name' }, ended.player),
+    el('p', {}, ended.failed ? `Reason: ${sentence(ended.reason)}` : `Ended after ${ended.duration}: ${sentence(ended.reason)}`),
+    el('p', { class: 'muted' }, ended.failed ? 'Nothing was changed in game.' : "You've been put back where you were in game."),
+    el('div', { class: 'actions spy-actions' },
+      el('a', { class: 'btn btn-ghost', href: playerHref(ended.uuid), onclick: unlock }, 'Open player page'),
+      el('button', { class: 'btn', type: 'button', onclick: unlock }, 'Back to the website')));
+}
+
+async function endSpy() {
+  try {
+    await api('/api/spy/end', {});
+  } catch (e) {
+    toast(e.message);
+  }
+  pollSpy();
+}
+
 // ---- Navigation ----
 
 function currentRoute() {
   const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
   if (match) return { view: 'player', uuid: match[1].toLowerCase() };
-  return { view: location.hash === '#/logs' ? 'logs' : 'linked' };
+  const views = { '#/logs': 'logs', '#/moderate': 'moderate' };
+  return { view: views[location.hash] || 'linked' };
 }
 
 function refreshCurrentView() {
   const route = currentRoute();
   if (route.view === 'linked') loadLinked();
   else if (route.view === 'player') loadPlayer(route.uuid);
+  else if (route.view === 'moderate') loadModerate();
 }
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player']) $(`view-${name}`).hidden = name !== route.view;
+  for (const name of ['linked', 'logs', 'player', 'moderate']) $(`view-${name}`).hidden = name !== route.view;
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
   if (route.view === 'logs') loadLogs(true);
   else refreshCurrentView();
@@ -652,6 +849,10 @@ setInterval(() => {
   if ($('action-dialog').open || document.hidden) return;
   if (!$('view-linked').hidden) loadLinked();
 }, 30000);
+setInterval(() => {
+  if ($('action-dialog').open || document.hidden || state.spy) return;
+  if (!$('view-moderate').hidden) loadModerate();
+}, 10000);
 
 (async () => {
   try {
@@ -663,6 +864,7 @@ setInterval(() => {
   $('me-avatar').src = state.me.avatar;
   $('logs-sheets').hidden = !state.me.sheetsEnabled;
   showView();
+  pollSpy();
   // Admin status is looked up in the background; pick it up shortly after the first load.
   setTimeout(() => { if (!$('view-linked').hidden) loadLinked(); }, 3000);
 })();

@@ -1,0 +1,6 @@
+name: DiscordLinkedSpy
+version: '${version}'
+main: com.huzzysnuzzy.discordlinked.spy.DiscordLinkedSpy
+api-version: '1.20'
+description: Backend companion for DiscordLinked's website Spy sessions. Install on every Paper server behind the Velocity proxy.
+authors: [HuzzySnuzzy]

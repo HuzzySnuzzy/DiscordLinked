@@ -3,6 +3,8 @@ package com.huzzysnuzzy.discordlinked.web;
 import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
+import com.huzzysnuzzy.discordlinked.TimeFormat;
+import com.huzzysnuzzy.discordlinked.spy.SpyManager;
 import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
 import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
@@ -47,6 +49,9 @@ public final class WebServer {
     private static final Duration ROLE_RECHECK = Duration.ofMinutes(5);
     private static final int MAX_BODY_BYTES = 16 * 1024;
     private static final int MAX_REASON_LENGTH = 500;
+    /** The only requests allowed while the admin is in a spy session. */
+    private static final Set<String> SPY_ALLOWED = Set.of("GET /api/me", "GET /api/spy",
+            "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend");
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final int MAX_EXPORT_ROWS = 50_000;
     private static final DateTimeFormatter EXPORT_TIME =
@@ -59,19 +64,21 @@ public final class WebServer {
     private static final String SESSION_COOKIE = "dl_session";
     private static final String STATE_COOKIE = "dl_state";
 
-    private static final Map<String, Set<String>> LOG_FILTERS = Map.of(
-            "admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
-                    EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT),
-            "kicks", Set.of(EventTypes.KICK),
-            "notes", Set.of(EventTypes.NOTE),
-            "links", Set.of(EventTypes.LINK, EventTypes.UNLINK),
-            "suspensions", Set.of(EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT, EventTypes.UNSUSPEND,
-                    EventTypes.DENIED_SUSPENDED),
-            "sessions", Set.of(EventTypes.JOIN, EventTypes.LEAVE, EventTypes.SERVER_SWITCH),
-            "chat", Set.of(EventTypes.CHAT),
-            "commands", Set.of(EventTypes.COMMAND),
-            "denied", Set.of(EventTypes.DENIED_UNLINKED, EventTypes.DENIED_SUSPENDED),
-            "web", Set.of(EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT));
+    private static final Map<String, Set<String>> LOG_FILTERS = Map.ofEntries(
+            Map.entry("admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
+                    EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT,
+                    EventTypes.SPY_START, EventTypes.SPY_END)),
+            Map.entry("kicks", Set.of(EventTypes.KICK)),
+            Map.entry("notes", Set.of(EventTypes.NOTE)),
+            Map.entry("links", Set.of(EventTypes.LINK, EventTypes.UNLINK)),
+            Map.entry("suspensions", Set.of(EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT, EventTypes.UNSUSPEND,
+                    EventTypes.DENIED_SUSPENDED)),
+            Map.entry("sessions", Set.of(EventTypes.JOIN, EventTypes.LEAVE, EventTypes.SERVER_SWITCH)),
+            Map.entry("chat", Set.of(EventTypes.CHAT)),
+            Map.entry("commands", Set.of(EventTypes.COMMAND)),
+            Map.entry("denied", Set.of(EventTypes.DENIED_UNLINKED, EventTypes.DENIED_SUSPENDED)),
+            Map.entry("web", Set.of(EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT)),
+            Map.entry("spy", Set.of(EventTypes.SPY_START, EventTypes.SPY_END)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -187,7 +194,16 @@ public final class WebServer {
                 return;
             }
         }
-        switch (method + " " + path) {
+        String route = method + " " + path;
+        if (plugin.spy().current(session.user.id()) != null && !SPY_ALLOWED.contains(route)) {
+            sendJson(ex, 423, error("You're in a spy session. End it first.").put("locked", true));
+            return;
+        }
+        switch (route) {
+            case "GET /api/online" -> sendJson(ex, 200, onlineList(session));
+            case "GET /api/spy" -> sendJson(ex, 200, spyStatus(session));
+            case "POST /api/spy/start" -> spyStart(ex, session);
+            case "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend" -> spyAction(ex, path, session);
             case "GET /api/me" -> sendJson(ex, 200, DataObject.empty()
                     .put("id", String.valueOf(session.user.id()))
                     .put("name", session.user.name())
@@ -516,13 +532,134 @@ public final class WebServer {
         }
     }
 
+    // ---- Moderate page & spy ----
+
+    private DataObject onlineList(Sessions.Session session) throws SQLException {
+        Optional<LinkedAccount> self = plugin.database().findByDiscordId(session.user.id());
+        Map<UUID, Suspension> suspensions = plugin.database().activeSuspensions();
+        DataArray players = DataArray.empty();
+        for (Player player : plugin.proxy().getAllPlayers()) {
+            LinkedAccount linked = plugin.database().findByUuid(player.getUniqueId()).orElse(null);
+            players.add(playerJson(player.getUniqueId(), player.getUsername(), linked, suspensions.get(player.getUniqueId()))
+                    .put("ping", player.getPing())
+                    .put("self", self.isPresent() && self.get().uuid().equals(player.getUniqueId())));
+        }
+        String selfStatus = self.isEmpty() ? "unlinked"
+                : plugin.proxy().getPlayer(self.get().uuid()).isPresent() ? "online" : "offline";
+        return DataObject.empty().put("players", players).put("selfStatus", selfStatus)
+                .put("selfName", self.map(LinkedAccount::minecraftName).orElse(null))
+                .put("maxDistance", plugin.config().spyMaxDistance());
+    }
+
+    private DataObject spyStatus(Sessions.Session session) throws SQLException {
+        DataObject result = DataObject.empty();
+        SpyManager.Session spy = plugin.spy().current(session.user.id());
+        if (spy == null) {
+            result.putNull("session");
+        } else {
+            LinkedAccount linked = plugin.database().findByUuid(spy.target.uuid()).orElse(null);
+            result.put("session", DataObject.empty()
+                    .put("state", spy.state.name().toLowerCase())
+                    .put("server", spy.serverName)
+                    .put("seconds", spy.elapsed().toSeconds())
+                    .put("distance", spy.distance)
+                    .put("maxDistance", plugin.config().spyMaxDistance())
+                    .put("target", playerJson(spy.target.uuid(), spy.target.name(), linked,
+                            plugin.database().activeSuspension(spy.target.uuid()).orElse(null))));
+        }
+        SpyManager.Ended ended = plugin.spy().takeEnded(session.user.id());
+        result.put("ended", ended == null ? null : DataObject.empty()
+                .put("player", ended.targetName())
+                .put("uuid", ended.targetUuid().toString())
+                .put("reason", ended.reason())
+                .put("duration", TimeFormat.preciseDuration(ended.duration()))
+                .put("failed", ended.failed()));
+        return result;
+    }
+
+    private void spyStart(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Optional<LinkedAccount> self = plugin.database().findByDiscordId(session.user.id());
+        if (self.isEmpty()) {
+            sendJson(ex, 409, error("Your Discord account isn't linked to a Minecraft account. Link it and join the server first."));
+            return;
+        }
+        Optional<Player> admin = plugin.proxy().getPlayer(self.get().uuid());
+        if (admin.isEmpty()) {
+            sendJson(ex, 409, error("Join the Minecraft server as " + self.get().minecraftName() + " first, then start spying."));
+            return;
+        }
+        UUID uuid = parseUuid(body.getString("uuid", ""));
+        Optional<Player> target = uuid == null ? Optional.empty() : plugin.proxy().getPlayer(uuid);
+        Optional<PlayerRef> targetRef = resolvePlayer(uuid);
+        if (target.isEmpty() || targetRef.isEmpty()) {
+            sendJson(ex, 409, error("That player isn't online"));
+            return;
+        }
+        String problem = plugin.spy().start(session.user.id(), session.user.actor() + " (website)",
+                admin.get(), target.get(), targetRef.get());
+        if (problem != null) {
+            sendJson(ex, 409, error(problem));
+            return;
+        }
+        sendJson(ex, 200, DataObject.empty().put("ok", true));
+    }
+
+    /** End, or end-and-kick / end-and-suspend the player being spied on. */
+    private void spyAction(HttpExchange ex, String path, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        SpyManager.Session spy = plugin.spy().current(session.user.id());
+        if (spy == null) {
+            sendJson(ex, 409, error("No spy session is running"));
+            return;
+        }
+        if (path.equals("/api/spy/end")) {
+            plugin.spy().end(spy, "ended from the website");
+            sendJson(ex, 200, DataObject.empty().put("ok", true));
+            return;
+        }
+        String reason = body.getString("reason", "").trim();
+        if (reason.isEmpty() || reason.length() > MAX_REASON_LENGTH) {
+            sendJson(ex, 400, error(reason.isEmpty() ? "A reason is required" : "Reason is too long"));
+            return;
+        }
+        Duration duration = null;
+        if (path.equals("/api/spy/suspend")) {
+            duration = parseDuration(body);
+            if (duration == null) {
+                sendJson(ex, 400, error("Enter a duration of at least 1 hour"));
+                return;
+            }
+            if (plugin.database().activeSuspension(spy.target.uuid()).isPresent()) {
+                sendJson(ex, 409, error("Player is already suspended"));
+                return;
+            }
+        }
+        String fullReason = reason + " (observed via spy for " + TimeFormat.preciseDuration(spy.elapsed()) + ")";
+        String actor = session.user.actor() + " (website)";
+        if (duration == null) {
+            plugin.spy().end(spy, "you kicked the player");
+            plugin.kick(spy.target, fullReason, actor);
+        } else {
+            plugin.spy().end(spy, "you suspended the player");
+            plugin.suspend(spy.target, duration, fullReason, actor);
+        }
+        sendJson(ex, 200, DataObject.empty().put("ok", true));
+    }
+
     private void handleAction(HttpExchange ex, String path, Sessions.Session session) throws IOException, SQLException {
         DataObject body = readJson(ex);
         if (body == null) {
             return;
         }
         UUID uuid = parseUuid(body.getString("uuid", ""));
-        Optional<PlayerRef> player = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
+        Optional<PlayerRef> player = resolvePlayer(uuid);
         if (player.isEmpty()) {
             sendJson(ex, 404, error("Unknown player"));
             return;
@@ -583,6 +720,18 @@ public final class WebServer {
             default -> throw new IllegalStateException(path);
         }
         sendJson(ex, 200, DataObject.empty().put("ok", true));
+    }
+
+    /** A known player, or anyone online right now (even if nothing about them is stored yet). */
+    private Optional<PlayerRef> resolvePlayer(UUID uuid) throws SQLException {
+        if (uuid == null) {
+            return Optional.empty();
+        }
+        Optional<PlayerRef> known = plugin.database().findPlayer(uuid);
+        if (known.isPresent()) {
+            return known;
+        }
+        return plugin.proxy().getPlayer(uuid).map(p -> new PlayerRef(uuid, p.getUsername(), null));
     }
 
     /** Days + hours from the request body, or null if out of range. */

@@ -17,6 +17,18 @@ public final class TimeFormat {
         return DATE_TIME.format(instant);
     }
 
+    /** e.g. "1h 4m 12s", "4m 12s", "38s". */
+    public static String preciseDuration(Duration duration) {
+        long seconds = Math.max(0, duration.toSeconds());
+        long h = seconds / 3600;
+        long m = seconds / 60 % 60;
+        long s = seconds % 60;
+        if (h > 0) {
+            return h + "h " + m + "m " + s + "s";
+        }
+        return m > 0 ? m + "m " + s + "s" : s + "s";
+    }
+
     /** e.g. "3d 4h", "2h 15m", "45m". */
     public static String duration(Duration duration) {
         long minutes = Math.max(1, (duration.toSeconds() + 59) / 60);

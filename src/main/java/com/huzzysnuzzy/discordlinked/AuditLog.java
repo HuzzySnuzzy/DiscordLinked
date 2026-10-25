@@ -21,7 +21,8 @@ public final class AuditLog {
     /** Events worth posting to the Discord log channel; chat and commands stay in the database only. */
     private static final Set<String> DISCORD_EVENTS = Set.of(
             EventTypes.LINK, EventTypes.UNLINK, EventTypes.JOIN, EventTypes.LEAVE, EventTypes.DENIED_UNLINKED,
-            EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT, EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE);
+            EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT, EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE,
+            EventTypes.SPY_START, EventTypes.SPY_END);
 
     private final Database database;
     private final Logger logger;
@@ -90,6 +91,8 @@ public final class AuditLog {
         public static final String SUSPEND_EDIT = "SUSPEND_EDIT";
         public static final String NOTE = "NOTE";
         public static final String LOG_EXPORT = "LOG_EXPORT";
+        public static final String SPY_START = "SPY_START";
+        public static final String SPY_END = "SPY_END";
         public static final String UNSUSPEND = "UNSUSPEND";
         public static final String WEB_LOGIN = "WEB_LOGIN";
 

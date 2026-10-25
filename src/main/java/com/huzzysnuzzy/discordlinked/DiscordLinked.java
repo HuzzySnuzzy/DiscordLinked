@@ -11,6 +11,7 @@ import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
 import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
+import com.huzzysnuzzy.discordlinked.spy.SpyManager;
 import com.huzzysnuzzy.discordlinked.web.WebServer;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
@@ -38,7 +39,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.5.0";
+    public static final String VERSION = "0.6.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -51,6 +52,7 @@ public final class DiscordLinked {
     private AuditLog audit;
     private DiscordBot bot;
     private WebServer web;
+    private SpyManager spy;
 
     @Inject
     public DiscordLinked(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -71,6 +73,9 @@ public final class DiscordLinked {
         bot.start();
 
         proxy.getEventManager().register(this, new PlayerListener(this));
+        spy = new SpyManager(this);
+        proxy.getChannelRegistrar().register(SpyManager.CHANNEL);
+        proxy.getEventManager().register(this, spy);
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),
                 new AdminCommand(this));
@@ -84,6 +89,9 @@ public final class DiscordLinked {
 
     @Subscribe
     public void onProxyShutdown(ProxyShutdownEvent event) {
+        if (spy != null) {
+            spy.shutdown();
+        }
         if (web != null) {
             web.stop();
         }
@@ -220,6 +228,10 @@ public final class DiscordLinked {
 
     public PluginConfig config() {
         return config;
+    }
+
+    public SpyManager spy() {
+        return spy;
     }
 
     public Path dataDirectory() {
