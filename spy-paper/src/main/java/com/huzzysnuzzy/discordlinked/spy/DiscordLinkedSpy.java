@@ -258,10 +258,36 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
         }
     }
 
-    @EventHandler
+    @EventHandler(priority = org.bukkit.event.EventPriority.LOWEST)
     public void onJoin(PlayerJoinEvent event) {
+        ensureChannels(event.getPlayer());
         // Leftover state means the server stopped, crashed or the admin quit mid-session.
         restoreState(event.getPlayer());
+    }
+
+    private boolean warnedAboutChannels;
+
+    /**
+     * Paper only delivers plugin messages on channels the player's side has registered, and a vanilla
+     * client never registers ours. Depending on the Velocity version the proxy may not do it either, so
+     * register them on the player directly (the same call Paper makes when a register packet arrives).
+     */
+    private void ensureChannels(Player player) {
+        for (String channel : new String[] {CHANNEL, INVENTORY_CHANNEL}) {
+            if (player.getListeningPluginChannels().contains(channel)) {
+                continue;
+            }
+            try {
+                player.getClass().getMethod("addChannel", String.class).invoke(player, channel);
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                if (!warnedAboutChannels) {
+                    warnedAboutChannels = true;
+                    getLogger().warning("Couldn't register the DiscordLinked channels for players (" + e
+                            + "). Replies to the proxy may be dropped; please report this with your server version.");
+                }
+                return;
+            }
+        }
     }
 
     @EventHandler
