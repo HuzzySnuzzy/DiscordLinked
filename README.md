@@ -32,8 +32,10 @@ Chat that another plugin blocks (mutes, filters) is not sent to Discord. Mention
 A web panel, built into the plugin, where admins log in with Discord. Only members with `admin-role-id` get in,
 and the role is checked again every 5 minutes while they're logged in.
 
-- **Linked**: every linked player with their Minecraft head, Discord avatar, names, UUID/ID and online status.
-  Buttons to **remove a link**, **suspend** (days + hours) or **unsuspend**. All three need a reason.
+- **Linked**: every linked player with their Minecraft head, Discord avatar, names, UUID/ID and status
+  (online with server, or offline with when they were last seen, e.g. "Offline · 3 days ago").
+  Buttons to **kick** (online players), **remove a link**, **suspend** (days + hours) or **unsuspend**.
+  All of them need a reason.
 - **Logs**: every event, newest first, filterable (admin actions, suspensions, joins, chat, commands, denied
   logins, website logins) and searchable by player or admin.
 
@@ -87,7 +89,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.3.0.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.4.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup

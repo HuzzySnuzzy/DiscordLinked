@@ -68,20 +68,32 @@ public final class Database implements AutoCloseable {
         addColumnIfMissing("linked_accounts", "discord_name", "TEXT");
         addColumnIfMissing("linked_accounts", "discord_avatar", "TEXT");
         addColumnIfMissing("audit_log", "actor", "TEXT");
+        if (addColumnIfMissing("linked_accounts", "last_seen", "INTEGER")) {
+            // Fill in from join/leave history recorded before this column existed.
+            try (Statement st = connection.createStatement()) {
+                st.executeUpdate("""
+                        UPDATE linked_accounts SET last_seen = (
+                            SELECT MAX(timestamp) FROM audit_log
+                            WHERE audit_log.minecraft_uuid = linked_accounts.minecraft_uuid
+                              AND event_type IN ('JOIN', 'LEAVE', 'SERVER_SWITCH'))""");
+            }
+        }
     }
 
-    private void addColumnIfMissing(String table, String column, String type) throws SQLException {
+    /** Returns true if the column was added. */
+    private boolean addColumnIfMissing(String table, String column, String type) throws SQLException {
         try (Statement st = connection.createStatement();
              ResultSet rs = st.executeQuery("PRAGMA table_info(" + table + ")")) {
             while (rs.next()) {
                 if (rs.getString("name").equalsIgnoreCase(column)) {
-                    return;
+                    return false;
                 }
             }
         }
         try (Statement st = connection.createStatement()) {
             st.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + type);
         }
+        return true;
     }
 
     // ---- Links ----
@@ -137,6 +149,15 @@ public final class Database implements AutoCloseable {
         try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE linked_accounts SET minecraft_name = ? WHERE minecraft_uuid = ?")) {
             ps.setString(1, minecraftName);
+            ps.setString(2, uuid.toString());
+            ps.executeUpdate();
+        }
+    }
+
+    public synchronized void updateLastSeen(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE linked_accounts SET last_seen = ? WHERE minecraft_uuid = ?")) {
+            ps.setLong(1, Instant.now().toEpochMilli());
             ps.setString(2, uuid.toString());
             ps.executeUpdate();
         }
@@ -294,13 +315,16 @@ public final class Database implements AutoCloseable {
     }
 
     private static LinkedAccount readAccount(ResultSet rs) throws SQLException {
+        long lastSeen = rs.getLong("last_seen");
+        boolean neverSeen = rs.wasNull();
         return new LinkedAccount(
                 UUID.fromString(rs.getString("minecraft_uuid")),
                 rs.getString("minecraft_name"),
                 rs.getLong("discord_id"),
                 Instant.ofEpochMilli(rs.getLong("linked_at")),
                 rs.getString("discord_name"),
-                rs.getString("discord_avatar"));
+                rs.getString("discord_avatar"),
+                neverSeen ? null : Instant.ofEpochMilli(lastSeen));
     }
 
     private static Suspension readSuspension(ResultSet rs) throws SQLException {

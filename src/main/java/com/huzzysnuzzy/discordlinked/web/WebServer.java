@@ -44,7 +44,9 @@ public final class WebServer {
     private static final String STATE_COOKIE = "dl_state";
 
     private static final Map<String, Set<String>> LOG_FILTERS = Map.of(
-            "admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.UNSUSPEND, EventTypes.WEB_LOGIN),
+            "admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.UNSUSPEND,
+                    EventTypes.KICK, EventTypes.WEB_LOGIN),
+            "kicks", Set.of(EventTypes.KICK),
             "links", Set.of(EventTypes.LINK, EventTypes.UNLINK),
             "suspensions", Set.of(EventTypes.SUSPEND, EventTypes.UNSUSPEND, EventTypes.DENIED_SUSPENDED),
             "sessions", Set.of(EventTypes.JOIN, EventTypes.LEAVE, EventTypes.SERVER_SWITCH),
@@ -164,7 +166,8 @@ public final class WebServer {
                     .put("csrf", session.csrfToken));
             case "GET /api/linked" -> sendJson(ex, 200, linkedList());
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
-            case "POST /api/unlink", "POST /api/suspend", "POST /api/unsuspend" -> handleAction(ex, path, session);
+            case "POST /api/unlink", "POST /api/suspend", "POST /api/unsuspend", "POST /api/kick" ->
+                    handleAction(ex, path, session);
             default -> sendJson(ex, 404, error("Unknown endpoint"));
         }
     }
@@ -272,6 +275,7 @@ public final class WebServer {
                     .put("discordAvatar", account.discordAvatar() == null
                             ? DiscordOAuth.avatarUrl(account.discordId(), null) : account.discordAvatar())
                     .put("linkedAt", account.linkedAt().toEpochMilli())
+                    .put("lastSeen", account.lastSeen() == null ? null : account.lastSeen().toEpochMilli())
                     .put("online", online.isPresent())
                     .put("server", online.flatMap(Player::getCurrentServer)
                             .map(s -> s.getServerInfo().getName()).orElse(""));
@@ -372,6 +376,12 @@ public final class WebServer {
                     return;
                 }
                 plugin.suspend(account.get(), Duration.ofDays(days).plusHours(hours), reason, actor);
+            }
+            case "/api/kick" -> {
+                if (!plugin.kick(account.get(), reason, actor)) {
+                    sendJson(ex, 409, error("Player is not online"));
+                    return;
+                }
             }
             case "/api/unsuspend" -> {
                 if (!plugin.unsuspend(account.get(), reason, actor)) {

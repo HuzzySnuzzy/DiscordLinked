@@ -15,6 +15,7 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
@@ -23,6 +24,7 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 
 @Plugin(
         id = "discordlinked",
@@ -33,7 +35,7 @@ import java.time.Instant;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.3.0";
+    public static final String VERSION = "0.4.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -121,6 +123,17 @@ public final class DiscordLinked {
                         + reason, actor);
         proxy.getPlayer(account.uuid()).ifPresent(player -> player.disconnect(suspendedMessage(suspension)));
         return suspension;
+    }
+
+    /** Kicks an online player. Returns false if they aren't online. */
+    public boolean kick(LinkedAccount account, String reason, String actor) {
+        Optional<Player> player = proxy.getPlayer(account.uuid());
+        if (player.isEmpty()) {
+            return false;
+        }
+        player.get().disconnect(messages.minecraft("minecraft.kick.kicked", "reason", reason));
+        audit.log(account.uuid(), account.minecraftName(), account.discordId(), EventTypes.KICK, reason, actor);
+        return true;
     }
 
     public boolean unsuspend(LinkedAccount account, String reason, String actor) throws SQLException {

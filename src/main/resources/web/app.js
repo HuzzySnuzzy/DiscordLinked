@@ -6,6 +6,7 @@ const EVENT_LABELS = {
   LINK: ['Linked', 'good'],
   UNLINK: ['Unlinked', 'bad'],
   SUSPEND: ['Suspended', 'bad'],
+  KICK: ['Kicked', 'warn'],
   UNSUSPEND: ['Unsuspended', 'good'],
   JOIN: ['Join', 'info'],
   LEAVE: ['Leave', ''],
@@ -64,6 +65,17 @@ function formatRemaining(ms) {
   if (d) return h ? `${d}d ${h}h` : `${d}d`;
   if (h) return m ? `${h}h ${m}m` : `${h}h`;
   return `${m}m`;
+}
+
+/** "just now", "5 minutes ago", "1 day ago", "3 months ago", "2 years ago". */
+function timeAgo(ms) {
+  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  const units = [['year', 365 * 86400], ['month', 30 * 86400], ['day', 86400], ['hour', 3600], ['minute', 60]];
+  for (const [unit, size] of units) {
+    const n = Math.floor(seconds / size);
+    if (n >= 1) return `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+  }
+  return 'just now';
 }
 
 let toastTimer;
@@ -165,10 +177,12 @@ function linkedRow(p) {
   } else if (p.online) {
     status.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
   } else {
-    status.push(el('span', { class: 'pill' }, 'Offline'));
+    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never joined';
+    status.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}` : null }, seen));
   }
 
   const actions = el('div', { class: 'actions' },
+    p.online && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => kickDialog(p) }, 'Kick'),
     p.suspension
       ? el('button', { class: 'btn btn-success btn-small', type: 'button', onclick: () => unsuspendDialog(p) }, 'Unsuspend')
       : el('button', { class: 'btn btn-warning btn-small', type: 'button', onclick: () => suspendDialog(p) }, 'Suspend'),
@@ -194,6 +208,18 @@ function suspendDialog(p) {
     onConfirm: async ({ reason, days, hours }) => {
       await api('/api/suspend', { uuid: p.uuid, reason, days, hours });
       toast(`${p.minecraftName} suspended`);
+    },
+  });
+}
+
+function kickDialog(p) {
+  openDialog({
+    title: `Kick ${p.minecraftName}`,
+    text: `Disconnects ${p.minecraftName}${p.server ? ` from ${p.server}` : ''}. They can rejoin straight away.`,
+    confirmLabel: 'Kick', confirmClass: 'btn-warning',
+    onConfirm: async ({ reason }) => {
+      await api('/api/kick', { uuid: p.uuid, reason });
+      toast(`${p.minecraftName} kicked`);
     },
   });
 }

@@ -83,6 +83,7 @@ public final class PlayerListener {
         Player player = event.getPlayer();
         plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player),
                 EventTypes.JOIN, "ip=" + ip(player));
+        updateLastSeen(player);
         plugin.bot().bridgeToDiscord("discord.bridge.join", player.getUsername(), "", "");
     }
 
@@ -93,6 +94,7 @@ public final class PlayerListener {
         }
         Player player = event.getPlayer();
         plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player), EventTypes.LEAVE, null);
+        updateLastSeen(player);
         plugin.bot().bridgeToDiscord("discord.bridge.leave", player.getUsername(), "", "");
     }
 
@@ -125,6 +127,14 @@ public final class PlayerListener {
         }
         plugin.audit().log(player.getUniqueId(), player.getUsername(), null, EventTypes.COMMAND,
                 "/" + event.getCommand());
+    }
+
+    private void updateLastSeen(Player player) {
+        try {
+            plugin.database().updateLastSeen(player.getUniqueId());
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not update last seen for {}", player.getUsername(), e);
+        }
     }
 
     private Long discordId(Player player) {
