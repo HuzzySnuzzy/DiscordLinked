@@ -99,6 +99,8 @@ public final class WebServer {
         server.createContext("/", this::handle);
         server.start();
         plugin.logger().info("Admin website running on port {} — open {}", config.webPort(), config.webPublicUrl());
+        plugin.logger().info("Discord login redirect (must be listed exactly under Developer Portal -> OAuth2 -> Redirects): {}",
+                config.webPublicUrl() + "/callback");
     }
 
     public void stop() {
