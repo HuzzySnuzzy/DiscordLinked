@@ -19,6 +19,7 @@ const EVENT_LABELS = {
   DENIED_SUSPENDED: ['Denied: suspended', 'warn'],
   WEB_LOGIN: ['Website login', 'info'],
   LOG_EXPORT: ['Log export', 'info'],
+  INVENTORY_VIEW: ['Inventory viewed', ''],
   SPY_START: ['Spy started', 'info'],
   SPY_END: ['Spy ended', ''],
 };
@@ -425,9 +426,12 @@ async function loadPlayer(uuid) {
   const view = $('view-player');
   if (!state.player || state.player.player.uuid !== uuid) view.replaceChildren(el('p', { class: 'empty' }, 'Loading…'));
   try {
+    const changed = !state.player || state.player.player.uuid !== uuid;
     state.player = await api(`/api/player?uuid=${encodeURIComponent(uuid)}`);
+    if (changed) state.inventory = null;
     renderPlayer();
     loadPlayerLogs(true);
+    if (currentRoute().inventory && state.player.player.online && changed) loadInventory();
   } catch (e) {
     view.replaceChildren(el('a', { class: 'back', href: '#/linked' }, '← Back'), el('p', { class: 'empty' }, e.message));
   }
@@ -538,6 +542,7 @@ function renderPlayer() {
     el('a', { class: 'back', href: '#/linked' }, '← All linked players'),
     profile,
     el('div', { class: 'grid' }, discord, suspension),
+    inventorySection(p),
     ...notesSection, ...historySection, ...ipSection, ...activitySection);
 }
 
@@ -558,6 +563,180 @@ async function loadPlayerLogs(reset) {
   } catch (e) {
     toast(e.message);
   }
+}
+
+// ---- Inventory viewer ----
+
+// Item icons come from the minecraft-textures package on jsDelivr, loaded by the admin's browser.
+const TEXTURES = 'https://cdn.jsdelivr.net/npm/minecraft-textures@26.2.1/dist/textures';
+const textureCache = {};
+
+const versionKey = (v) => v.split('.').map((n) => parseInt(n, 10) || 0);
+function compareVersions(a, b) {
+  const x = versionKey(a), y = versionKey(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+  }
+  return 0;
+}
+
+/** id -> { readable, texture } for the closest texture set at or below the server's version. */
+async function loadTextures(mcVersion) {
+  try {
+    textureCache.index ||= await fetch(`${TEXTURES}/manifest/index.json`).then((r) => r.json());
+    const versions = textureCache.index.versions;
+    const fit = versions.filter((v) => compareVersions(v, mcVersion || '0') <= 0).pop() || textureCache.index.latestVersion;
+    if (!textureCache[fit]) {
+      const manifest = await fetch(`${TEXTURES}/manifest/${fit}.json`).then((r) => r.json());
+      textureCache[fit] = new Map(manifest.items.map((item) => [item.id, item]));
+    }
+    return textureCache[fit];
+  } catch (e) {
+    return new Map(); // icons unavailable: slots fall back to text
+  }
+}
+
+const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+const titleCase = (id) => id.replace(/^minecraft:/, '').split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+function itemName(item, textures) {
+  return item.name || textures.get(item.id)?.readable || titleCase(item.id);
+}
+
+async function loadInventory() {
+  const box = $('inventory-box');
+  if (!box) return;
+  box.replaceChildren(el('p', { class: 'muted' }, 'Loading inventory…'));
+  try {
+    const data = await api(`/api/player/inventory?uuid=${encodeURIComponent(state.player.player.uuid)}`);
+    const textures = await loadTextures(data.mcVersion);
+    state.inventory = { data, textures, tab: 'inventory' };
+    renderInventory();
+  } catch (e) {
+    box.replaceChildren(el('p', { class: 'error' }, e.message));
+  }
+}
+
+function inventorySection(p) {
+  const box = el('div', { id: 'inventory-box' });
+  const section = el('div', { class: 'card panel inventory-panel' },
+    el('h2', {}, 'Inventory',
+      p.online && el('button', { class: 'btn btn-ghost btn-small', type: 'button', id: 'inventory-button', onclick: loadInventory },
+        state.inventory ? 'Refresh' : 'View inventory')),
+    box);
+  if (!p.online) box.append(el('p', { class: 'muted' }, 'The inventory can be viewed while the player is online.'));
+  else if (state.inventory) queueMicrotask(renderInventory);
+  else box.append(el('p', { class: 'muted' }, 'Shows their live inventory, armour, offhand and ender chest. Viewing is logged.'));
+  return section;
+}
+
+function renderInventory() {
+  const box = $('inventory-box');
+  if (!box || !state.inventory) return;
+  const { data, textures, tab } = state.inventory;
+  const slot = (item, extra = '') => inventorySlot(item, textures, extra);
+  const tabs = el('div', { class: 'tabs inv-tabs' },
+    ['inventory', 'ender'].map((name) => el('a', {
+      href: '#', class: tab === name ? 'active' : '',
+      onclick: (e) => { e.preventDefault(); state.inventory.tab = name; renderInventory(); },
+    }, name === 'inventory' ? 'Inventory' : 'Ender chest')));
+  const stats = el('div', { class: 'inv-stats' },
+    el('span', { class: 'chip' }, `Health ${data.health} / 20`),
+    el('span', { class: 'chip' }, `Food ${data.food} / 20`),
+    el('span', { class: 'chip' }, `Level ${data.level}`),
+    el('span', { class: 'chip' }, titleCase(data.gameMode.toLowerCase())),
+    el('span', { class: 'chip mono' }, `${data.world} ${data.x}, ${data.y}, ${data.z}`),
+    el('span', { class: 'muted' }, `on ${data.server}`));
+
+  let body;
+  if (tab === 'ender') {
+    body = el('div', { class: 'inv-rows' }, el('div', { class: 'inv-grid' }, data.enderChest.map((i) => slot(i))));
+  } else {
+    const armor = [...data.armor].reverse(); // helmet first
+    body = el('div', { class: 'inv-layout' },
+      el('div', { class: 'inv-side' },
+        armor.map((i, n) => slot(i, ['helmet', 'chestplate', 'leggings', 'boots'][n])),
+        el('div', { class: 'inv-gap' }), slot(data.offhand, 'offhand')),
+      el('div', { class: 'inv-rows' },
+        el('div', { class: 'inv-grid' }, data.storage.slice(9).map((i) => slot(i))),
+        el('div', { class: 'inv-grid hotbar' }, data.storage.slice(0, 9).map((i, n) => slot(i, n === data.selectedSlot ? 'selected' : '')))));
+  }
+  box.replaceChildren(stats, tabs, body, el('div', { id: 'inv-contents' }));
+  const button = $('inventory-button');
+  if (button) button.textContent = 'Refresh';
+}
+
+function inventorySlot(item, textures, extra) {
+  const node = el('div', { class: `slot ${extra}`, tabindex: item ? 0 : -1, 'aria-label': item ? `${item.amount} × ${itemName(item, textures)}` : 'Empty slot' });
+  if (!item) return node;
+  const texture = textures.get(item.id)?.texture;
+  if (texture) {
+    const img = el('img', { src: `${TEXTURES}/assets/${texture}`, alt: '', loading: 'lazy' });
+    img.addEventListener('error', () => img.replaceWith(slotFallback(item, textures)));
+    node.append(img);
+  } else {
+    node.append(slotFallback(item, textures));
+  }
+  if (item.enchantments) node.classList.add('enchanted');
+  if (item.amount > 1) node.append(el('span', { class: 'slot-count' }, item.amount));
+  if (item.maxDurability && item.durability < item.maxDurability) {
+    const fill = el('i');
+    const pct = Math.max(0, item.durability / item.maxDurability);
+    fill.style.width = `${Math.round(pct * 100)}%`;
+    fill.style.background = `hsl(${Math.round(pct * 120)}, 85%, 45%)`;
+    node.append(el('span', { class: 'slot-durability' }, fill));
+  }
+  const show = () => showTooltip(node, item, textures);
+  node.addEventListener('mouseenter', show);
+  node.addEventListener('focus', show);
+  node.addEventListener('mouseleave', hideTooltip);
+  node.addEventListener('blur', hideTooltip);
+  node.addEventListener('click', () => {
+    show();
+    if (item.contents) showContents(item, textures);
+  });
+  return node;
+}
+
+function slotFallback(item, textures) {
+  const name = itemName(item, textures);
+  return el('span', { class: 'slot-fallback', title: name }, name.split(' ').map((w) => w[0]).join('').slice(0, 3));
+}
+
+function showContents(item, textures) {
+  const target = $('inv-contents');
+  if (!target) return;
+  target.replaceChildren(el('div', { class: 'inv-contents' },
+    el('div', { class: 'inv-contents-title' }, `Inside ${itemName(item, textures)}`,
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => target.replaceChildren() }, 'Close')),
+    el('div', { class: 'inv-grid' }, item.contents.map((i) => inventorySlot(i, textures, '')))));
+}
+
+let tooltip;
+function showTooltip(anchor, item, textures) {
+  tooltip ||= document.body.appendChild(el('div', { class: 'mc-tooltip', role: 'tooltip' }));
+  const lines = [el('div', { class: `tt-name ${item.enchantments ? 'tt-enchanted' : ''} ${item.name ? 'tt-custom' : ''}` }, itemName(item, textures))];
+  for (const e of item.enchantments || []) {
+    lines.push(el('div', { class: 'tt-enchant' }, `${titleCase(e.id)} ${ROMAN[e.level] || e.level}`));
+  }
+  for (const line of item.lore || []) lines.push(el('div', { class: 'tt-lore' }, line));
+  if (item.contents) {
+    const filled = item.contents.filter(Boolean);
+    lines.push(el('div', { class: 'tt-lore' }, `${filled.length} stack${filled.length === 1 ? '' : 's'} inside · click to open`));
+  }
+  if (item.maxDurability) lines.push(el('div', { class: 'tt-meta' }, `Durability: ${item.durability} / ${item.maxDurability}`));
+  lines.push(el('div', { class: 'tt-meta' }, `${item.id}${item.amount > 1 ? ` × ${item.amount}` : ''}`));
+  tooltip.replaceChildren(...lines);
+  tooltip.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  const left = Math.min(window.innerWidth - tooltip.offsetWidth - 8, r.right + 8);
+  const top = Math.max(8, Math.min(window.innerHeight - tooltip.offsetHeight - 8, r.top));
+  tooltip.style.left = `${Math.max(8, left)}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function hideTooltip() {
+  if (tooltip) tooltip.hidden = true;
 }
 
 // ---- Global player search ----
@@ -687,6 +866,7 @@ function moderateCard(p, canSpy) {
     el('div', { class: 'actions mod-actions' },
       small('btn-spy', 'Spy', () => startSpy(p), { disabled: p.self || !canSpy, title: spyTitle }),
       small('btn-ghost', 'Kick', () => kickDialog(p)),
+      small('btn-ghost', 'Inventory', () => { location.hash = `#/player/${p.uuid}/inventory`; }),
       p.suspension
         ? small('btn-success', 'Unsuspend', () => unsuspendDialog(p))
         : small('btn-warning', 'Suspend', () => suspendDialog(p))));
@@ -820,8 +1000,8 @@ async function endSpy() {
 // ---- Navigation ----
 
 function currentRoute() {
-  const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
-  if (match) return { view: 'player', uuid: match[1].toLowerCase() };
+  const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})(\/inventory)?$/);
+  if (match) return { view: 'player', uuid: match[1].toLowerCase(), inventory: !!match[2] };
   const views = { '#/logs': 'logs', '#/moderate': 'moderate' };
   return { view: views[location.hash] || 'linked' };
 }

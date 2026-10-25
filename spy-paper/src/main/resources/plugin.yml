@@ -3,5 +3,5 @@ version: '${version}'
 main: com.huzzysnuzzy.discordlinked.spy.DiscordLinkedSpy
 api-version: '1.20'
 folia-supported: true
-description: Backend companion for DiscordLinked's website Spy sessions. Install on every Paper or Folia server behind the Velocity proxy.
+description: Backend companion for DiscordLinked's website (Spy sessions and the inventory viewer). Install on every Paper or Folia server behind the Velocity proxy.
 authors: [HuzzySnuzzy]

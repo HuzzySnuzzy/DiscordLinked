@@ -63,6 +63,15 @@ public final class Messages {
         return out.toString();
     }
 
+    /** A Minecraft message with an extra tag resolver, e.g. a ready-made clickable component. */
+    public Component minecraft(String key, TagResolver extra, String... placeholders) {
+        TagResolver.Builder resolver = TagResolver.builder().resolver(extra);
+        for (int i = 0; i + 1 < placeholders.length; i += 2) {
+            resolver.resolver(Placeholder.unparsed(placeholders[i], placeholders[i + 1]));
+        }
+        return MiniMessage.miniMessage().deserialize(raw(key), resolver.build());
+    }
+
     /** Messages left empty in the file are switched off. */
     public boolean isEmpty(String key) {
         return raw(key).isBlank();

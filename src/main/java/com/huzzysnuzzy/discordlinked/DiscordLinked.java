@@ -3,6 +3,7 @@ package com.huzzysnuzzy.discordlinked;
 import com.google.inject.Inject;
 import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.command.AdminCommand;
+import com.huzzysnuzzy.discordlinked.command.PanelCommand;
 import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
 import com.huzzysnuzzy.discordlinked.link.LinkCodeManager;
 import com.huzzysnuzzy.discordlinked.listener.PlayerListener;
@@ -11,6 +12,7 @@ import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
 import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
+import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
 import com.huzzysnuzzy.discordlinked.spy.SpyManager;
 import com.huzzysnuzzy.discordlinked.web.WebServer;
 import com.velocitypowered.api.event.Subscribe;
@@ -39,7 +41,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.6.1";
+    public static final String VERSION = "0.7.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -53,6 +55,7 @@ public final class DiscordLinked {
     private DiscordBot bot;
     private WebServer web;
     private SpyManager spy;
+    private InventoryRequests inventories;
 
     @Inject
     public DiscordLinked(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -76,12 +79,20 @@ public final class DiscordLinked {
         spy = new SpyManager(this);
         proxy.getChannelRegistrar().register(SpyManager.CHANNEL);
         proxy.getEventManager().register(this, spy);
+        inventories = new InventoryRequests();
+        proxy.getChannelRegistrar().register(InventoryRequests.CHANNEL);
+        proxy.getEventManager().register(this, inventories);
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),
                 new AdminCommand(this));
+        proxy.getCommandManager().register(
+                proxy.getCommandManager().metaBuilder("dla").plugin(this).build(),
+                new PanelCommand(this));
         if (config.webEnabled()) {
             web = new WebServer(this);
-            web.start();
+            if (!web.start()) {
+                web = null;
+            }
         }
         logger.info("DiscordLinked {} enabled (chat bridge: minecraft->discord={}, discord->minecraft={}, website={})",
                 VERSION, config.minecraftToDiscord(), config.discordToMinecraft(), config.webEnabled());
@@ -228,6 +239,15 @@ public final class DiscordLinked {
 
     public PluginConfig config() {
         return config;
+    }
+
+    /** The admin website, or null when it's turned off or couldn't start. */
+    public WebServer web() {
+        return web;
+    }
+
+    public InventoryRequests inventories() {
+        return inventories;
     }
 
     public SpyManager spy() {

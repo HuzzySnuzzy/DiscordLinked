@@ -93,6 +93,7 @@ public final class AuditLog {
         public static final String LOG_EXPORT = "LOG_EXPORT";
         public static final String SPY_START = "SPY_START";
         public static final String SPY_END = "SPY_END";
+        public static final String INVENTORY_VIEW = "INVENTORY_VIEW";
         public static final String UNSUSPEND = "UNSUSPEND";
         public static final String WEB_LOGIN = "WEB_LOGIN";
 

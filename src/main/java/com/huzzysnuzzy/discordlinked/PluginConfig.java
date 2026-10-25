@@ -28,7 +28,8 @@ public record PluginConfig(
         boolean dmPlayers,
         String googleSpreadsheetId,
         String googleServiceAccountFile,
-        int spyMaxDistance
+        int spyMaxDistance,
+        String webAccess
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -54,7 +55,8 @@ public record PluginConfig(
                 parseBoolean(props, "dm-players"),
                 props.getProperty("google-sheets-spreadsheet-id").trim(),
                 props.getProperty("google-service-account-file").trim(),
-                Integer.parseInt(props.getProperty("spy-max-distance").trim())
+                Integer.parseInt(props.getProperty("spy-max-distance").trim()),
+                props.getProperty("web-access").trim().toLowerCase()
         );
     }
 
@@ -73,6 +75,11 @@ public record PluginConfig(
 
     public boolean botConfigured() {
         return !botToken.isEmpty() && guildId != 0L;
+    }
+
+    /** "tunnel": automatic HTTPS through a Cloudflare quick tunnel. "direct": listen on web-port as-is. */
+    public boolean webTunnel() {
+        return !"direct".equals(webAccess);
     }
 
     public boolean chatBridgeEnabled() {

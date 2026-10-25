@@ -22,7 +22,11 @@ import net.dv8tion.jda.api.exceptions.ParsingException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URLDecoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -37,7 +41,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Executors;
 
 /**
@@ -67,7 +74,7 @@ public final class WebServer {
     private static final Map<String, Set<String>> LOG_FILTERS = Map.ofEntries(
             Map.entry("admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
                     EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT,
-                    EventTypes.SPY_START, EventTypes.SPY_END)),
+                    EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_VIEW)),
             Map.entry("kicks", Set.of(EventTypes.KICK)),
             Map.entry("notes", Set.of(EventTypes.NOTE)),
             Map.entry("links", Set.of(EventTypes.LINK, EventTypes.UNLINK)),
@@ -78,7 +85,8 @@ public final class WebServer {
             Map.entry("commands", Set.of(EventTypes.COMMAND)),
             Map.entry("denied", Set.of(EventTypes.DENIED_UNLINKED, EventTypes.DENIED_SUSPENDED)),
             Map.entry("web", Set.of(EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT)),
-            Map.entry("spy", Set.of(EventTypes.SPY_START, EventTypes.SPY_END)));
+            Map.entry("spy", Set.of(EventTypes.SPY_START, EventTypes.SPY_END)),
+            Map.entry("inventory", Set.of(EventTypes.INVENTORY_VIEW)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -93,18 +101,21 @@ public final class WebServer {
     private ExecutorService executor;
     private DiscordOAuth oauth;
     private GoogleSheetsExporter sheets;
-    private boolean secureCookies;
+    private volatile boolean secureCookies;
+    private volatile String publicUrl;
+    private CloudflareTunnel tunnel;
 
     public WebServer(DiscordLinked plugin) {
         this.plugin = plugin;
     }
 
-    public void start() throws IOException {
+    /** Returns false (after logging why) if the website can't run with the current config. */
+    public boolean start() throws IOException {
         PluginConfig config = plugin.config();
-        if (!config.botConfigured() || config.oauthClientSecret().isEmpty() || config.adminRoleId() == 0L) {
-            plugin.logger().warn("Website not started: it needs bot-token, guild-id, discord-client-secret and "
-                    + "admin-role-id set in config.properties.");
-            return;
+        if (!config.botConfigured() || config.adminRoleId() == 0L) {
+            plugin.logger().warn("Website not started: it needs bot-token, guild-id and admin-role-id set in "
+                    + "config.properties.");
+            return false;
         }
         for (String name : List.of("index.html", "login.html", "message.html", "app.js", "style.css", "favicon.svg")) {
             try (InputStream in = WebServer.class.getResourceAsStream("/web/" + name)) {
@@ -124,10 +135,9 @@ public final class WebServer {
                 plugin.logger().warn("Google Sheets export disabled: {}", e.getMessage());
             }
         }
-        oauth = new DiscordOAuth(config.oauthClientSecret(), config.webPublicUrl() + "/callback");
-        secureCookies = config.webPublicUrl().startsWith("https://");
-
-        server = HttpServer.create(new InetSocketAddress(config.webBindAddress(), config.webPort()), 0);
+        // Through the tunnel only Cloudflare (via the local cloudflared) talks to us, so stay off the network.
+        String bindAddress = config.webTunnel() ? "127.0.0.1" : config.webBindAddress();
+        server = HttpServer.create(new InetSocketAddress(bindAddress, config.webPort()), 0);
         executor = Executors.newFixedThreadPool(4, r -> {
             Thread thread = new Thread(r, "DiscordLinked-Web");
             thread.setDaemon(true);
@@ -136,12 +146,68 @@ public final class WebServer {
         server.setExecutor(executor);
         server.createContext("/", this::handle);
         server.start();
-        plugin.logger().info("Admin website running on port {} — open {}", config.webPort(), config.webPublicUrl());
-        plugin.logger().info("Discord login redirect (must be listed exactly under Developer Portal -> OAuth2 -> Redirects): {}",
-                config.webPublicUrl() + "/callback");
+
+        if (config.webTunnel()) {
+            secureCookies = true;
+            plugin.logger().info("Admin website starting; setting up its https:// address...");
+            tunnel = new CloudflareTunnel(plugin.dataDirectory().resolve("bin"), config.webPort(), plugin.logger(), url -> {
+                publicUrl = url;
+                plugin.logger().info("Admin website is live at {} (the address changes when the proxy restarts). "
+                        + "Run /dla in Discord or in game to log in.", url);
+            });
+            tunnel.start();
+        } else {
+            String url = config.webPublicUrl();
+            if (url.isEmpty() || url.contains("://localhost")) {
+                url = "http://" + detectPublicIp().orElse("localhost") + ":" + config.webPort();
+            }
+            publicUrl = url;
+            secureCookies = url.startsWith("https://");
+            if (!config.oauthClientSecret().isEmpty()) {
+                oauth = new DiscordOAuth(config.oauthClientSecret(), url + "/callback");
+                plugin.logger().info("Discord login button enabled. Its redirect must be listed under Developer "
+                        + "Portal -> OAuth2 -> Redirects: {}/callback", url);
+            }
+            plugin.logger().info("Admin website running at {}. Run /dla in Discord or in game to log in.", url);
+        }
+        return true;
+    }
+
+    /** The address admins open, or null while the HTTPS tunnel is still starting. */
+    public String publicUrl() {
+        return publicUrl;
+    }
+
+    /**
+     * A one-time login link for an admin, or null if the website isn't reachable yet. The caller must
+     * already have checked that this Discord user has the admin role.
+     */
+    public String createLoginLink(long discordId, String name, String avatarUrl) {
+        String base = publicUrl;
+        if (base == null) {
+            return null;
+        }
+        String avatar = avatarUrl == null ? DiscordOAuth.avatarUrl(discordId, null) : avatarUrl;
+        String token = sessions.newLoginLink(new DiscordOAuth.DiscordUser(discordId, name, avatar));
+        return base + "/login/link?t=" + token;
+    }
+
+    private static Optional<String> detectPublicIp() {
+        try {
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("https://checkip.amazonaws.com")).timeout(Duration.ofSeconds(5)).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            String ip = response.body().trim();
+            return response.statusCode() == 200 && ip.matches("[0-9a-fA-F.:]+") ? Optional.of(ip) : Optional.empty();
+        } catch (IOException | InterruptedException | RuntimeException e) {
+            return Optional.empty();
+        }
     }
 
     public void stop() {
+        if (tunnel != null) {
+            tunnel.stop();
+        }
         if (server != null) {
             server.stop(0);
             executor.shutdownNow();
@@ -159,12 +225,23 @@ public final class WebServer {
                 handleApi(ex, method, path);
                 return;
             }
+            if (method.equals("POST") && path.equals("/login/link")) {
+                useLoginLink(ex);
+                return;
+            }
             if (!method.equals("GET") && !method.equals("HEAD")) {
                 sendText(ex, 405, "Method not allowed");
                 return;
             }
             switch (path) {
-                case "/" -> serveFile(ex, currentSession(ex) != null ? "index.html" : "login.html");
+                case "/" -> {
+                    if (currentSession(ex) != null) {
+                        serveFile(ex, "index.html");
+                    } else {
+                        serveLoginPage(ex);
+                    }
+                }
+                case "/login/link" -> loginLinkPage(ex);
                 case "/login" -> startLogin(ex);
                 case "/callback" -> finishLogin(ex);
                 case "/logout" -> logout(ex);
@@ -213,6 +290,7 @@ public final class WebServer {
             case "GET /api/linked" -> sendJson(ex, 200, linkedList());
             case "GET /api/search" -> sendJson(ex, 200, search(query(ex)));
             case "GET /api/player" -> playerPage(ex, query(ex));
+            case "GET /api/player/inventory" -> inventory(ex, query(ex), session);
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
             case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
             case "POST /api/logs/export-sheets" -> exportSheets(ex, session);
@@ -224,7 +302,65 @@ public final class WebServer {
 
     // ---- Login ----
 
+    private void serveLoginPage(HttpExchange ex) throws IOException {
+        String button = oauth == null ? ""
+                : "<a class=\"btn btn-ghost\" href=\"/login\">Or log in with Discord</a>";
+        String html = new String(files.get("login.html"), StandardCharsets.UTF_8).replace("{{oauth}}", button);
+        send(ex, 200, CONTENT_TYPES.get("html"), html.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Shows a "continue" button instead of logging in straight away, so link scanners and previews that
+     * open URLs can't use up the one-time link.
+     */
+    private void loginLinkPage(HttpExchange ex) throws IOException {
+        String token = query(ex).get("t");
+        Sessions.LoginLink link = sessions.peekLoginLink(token);
+        if (link == null) {
+            sendMessagePage(ex, 410, "Link expired", "This login link was already used or has expired. "
+                    + "Run /dla again for a new one.");
+            return;
+        }
+        String html = new String(files.get("message.html"), StandardCharsets.UTF_8)
+                .replace("{{title}}", "Log in as " + escapeHtml(link.user().name()))
+                .replace("{{message}}", "This one-time link logs you into the admin panel."
+                        + "</p><form method=\"post\" action=\"/login/link\" class=\"inline-form\">"
+                        + "<input type=\"hidden\" name=\"t\" value=\"" + escapeHtml(token) + "\">"
+                        + "<button class=\"btn\" type=\"submit\">Continue to the admin panel</button></form><p hidden>");
+        send(ex, 200, CONTENT_TYPES.get("html"), html.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void useLoginLink(HttpExchange ex) throws IOException {
+        byte[] bytes = ex.getRequestBody().readNBytes(MAX_BODY_BYTES);
+        String token = null;
+        for (String part : new String(bytes, StandardCharsets.UTF_8).split("&")) {
+            if (part.startsWith("t=")) {
+                token = URLDecoder.decode(part.substring(2), StandardCharsets.UTF_8);
+            }
+        }
+        Sessions.LoginLink link = sessions.consumeLoginLink(token);
+        if (link == null) {
+            sendMessagePage(ex, 410, "Link expired", "This login link was already used or has expired. "
+                    + "Run /dla again for a new one.");
+            return;
+        }
+        if (!plugin.bot().isReady() || !plugin.bot().hasAdminRole(link.user().id())) {
+            sendMessagePage(ex, 403, "No access", "Your Discord account doesn't have the admin role for this panel.");
+            return;
+        }
+        Sessions.Session session = sessions.create(link.user());
+        plugin.audit().log(null, null, link.user().id(), EventTypes.WEB_LOGIN, "logged in with a /dla link",
+                link.user().actor());
+        ex.getResponseHeaders().add("Set-Cookie", cookie(SESSION_COOKIE, session.token,
+                Sessions.SESSION_LIFETIME.toSeconds()));
+        redirect(ex, "/");
+    }
+
     private void startLogin(HttpExchange ex) throws IOException {
+        if (oauth == null) {
+            sendMessagePage(ex, 404, "Use /dla", "Run /dla in Discord or in game to get a login link.");
+            return;
+        }
         if (!plugin.bot().isReady()) {
             sendMessagePage(ex, 503, "Bot offline", "The Discord bot isn't connected yet. Try again in a moment.");
             return;
@@ -237,6 +373,10 @@ public final class WebServer {
     }
 
     private void finishLogin(HttpExchange ex) throws IOException, InterruptedException {
+        if (oauth == null) {
+            sendMessagePage(ex, 404, "Use /dla", "Run /dla in Discord or in game to get a login link.");
+            return;
+        }
         Map<String, String> query = query(ex);
         String state = query.get("state");
         ex.getResponseHeaders().add("Set-Cookie", cookie(STATE_COOKIE, "", 0));
@@ -532,6 +672,37 @@ public final class WebServer {
         }
     }
 
+    // ---- Inventory viewer ----
+
+    private void inventory(HttpExchange ex, Map<String, String> query, Sessions.Session session)
+            throws IOException, SQLException {
+        UUID uuid = parseUuid(query.get("uuid"));
+        Optional<Player> player = uuid == null ? Optional.empty() : plugin.proxy().getPlayer(uuid);
+        if (player.isEmpty()) {
+            sendJson(ex, 409, error("The inventory can only be viewed while the player is online."));
+            return;
+        }
+        String server = player.get().getCurrentServer().map(c -> c.getServerInfo().getName()).orElse("their server");
+        DataObject snapshot;
+        try {
+            snapshot = DataObject.fromJson(plugin.inventories().request(player.get()).get(6, TimeUnit.SECONDS));
+        } catch (TimeoutException | ExecutionException e) {
+            sendJson(ex, 504, error("No reply from " + server + ". Is the DiscordLinkedSpy plugin installed there?"));
+            return;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            sendJson(ex, 503, error("Interrupted"));
+            return;
+        } catch (ParsingException e) {
+            sendJson(ex, 502, error("Got an unreadable inventory from " + server));
+            return;
+        }
+        Optional<PlayerRef> ref = resolvePlayer(uuid);
+        plugin.audit().log(uuid, ref.map(PlayerRef::name).orElse(player.get().getUsername()),
+                ref.map(PlayerRef::discordId).orElse(null), EventTypes.INVENTORY_VIEW, "on " + server, session.user.actor());
+        sendJson(ex, 200, snapshot.put("server", server));
+    }
+
     // ---- Moderate page & spy ----
 
     private DataObject onlineList(Sessions.Session session) throws SQLException {
@@ -749,7 +920,8 @@ public final class WebServer {
     private static void addSecurityHeaders(HttpExchange ex) {
         var headers = ex.getResponseHeaders();
         headers.set("Content-Security-Policy", "default-src 'self'; img-src 'self' https://mc-heads.net "
-                + "https://cdn.discordapp.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'; "
+                + "https://cdn.discordapp.com https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net; "
+                + "style-src 'self'; script-src 'self'; frame-ancestors 'none'; "
                 + "form-action 'self'; base-uri 'none'");
         headers.set("X-Content-Type-Options", "nosniff");
         headers.set("X-Frame-Options", "DENY");

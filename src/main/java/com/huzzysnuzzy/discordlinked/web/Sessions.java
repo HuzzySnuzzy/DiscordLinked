@@ -12,10 +12,34 @@ final class Sessions {
 
     static final Duration SESSION_LIFETIME = Duration.ofHours(12);
     private static final Duration STATE_LIFETIME = Duration.ofMinutes(10);
+    static final Duration LOGIN_LINK_LIFETIME = Duration.ofMinutes(5);
 
     private final SecureRandom random = new SecureRandom();
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, Instant> states = new ConcurrentHashMap<>();
+    private final Map<String, LoginLink> loginLinks = new ConcurrentHashMap<>();
+
+    /** A one-time login link handed out by /dla. */
+    record LoginLink(DiscordOAuth.DiscordUser user, Instant expiresAt) {
+    }
+
+    String newLoginLink(DiscordOAuth.DiscordUser user) {
+        purge();
+        String token = token();
+        loginLinks.put(token, new LoginLink(user, Instant.now().plus(LOGIN_LINK_LIFETIME)));
+        return token;
+    }
+
+    /** Looks at a login link without using it up (for the "continue" page). */
+    LoginLink peekLoginLink(String token) {
+        LoginLink link = token == null ? null : loginLinks.get(token);
+        return link != null && link.expiresAt().isAfter(Instant.now()) ? link : null;
+    }
+
+    LoginLink consumeLoginLink(String token) {
+        LoginLink link = token == null ? null : loginLinks.remove(token);
+        return link != null && link.expiresAt().isAfter(Instant.now()) ? link : null;
+    }
 
     String newState() {
         purge();
@@ -58,6 +82,7 @@ final class Sessions {
         Instant now = Instant.now();
         sessions.values().removeIf(s -> s.expiresAt.isBefore(now));
         states.values().removeIf(expires -> expires.isBefore(now));
+        loginLinks.values().removeIf(link -> link.expiresAt().isBefore(now));
     }
 
     private String token() {

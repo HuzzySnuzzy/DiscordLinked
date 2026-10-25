@@ -7,6 +7,8 @@ import com.huzzysnuzzy.discordlinked.link.LinkCodeManager.PendingLink;
 import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import net.dv8tion.jda.api.EmbedBuilder;
+import net.dv8tion.jda.api.components.actionrow.ActionRow;
+import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.Permission;
@@ -112,7 +114,8 @@ public final class DiscordBot extends ListenerAdapter {
                         .setDefaultPermissions(ADMIN),
                 Commands.slash("forceunlink", "Remove a player's link")
                         .addOption(OptionType.STRING, "player", "Minecraft username", true)
-                        .setDefaultPermissions(ADMIN)
+                        .setDefaultPermissions(ADMIN),
+                Commands.slash("dla", "Get a one-time login link for the DiscordLinked admin website")
         ).queue();
         plugin.logger().info("Discord bot ready as {} in {}", event.getJDA().getSelfUser().getName(), guild.getName());
     }
@@ -129,6 +132,7 @@ public final class DiscordBot extends ListenerAdapter {
                 case "whois" -> handleWhois(event);
                 case "history" -> handleHistory(event);
                 case "forceunlink" -> handleForceUnlink(event);
+                case "dla" -> handleDla(event);
                 default -> { }
             }
         } catch (SQLException e) {
@@ -284,6 +288,25 @@ public final class DiscordBot extends ListenerAdapter {
         }
         plugin.unlink(account.get(), actor(event.getUser()), "Discord /forceunlink", true);
         event.reply(msg("discord.forceunlink.success", "player", account.get().minecraftName())).setEphemeral(true).queue();
+    }
+
+    private void handleDla(SlashCommandInteractionEvent event) {
+        Member member = event.getMember();
+        if (member == null || !isAdmin(member)) {
+            event.reply(msg("discord.dla.no-access")).setEphemeral(true).queue();
+            return;
+        }
+        String link = plugin.web() == null ? null : plugin.web().createLoginLink(member.getIdLong(),
+                member.getEffectiveName(), member.getEffectiveAvatarUrl());
+        if (link == null) {
+            event.reply(msg(plugin.web() == null ? "discord.dla.offline" : "discord.dla.starting"))
+                    .setEphemeral(true).queue();
+            return;
+        }
+        // A button rather than text, so Discord never fetches (and uses up) the link for a preview.
+        event.reply(msg("discord.dla.link"))
+                .setComponents(ActionRow.of(Button.link(link, plugin.messages().discord("discord.dla.button"))))
+                .setEphemeral(true).queue();
     }
 
     public void addLinkedRole(long discordId) {

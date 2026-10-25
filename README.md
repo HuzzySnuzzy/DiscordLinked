@@ -43,6 +43,11 @@ and the role is checked again every 5 minutes while they're logged in.
   player's complete activity log.
 - **Actions**: kick (online players), suspend (days + hours), edit a suspension (new length and reason),
   unsuspend, add a staff note, remove a link. All need a reason or note text.
+- **Inventory** (player page, and the Inventory button on Moderate cards): the player's live inventory,
+  armour, offhand and ender chest with item icons, stack sizes, durability, enchantments, custom names and
+  lore, plus what's inside shulker boxes; also their health, food, level, game mode and position. Online
+  players only, needs the companion plugin, and every view is logged. Item icons are loaded by your browser
+  from the `minecraft-textures` package on jsDelivr.
 - **Logs**: every event, newest first, filterable and searchable, with **Download CSV** and
   **Export to Google Sheets** buttons (also on each player page for just that player).
 
@@ -75,8 +80,8 @@ filterable by server, with **Spy**, **Kick** and **Suspend** buttons.
 - Every session's start and end, with its length and why it ended, is in the logs (**Spy sessions**
   filter) and the Discord log channel.
 
-Spy needs the small companion plugin on the Minecraft servers, because Velocity itself can't teleport
-players or change game modes:
+Spy and the inventory viewer need the small companion plugin on the Minecraft servers, because Velocity
+itself can't teleport players, change game modes or see inventories:
 
 1. Download **DiscordLinked** from the GitHub Actions run; the zip contains two jars.
 2. `DiscordLinked-x.y.z.jar` goes in Velocity's `plugins/` folder as before.
@@ -90,15 +95,24 @@ sure your backend servers can't be joined directly, bypassing the proxy.
 
 ### Setting it up
 
-1. Developer Portal → your app → **OAuth2**: copy the **Client Secret** (reset it if needed), and under
-   **Redirects** add `<web-public-url>/callback`, e.g. `http://123.45.67.89:8080/callback`.
-2. In `config.properties` set `web-enabled=true`, `web-port`, `web-public-url`, `discord-client-secret` and
-   `admin-role-id`.
-3. Open the port in your firewall / host panel, restart the proxy, and visit `web-public-url`.
+1. Set `admin-role-id` in `config.properties` (right-click the role → Copy Role ID) and restart.
+2. Run **`/dla`** in Discord or in game. Admins get a one-time login link (works once, expires in 5
+   minutes). That's it.
 
-Over plain `http://` the login cookie isn't encrypted in transit. For anything beyond testing, put the panel
-behind HTTPS (e.g. a reverse proxy such as Caddy or nginx, with `web-bind-address=127.0.0.1`) and use the
-`https://` address as `web-public-url`.
+By default (`web-access=tunnel`) the panel gets a free **https://** address from a Cloudflare quick
+tunnel: the plugin downloads Cloudflare's `cloudflared` program into `plugins/discordlinked/bin/` on first
+start and runs it. No ports to open, no domain, no certificates. The panel itself only listens on
+`127.0.0.1`. Things to know:
+
+- The address (`https://<random-words>.trycloudflare.com`) changes whenever the proxy restarts, so
+  everyone logs in again; `/dla` always gives the current address.
+- Cloudflare offers quick tunnels free and without an account, but without an uptime guarantee.
+- If your host doesn't allow running programs, the console says so; use `web-access=direct` instead.
+
+With `web-access=direct` the panel is served over plain http on `web-port` (open it in your firewall). Set
+`web-public-url` if you put it behind your own HTTPS reverse proxy/domain. In this mode you can also add a
+"Log in with Discord" button: set `discord-client-secret` and add `<web-public-url>/callback` under
+Developer Portal → OAuth2 → Redirects.
 
 ### Google Sheets export (optional)
 
@@ -139,10 +153,14 @@ Discord:
 | `/whois [player] [user]` | Moderate Members | Show a link |
 | `/history <player>` | Moderate Members | Last 20 tracked events |
 | `/forceunlink <player>` | Moderate Members | Remove someone's link |
+| `/dla` | admin role | One-time login link for the admin website |
 
 Admin command visibility can be changed in Server Settings → Integrations → your bot.
 
 In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`.
+
+`/dla` (in Discord and in game): a one-time login link for the admin website. Anyone can run it; only
+members whose Discord account has `admin-role-id` get a link.
 
 ## Building
 
@@ -152,7 +170,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.6.1.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.7.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup
