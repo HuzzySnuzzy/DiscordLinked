@@ -336,6 +336,12 @@ public final class DiscordBot extends ListenerAdapter {
         }
     }
 
+    /** The Discord server owner's user ID, or 0 if the bot isn't connected. */
+    public long guildOwnerId() {
+        Guild guild = guild();
+        return guild == null ? 0L : guild.getOwnerIdLong();
+    }
+
     public boolean isReady() {
         return jda != null && jda.getStatus() == JDA.Status.CONNECTED && guild() != null;
     }

@@ -84,6 +84,40 @@ final class ConfigFiles {
         }
     }
 
+    /**
+     * Changes settings in the user's file in place, keeping comments and order. Keys that aren't in the
+     * file yet are added at the end. Values must be single-line.
+     */
+    static void update(Path dataDirectory, String fileName, java.util.Map<String, String> changes) throws IOException {
+        Path file = dataDirectory.resolve(fileName);
+        List<String> lines = new ArrayList<>(Files.readAllLines(file, StandardCharsets.UTF_8));
+        java.util.Set<String> remaining = new java.util.LinkedHashSet<>(changes.keySet());
+        for (int i = 0; i < lines.size(); i++) {
+            String trimmed = lines.get(i).trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                continue;
+            }
+            int end = 0;
+            while (end < trimmed.length() && "=: \t".indexOf(trimmed.charAt(end)) < 0) {
+                end++;
+            }
+            String key = trimmed.substring(0, end);
+            if (remaining.remove(key)) {
+                lines.set(i, key + "=" + escape(changes.get(key)));
+            }
+        }
+        for (String key : remaining) {
+            lines.add(key + "=" + escape(changes.get(key)));
+        }
+        Path temp = file.resolveSibling(fileName + ".tmp");
+        Files.write(temp, lines, StandardCharsets.UTF_8);
+        Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    private static String escape(String value) {
+        return value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "");
+    }
+
     private static String readBundled(String fileName) throws IOException {
         try (InputStream in = ConfigFiles.class.getResourceAsStream("/" + fileName)) {
             if (in == null) {

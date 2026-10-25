@@ -22,6 +22,7 @@ const EVENT_LABELS = {
   INVENTORY_VIEW: ['Inventory viewed', ''],
   INVENTORY_SNAPSHOT: ['Snapshot saved', 'info'],
   INVENTORY_RESTORE: ['Inventory restored', 'warn'],
+  SETTINGS_CHANGE: ['Settings changed', 'info'],
   DEATH: ['Death', 'bad'],
   SPY_START: ['Spy started', 'info'],
   SPY_END: ['Spy ended', ''],
@@ -1172,6 +1173,144 @@ async function endSpy() {
   pollSpy();
 }
 
+// ---- Settings (only the settings owner sees this page) ----
+
+const settingsEdits = {};
+
+async function loadSettings() {
+  try {
+    state.settings = await api('/api/settings');
+  } catch (e) {
+    $('settings-body').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    $('settings-bar').hidden = true;
+    return;
+  }
+  for (const key of Object.keys(settingsEdits)) delete settingsEdits[key];
+  renderSettings();
+}
+
+const formatBytes = (n) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB`
+  : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+
+function settingInput(field) {
+  const current = field.key in settingsEdits ? settingsEdits[field.key] : field.value;
+  const onChange = (value) => {
+    if (value === field.value) delete settingsEdits[field.key];
+    else settingsEdits[field.key] = value;
+    updateSettingsBar();
+    document.querySelector(`[data-setting="${field.key}"]`)?.classList.toggle('changed', field.key in settingsEdits);
+  };
+  if (field.type === 'boolean') {
+    const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': field.label });
+    box.checked = current === 'true';
+    box.addEventListener('change', () => onChange(box.checked ? 'true' : 'false'));
+    return el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }));
+  }
+  if (field.type === 'choice') {
+    const select = el('select', { 'aria-label': field.label }, field.choices.map((c) => el('option', { value: c }, c)));
+    select.value = current;
+    select.addEventListener('change', () => onChange(select.value));
+    return select;
+  }
+  const input = el('input', {
+    type: field.type === 'number' ? 'number' : 'text', 'aria-label': field.label, value: current,
+    min: field.type === 'number' ? field.min : null, max: field.type === 'number' ? field.max : null,
+    placeholder: field.type === 'discord_id' ? 'Empty' : null, inputmode: field.type === 'discord_id' ? 'numeric' : null,
+    spellcheck: 'false',
+  });
+  input.addEventListener('input', () => onChange(input.value.trim()));
+  return input;
+}
+
+function renderSettings() {
+  const data = state.settings;
+  $('settings-owner-note').textContent = data.ownerIsDefault
+    ? 'Only you (the Discord server owner) can see this page.' : 'Only you (the settings owner) can see this page.';
+  const groups = data.groups.map((group) => el('div', { class: 'card panel settings-group' },
+    el('h2', {}, group.name),
+    group.fields.map((field) => el('div', { class: `setting ${field.key in settingsEdits ? 'changed' : ''}`, 'data-setting': field.key },
+      el('div', { class: 'setting-text' },
+        el('div', { class: 'setting-label' }, field.label, field.restart && el('span', { class: 'badge warn' }, 'needs restart')),
+        el('div', { class: 'setting-help' }, field.help),
+        el('div', { class: 'setting-key mono' }, field.key)),
+      el('div', { class: 'setting-input' }, settingInput(field))))));
+
+  const secret = (label, set, hint) => el('div', { class: 'setting' },
+    el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, label), el('div', { class: 'setting-help' }, hint)),
+    el('span', { class: `badge ${set ? 'good' : 'warn'}` }, set ? 'Set' : 'Not set'));
+  const secrets = el('div', { class: 'card panel settings-group' },
+    el('h2', {}, 'Secrets'),
+    el('p', { class: 'muted' }, 'For safety these can only be changed in plugins/discordlinked/config.properties.'),
+    secret('Bot token', data.secrets.botToken, 'bot-token'),
+    secret('Discord client secret', data.secrets.clientSecret, 'discord-client-secret (optional, for the Log in with Discord button)'),
+    secret('Google service account key', data.secrets.googleKey, 'the key file for Google Sheets export (optional)'));
+
+  const d = data.data;
+  const stat = (label, value) => el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
+  const dataCard = el('div', { class: 'card panel settings-group' },
+    el('h2', {}, 'Data'),
+    el('div', { class: 'stats-grid' },
+      stat('Database size', formatBytes(d.databaseBytes)),
+      stat('Linked players', d.linkedPlayers.toLocaleString()),
+      stat('Log entries', `${d.logEntries.toLocaleString()} (${d.chatEntries.toLocaleString()} chat/commands)`),
+      stat('Inventory snapshots', `${d.snapshots.toLocaleString()} (${formatBytes(d.snapshotBytes)})`),
+      stat('Staff notes', d.notes.toLocaleString())),
+    el('p', { class: 'muted' }, 'Cleanup runs automatically every hour using the retention settings above.'),
+    el('div', { class: 'actions inv-start' },
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'cleanup') }, 'Clean up now'),
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'compact') }, 'Compact database')));
+
+  $('settings-body').replaceChildren(el('div', { class: 'settings-grid' }, ...groups, secrets, dataCard));
+  updateSettingsBar();
+}
+
+function updateSettingsBar() {
+  const count = Object.keys(settingsEdits).length;
+  $('settings-bar').hidden = count === 0;
+  $('settings-bar-text').textContent = `${count} unsaved change${count === 1 ? '' : 's'}`;
+}
+
+async function settingsAction(button, action) {
+  button.disabled = true;
+  try {
+    const result = await api(`/api/settings/${action}`, {});
+    state.settings.data = result.data;
+    toast(action === 'cleanup' ? `Cleanup done: ${result.summary}.` : `Database compacted, ${formatBytes(result.freed)} freed.`);
+    renderSettings();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('settings-discard').addEventListener('click', () => {
+  for (const key of Object.keys(settingsEdits)) delete settingsEdits[key];
+  renderSettings();
+});
+
+$('settings-save').addEventListener('click', async () => {
+  const ownerChange = 'web-owner-id' in settingsEdits;
+  if (ownerChange && !confirm('Changing the settings owner hands this page to that Discord user right away. Continue?')) return;
+  const button = $('settings-save');
+  button.disabled = true;
+  try {
+    const result = await api('/api/settings', { changes: { ...settingsEdits } });
+    toast(result.needRestart.length
+      ? `Saved. Restart the proxy for: ${result.needRestart.join(', ')}.`
+      : `Saved ${result.changed.length} setting${result.changed.length === 1 ? '' : 's'}.`);
+    if (ownerChange) {
+      state.me = await api('/api/me');
+      $('settings-link').hidden = !state.me.isOwner;
+    }
+    await loadSettings();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // ---- Live updates: one event stream for every page ----
 
 // Events that can change what the list/player pages show.
@@ -1247,7 +1386,7 @@ function connectLive() {
 function currentRoute() {
   const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})(\/inventory)?$/);
   if (match) return { view: 'player', uuid: match[1].toLowerCase(), inventory: !!match[2] };
-  const views = { '#/logs': 'logs', '#/moderate': 'moderate' };
+  const views = { '#/logs': 'logs', '#/moderate': 'moderate', '#/settings': 'settings' };
   return { view: views[location.hash] || 'linked' };
 }
 
@@ -1256,11 +1395,12 @@ function refreshCurrentView() {
   if (route.view === 'linked') loadLinked();
   else if (route.view === 'player') loadPlayer(route.uuid);
   else if (route.view === 'moderate') loadModerate();
+  else if (route.view === 'settings') loadSettings();
 }
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player', 'moderate']) $(`view-${name}`).hidden = name !== route.view;
+  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings']) $(`view-${name}`).hidden = name !== route.view;
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
   if (route.view === 'logs') loadLogs(true);
   else refreshCurrentView();
@@ -1288,6 +1428,7 @@ setInterval(() => {
   $('me-name').textContent = state.me.name;
   $('me-avatar').src = state.me.avatar;
   $('logs-sheets').hidden = !state.me.sheetsEnabled;
+  $('settings-link').hidden = !state.me.isOwner;
   showView();
   pollSpy();
   connectLive();

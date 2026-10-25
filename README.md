@@ -56,6 +56,15 @@ and the role is checked again every 5 minutes while they're logged in.
     channel. `inventory-snapshots-per-player` (default 100) sets how many are kept.
   - Needs the companion plugin. Item icons are loaded by your browser from the `minecraft-textures`
     package on jsDelivr.
+- **Settings** (the gear icon, only visible to one person): change the plugin's settings from the browser:
+  linking, Discord channels and roles, chat bridge, logging and how long logs are kept, snapshot limits and
+  age, spy distance, website and Google Sheets. Changes are written into `config.properties` (comments kept)
+  and most apply immediately; ones marked "needs restart" apply after the next proxy restart. Every change
+  is logged. The bot token and client secret only show as set / not set and can't be changed here. A Data
+  section shows the database size and has **Clean up now** and **Compact database** buttons.
+  Only the Discord server's owner can see Settings, unless `web-owner-id` names someone else.
+- **Retention**: `chat-log-retention-days` (default 90) and `log-retention-days` (default forever) delete
+  old logs, and `inventory-snapshot-retention-days` old snapshots. Cleanup runs hourly.
 - **Live updates**: every page updates as things happen (new log rows appear instantly; the Linked,
   Moderate and player pages refresh when someone joins, leaves, is suspended, and so on). The "Live" dot in
   the top bar shows the connection.
@@ -181,7 +190,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.8.1.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.9.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup

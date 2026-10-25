@@ -691,6 +691,63 @@ public final class Database implements AutoCloseable {
                 full ? rs.getBytes("data") : null);
     }
 
+    // ---- Maintenance ----
+
+    /** Deletes log entries older than {@code before}; {@code onlyTypes} limits it to those types, else all but them. */
+    public synchronized int deleteOldEvents(Instant before, Collection<String> types, boolean onlyTypes) throws SQLException {
+        String in = "?,".repeat(types.size() - 1) + "?";
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM audit_log WHERE timestamp < ? AND event_type "
+                + (onlyTypes ? "IN" : "NOT IN") + " (" + in + ")")) {
+            ps.setLong(1, before.toEpochMilli());
+            int i = 2;
+            for (String type : types) {
+                ps.setString(i++, type);
+            }
+            return ps.executeUpdate();
+        }
+    }
+
+    public synchronized int deleteSnapshotsBefore(Instant before) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM inventory_snapshots WHERE created_at < ?")) {
+            ps.setLong(1, before.toEpochMilli());
+            return ps.executeUpdate();
+        }
+    }
+
+    /** IP history rows not seen since {@code before} (kept in step with the log retention). */
+    public synchronized int deleteIpsBefore(Instant before) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM player_ips WHERE last_seen < ?")) {
+            ps.setLong(1, before.toEpochMilli());
+            return ps.executeUpdate();
+        }
+    }
+
+    public synchronized Map<String, Long> counts() throws SQLException {
+        Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        try (Statement st = connection.createStatement()) {
+            for (String[] q : new String[][] {
+                    {"linkedPlayers", "SELECT COUNT(*) FROM linked_accounts"},
+                    {"logEntries", "SELECT COUNT(*) FROM audit_log"},
+                    {"chatEntries", "SELECT COUNT(*) FROM audit_log WHERE event_type IN ('CHAT', 'COMMAND')"},
+                    {"snapshots", "SELECT COUNT(*) FROM inventory_snapshots"},
+                    {"snapshotBytes", "SELECT COALESCE(SUM(LENGTH(data) + LENGTH(display)), 0) FROM inventory_snapshots"},
+                    {"notes", "SELECT COUNT(*) FROM player_notes"}}) {
+                try (ResultSet rs = st.executeQuery(q[1])) {
+                    counts.put(q[0], rs.next() ? rs.getLong(1) : 0);
+                }
+            }
+        }
+        return counts;
+    }
+
+    /** Gives freed space back to the disk. Locks the database briefly. */
+    public synchronized void compact() throws SQLException {
+        try (Statement st = connection.createStatement()) {
+            st.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+            st.execute("VACUUM");
+        }
+    }
+
     // ---- Mapping ----
 
     private static String escapeLike(String text) {

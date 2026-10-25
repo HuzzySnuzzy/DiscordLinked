@@ -26,10 +26,13 @@ import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.Optional;
 
 @Plugin(
@@ -41,13 +44,13 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.8.1";
+    public static final String VERSION = "0.9.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDirectory;
 
-    private PluginConfig config;
+    private volatile PluginConfig config;
     private Messages messages;
     private Database database;
     private LinkCodeManager linkCodes;
@@ -69,7 +72,7 @@ public final class DiscordLinked {
         config = PluginConfig.load(dataDirectory, logger);
         database = new Database(dataDirectory.resolve("data.db"));
         messages = Messages.load(dataDirectory, logger);
-        linkCodes = new LinkCodeManager(Duration.ofMinutes(config.codeExpiryMinutes()));
+        linkCodes = new LinkCodeManager(() -> Duration.ofMinutes(this.config.codeExpiryMinutes()));
         audit = new AuditLog(database, messages, logger);
         bot = new DiscordBot(this);
         audit.setDiscordSink(bot::sendLog);
@@ -88,6 +91,10 @@ public final class DiscordLinked {
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dla").plugin(this).build(),
                 new PanelCommand(this));
+        // Old logs and snapshots are cleaned up a minute after start, then hourly.
+        proxy.getScheduler().buildTask(this, this::runMaintenance)
+                .delay(1, TimeUnit.MINUTES).repeat(1, TimeUnit.HOURS).schedule();
+
         if (config.webEnabled()) {
             web = new WebServer(this);
             if (!web.start()) {
@@ -239,6 +246,49 @@ public final class DiscordLinked {
 
     public PluginConfig config() {
         return config;
+    }
+
+    /** Re-reads config.properties, e.g. after the website's Settings page saved changes. */
+    public void reloadConfig() throws IOException {
+        config = PluginConfig.load(dataDirectory, logger);
+    }
+
+    /** The Discord user who may open the Settings page: web-owner-id, else the Discord server's owner (0 if unknown). */
+    public long settingsOwnerId() {
+        return config.webOwnerId() != 0L ? config.webOwnerId() : bot.guildOwnerId();
+    }
+
+    /** Deletes logs and snapshots past their retention settings. Returns a short summary. */
+    public synchronized String runMaintenance() {
+        PluginConfig c = config;
+        Instant now = Instant.now();
+        Set<String> chatTypes = Set.of(EventTypes.CHAT, EventTypes.COMMAND);
+        int chat = 0;
+        int logs = 0;
+        int ips = 0;
+        int snapshots = 0;
+        try {
+            if (c.chatLogRetentionDays() > 0) {
+                chat = database.deleteOldEvents(now.minus(Duration.ofDays(c.chatLogRetentionDays())), chatTypes, true);
+            }
+            if (c.logRetentionDays() > 0) {
+                Instant before = now.minus(Duration.ofDays(c.logRetentionDays()));
+                logs = database.deleteOldEvents(before, chatTypes, false);
+                ips = database.deleteIpsBefore(before);
+            }
+            if (c.snapshotRetentionDays() > 0) {
+                snapshots = database.deleteSnapshotsBefore(now.minus(Duration.ofDays(c.snapshotRetentionDays())));
+            }
+        } catch (SQLException e) {
+            logger.error("Cleanup of old logs and snapshots failed", e);
+            return "cleanup failed: " + e.getMessage();
+        }
+        String summary = "deleted " + chat + " old chat/command logs, " + logs + " other log entries, " + ips
+                + " old IP records and " + snapshots + " old snapshots";
+        if (chat + logs + ips + snapshots > 0) {
+            logger.info("Cleanup: {}", summary);
+        }
+        return summary;
     }
 
     /** The admin website, or null when it's turned off or couldn't start. */

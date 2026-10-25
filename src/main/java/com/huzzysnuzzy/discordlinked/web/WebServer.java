@@ -4,6 +4,7 @@ import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.LiveEvents;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
+import com.huzzysnuzzy.discordlinked.SettingsEditor;
 import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
 import com.huzzysnuzzy.discordlinked.storage.InventorySnapshotRecord;
 import com.huzzysnuzzy.discordlinked.storage.PendingRestore;
@@ -82,7 +83,7 @@ public final class WebServer {
             Map.entry("admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
                     EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT,
                     EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_VIEW,
-                    EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE)),
+                    EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE, EventTypes.SETTINGS_CHANGE)),
             Map.entry("kicks", Set.of(EventTypes.KICK)),
             Map.entry("notes", Set.of(EventTypes.NOTE)),
             Map.entry("links", Set.of(EventTypes.LINK, EventTypes.UNLINK)),
@@ -96,7 +97,8 @@ public final class WebServer {
             Map.entry("spy", Set.of(EventTypes.SPY_START, EventTypes.SPY_END)),
             Map.entry("inventory", Set.of(EventTypes.INVENTORY_VIEW, EventTypes.INVENTORY_SNAPSHOT,
                     EventTypes.INVENTORY_RESTORE)),
-            Map.entry("deaths", Set.of(EventTypes.DEATH)));
+            Map.entry("deaths", Set.of(EventTypes.DEATH)),
+            Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -228,7 +230,7 @@ public final class WebServer {
     // ---- Routing ----
 
     private void handle(HttpExchange ex) {
-        try (ex) {
+        try {
             addSecurityHeaders(ex);
             String path = ex.getRequestURI().getPath();
             String method = ex.getRequestMethod();
@@ -266,6 +268,9 @@ public final class WebServer {
             } catch (IOException ignored) {
                 // response already started
             }
+        } finally {
+            // Closed here, not with try-with-resources, so the error response above still gets sent.
+            ex.close();
         }
     }
 
@@ -297,7 +302,8 @@ public final class WebServer {
                     .put("name", session.user.name())
                     .put("avatar", session.user.avatarUrl())
                     .put("csrf", session.csrfToken)
-                    .put("sheetsEnabled", sheets != null));
+                    .put("sheetsEnabled", sheets != null)
+                    .put("isOwner", isOwner(session)));
             case "GET /api/linked" -> sendJson(ex, 200, linkedList());
             case "GET /api/search" -> sendJson(ex, 200, search(query(ex)));
             case "GET /api/player" -> playerPage(ex, query(ex));
@@ -307,6 +313,8 @@ public final class WebServer {
             case "POST /api/player/snapshot/save" -> snapshotSave(ex, session);
             case "POST /api/player/snapshot/restore" -> snapshotRestore(ex, session);
             case "GET /api/events" -> liveEvents(ex, session);
+            case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact" ->
+                    settings(ex, method, path, session);
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
             case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
             case "POST /api/logs/export-sheets" -> exportSheets(ex, session);
@@ -661,6 +669,101 @@ public final class WebServer {
             plugin.audit().live().unsubscribe(stream);
             liveStreams.remove(stream);
         }
+    }
+
+    // ---- Settings (one Discord user only) ----
+
+    private boolean isOwner(Sessions.Session session) {
+        long owner = plugin.settingsOwnerId();
+        return owner != 0L && owner == session.user.id();
+    }
+
+    private void settings(HttpExchange ex, String method, String path, Sessions.Session session) throws IOException, SQLException {
+        if (!isOwner(session)) {
+            sendJson(ex, 403, error("Only the settings owner can open Settings."));
+            return;
+        }
+        SettingsEditor editor = new SettingsEditor(plugin);
+        String actor = session.user.actor() + " (website)";
+        switch (path) {
+            case "/api/settings" -> {
+                if (method.equals("POST")) {
+                    DataObject body = readJson(ex);
+                    if (body == null) {
+                        return;
+                    }
+                    Map<String, String> changes = new java.util.LinkedHashMap<>();
+                    DataObject requested = body.optObject("changes").orElse(DataObject.empty());
+                    for (String key : requested.keys()) {
+                        changes.put(key, String.valueOf(requested.get(key)));
+                    }
+                    SettingsEditor.Result result;
+                    try {
+                        result = editor.apply(changes, actor);
+                    } catch (IllegalArgumentException e) {
+                        sendJson(ex, 400, error(e.getMessage()));
+                        return;
+                    }
+                    sendJson(ex, 200, DataObject.empty().put("ok", true)
+                            .put("changed", DataArray.fromCollection(result.changed()))
+                            .put("needRestart", DataArray.fromCollection(result.needRestart())));
+                    return;
+                }
+                Map<String, String> values = editor.values();
+                DataArray groups = DataArray.empty();
+                Map<String, DataArray> byGroup = new java.util.LinkedHashMap<>();
+                for (SettingsEditor.Field field : SettingsEditor.FIELDS) {
+                    byGroup.computeIfAbsent(field.group(), g -> DataArray.empty()).add(DataObject.empty()
+                            .put("key", field.key())
+                            .put("label", field.label())
+                            .put("help", field.help())
+                            .put("type", field.type().name().toLowerCase())
+                            .put("restart", field.restart())
+                            .put("min", field.min())
+                            .put("max", field.max())
+                            .put("choices", DataArray.fromCollection(field.choices()))
+                            .put("value", values.get(field.key())));
+                }
+                byGroup.forEach((name, fields) -> groups.add(DataObject.empty().put("name", name).put("fields", fields)));
+                DataObject secrets = DataObject.empty();
+                editor.secrets().forEach(secrets::put);
+                sendJson(ex, 200, DataObject.empty()
+                        .put("groups", groups)
+                        .put("secrets", secrets)
+                        .put("ownerIsDefault", plugin.config().webOwnerId() == 0L)
+                        .put("data", dataStats()));
+            }
+            case "/api/settings/cleanup" -> {
+                String summary = plugin.runMaintenance();
+                plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "ran cleanup: " + summary, actor);
+                sendJson(ex, 200, DataObject.empty().put("summary", summary).put("data", dataStats()));
+            }
+            case "/api/settings/compact" -> {
+                long before = databaseBytes();
+                plugin.database().compact();
+                plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "compacted the database", actor);
+                sendJson(ex, 200, DataObject.empty().put("freed", Math.max(0, before - databaseBytes())).put("data", dataStats()));
+            }
+            default -> sendJson(ex, 404, error("Unknown endpoint"));
+        }
+    }
+
+    private long databaseBytes() {
+        long total = 0;
+        for (String name : List.of("data.db", "data.db-wal")) {
+            try {
+                total += java.nio.file.Files.size(plugin.dataDirectory().resolve(name));
+            } catch (IOException ignored) {
+                // file not there
+            }
+        }
+        return total;
+    }
+
+    private DataObject dataStats() throws SQLException {
+        DataObject stats = DataObject.empty().put("databaseBytes", databaseBytes());
+        plugin.database().counts().forEach(stats::put);
+        return stats;
     }
 
     // ---- Inventory snapshots ----

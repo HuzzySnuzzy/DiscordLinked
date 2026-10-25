@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Short-lived codes handed to unlinked players in their kick message.
@@ -19,11 +20,12 @@ public final class LinkCodeManager {
     private static final int CODE_LENGTH = 6;
 
     private final SecureRandom random = new SecureRandom();
-    private final Duration lifetime;
+    private final Supplier<Duration> lifetime;
     private final Map<String, PendingLink> byCode = new ConcurrentHashMap<>();
     private final Map<UUID, String> byPlayer = new ConcurrentHashMap<>();
 
-    public LinkCodeManager(Duration lifetime) {
+    /** {@code lifetime} is read for every new code, so changing the setting applies right away. */
+    public LinkCodeManager(Supplier<Duration> lifetime) {
         this.lifetime = lifetime;
     }
 
@@ -38,7 +40,7 @@ public final class LinkCodeManager {
         do {
             code = randomCode();
         } while (byCode.containsKey(code));
-        byCode.put(code, new PendingLink(uuid, username, Instant.now().plus(lifetime)));
+        byCode.put(code, new PendingLink(uuid, username, Instant.now().plus(lifetime.get())));
         byPlayer.put(uuid, code);
         return code;
     }

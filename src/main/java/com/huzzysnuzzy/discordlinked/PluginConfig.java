@@ -30,7 +30,11 @@ public record PluginConfig(
         String googleServiceAccountFile,
         int spyMaxDistance,
         String webAccess,
-        int snapshotsPerPlayer
+        int snapshotsPerPlayer,
+        long webOwnerId,
+        int chatLogRetentionDays,
+        int logRetentionDays,
+        int snapshotRetentionDays
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -58,7 +62,11 @@ public record PluginConfig(
                 props.getProperty("google-service-account-file").trim(),
                 Integer.parseInt(props.getProperty("spy-max-distance").trim()),
                 props.getProperty("web-access").trim().toLowerCase(),
-                Integer.parseInt(props.getProperty("inventory-snapshots-per-player").trim())
+                Integer.parseInt(props.getProperty("inventory-snapshots-per-player").trim()),
+                parseId(props, "web-owner-id"),
+                Integer.parseInt(props.getProperty("chat-log-retention-days").trim()),
+                Integer.parseInt(props.getProperty("log-retention-days").trim()),
+                Integer.parseInt(props.getProperty("inventory-snapshot-retention-days").trim())
         );
     }
 

@@ -102,6 +102,7 @@ public final class AuditLog {
         public static final String DEATH = "DEATH";
         public static final String INVENTORY_SNAPSHOT = "INVENTORY_SNAPSHOT";
         public static final String INVENTORY_RESTORE = "INVENTORY_RESTORE";
+        public static final String SETTINGS_CHANGE = "SETTINGS_CHANGE";
         public static final String UNSUSPEND = "UNSUSPEND";
         public static final String WEB_LOGIN = "WEB_LOGIN";
 
