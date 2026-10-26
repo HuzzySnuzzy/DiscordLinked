@@ -134,6 +134,64 @@ public final class Database implements AutoCloseable {
             }
             backfillIps();
         }
+        try (Statement st = connection.createStatement()) {
+            // Added in 0.10.0: credits, interactions and advancements from DiscordLinkedFAD.
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS fad_accounts (
+                        minecraft_uuid TEXT PRIMARY KEY,
+                        minecraft_name TEXT NOT NULL,
+                        credits        INTEGER NOT NULL DEFAULT 0,
+                        earned         INTEGER NOT NULL DEFAULT 0,
+                        active_seconds INTEGER NOT NULL DEFAULT 0,
+                        afk_seconds    INTEGER NOT NULL DEFAULT 0,
+                        unpaid_seconds INTEGER NOT NULL DEFAULT 0
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS fad_transactions (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        minecraft_uuid TEXT NOT NULL,
+                        amount         INTEGER NOT NULL,
+                        balance        INTEGER NOT NULL,
+                        kind           TEXT NOT NULL,
+                        detail         TEXT,
+                        actor          TEXT,
+                        created_at     INTEGER NOT NULL
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_fad_tx_uuid ON fad_transactions (minecraft_uuid, id)");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS fad_advancements (
+                        minecraft_uuid TEXT NOT NULL,
+                        advancement    TEXT NOT NULL,
+                        title          TEXT NOT NULL,
+                        frame          TEXT NOT NULL,
+                        server         TEXT NOT NULL,
+                        credits        INTEGER NOT NULL,
+                        earned_at      INTEGER NOT NULL,
+                        PRIMARY KEY (minecraft_uuid, advancement)
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS fad_interactions (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        action         TEXT NOT NULL,
+                        actor_uuid     TEXT,
+                        actor_discord  INTEGER,
+                        actor_name     TEXT NOT NULL,
+                        target_uuid    TEXT,
+                        target_discord INTEGER,
+                        target_name    TEXT,
+                        source         TEXT NOT NULL,
+                        text           TEXT NOT NULL,
+                        created_at     INTEGER NOT NULL
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_fad_int_actor ON fad_interactions (actor_uuid)");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_fad_int_target ON fad_interactions (target_uuid)");
+            // "mc:<uuid>" or "dc:<discord id>" of people who don't want to be picked for interactions.
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS fad_opt_outs (
+                        subject        TEXT PRIMARY KEY,
+                        created_at     INTEGER NOT NULL
+                    )""");
+        }
     }
 
     private boolean tableExists(String table) throws SQLException {
@@ -746,6 +804,428 @@ public final class Database implements AutoCloseable {
             st.execute("PRAGMA wal_checkpoint(TRUNCATE)");
             st.execute("VACUUM");
         }
+    }
+
+    // ---- Community: credits, advancements, interactions (DiscordLinkedFAD) ----
+
+    private static final Map<String, String> LEADERBOARD_ORDER = Map.of(
+            "credits", "credits", "earned", "earned", "playtime", "active_seconds",
+            "advancements", "advancements", "given", "given", "received", "received");
+
+    /**
+     * Adds credits (or takes them, with a negative amount) and records why.
+     *
+     * @return the new balance, or -1 (and nothing changes) if it would go below zero
+     */
+    public synchronized long addCredits(UUID uuid, String name, long amount, String kind, String detail, String actor)
+            throws SQLException {
+        return transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            long balance = creditBalance(uuid) + amount;
+            if (balance < 0) {
+                return -1L;
+            }
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET credits = credits + ?, earned = earned + ? WHERE minecraft_uuid = ?")) {
+                ps.setLong(1, amount);
+                ps.setLong(2, Math.max(0, amount));
+                ps.setString(3, uuid.toString());
+                ps.executeUpdate();
+            }
+            insertCreditTransaction(uuid, amount, balance, kind, detail, actor, Instant.now());
+            return balance;
+        });
+    }
+
+    /**
+     * Adds {@code seconds} of playtime to everyone online, in one go. Active players earn {@code rewardAmount} for
+     * every full {@code rewardSeconds} of active time; the rest carries over to the next call. Playtime rewards
+     * are added to one ledger row per player per day (since {@code dayStart}) so the ledger stays small.
+     *
+     * @return the players who earned something just now
+     */
+    public synchronized List<PlaytimeReward> addPlaytime(Map<UUID, String> active, Map<UUID, String> afk, long seconds,
+                                                         long rewardSeconds, long rewardAmount, Instant dayStart)
+            throws SQLException {
+        return transaction(() -> {
+            List<PlaytimeReward> rewards = new ArrayList<>();
+            try (PreparedStatement addAfk = connection.prepareStatement(
+                    "UPDATE fad_accounts SET afk_seconds = afk_seconds + ? WHERE minecraft_uuid = ?");
+                 PreparedStatement addActive = connection.prepareStatement(
+                         "UPDATE fad_accounts SET active_seconds = active_seconds + ?, unpaid_seconds = "
+                                 + "CASE WHEN ? THEN unpaid_seconds + ? ELSE 0 END WHERE minecraft_uuid = ? "
+                                 + "RETURNING unpaid_seconds, credits");
+                 PreparedStatement pay = connection.prepareStatement(
+                         "UPDATE fad_accounts SET credits = credits + ?, earned = earned + ?, "
+                                 + "unpaid_seconds = unpaid_seconds - ? WHERE minecraft_uuid = ?")) {
+                for (Map.Entry<UUID, String> player : afk.entrySet()) {
+                    ensureCreditAccount(player.getKey(), player.getValue());
+                    addAfk.setLong(1, seconds);
+                    addAfk.setString(2, player.getKey().toString());
+                    addAfk.executeUpdate();
+                }
+                boolean rewarding = rewardSeconds > 0 && rewardAmount > 0;
+                for (Map.Entry<UUID, String> player : active.entrySet()) {
+                    UUID uuid = player.getKey();
+                    ensureCreditAccount(uuid, player.getValue());
+                    addActive.setLong(1, seconds);
+                    addActive.setBoolean(2, rewarding);
+                    addActive.setLong(3, seconds);
+                    addActive.setString(4, uuid.toString());
+                    long unpaid;
+                    long credits;
+                    try (ResultSet rs = addActive.executeQuery()) {
+                        rs.next();
+                        unpaid = rs.getLong(1);
+                        credits = rs.getLong(2);
+                    }
+                    long intervals = rewarding ? unpaid / rewardSeconds : 0;
+                    if (intervals == 0) {
+                        continue;
+                    }
+                    long amount = intervals * rewardAmount;
+                    pay.setLong(1, amount);
+                    pay.setLong(2, amount);
+                    pay.setLong(3, intervals * rewardSeconds);
+                    pay.setString(4, uuid.toString());
+                    pay.executeUpdate();
+                    long balance = credits + amount;
+                    if (!mergePlaytimeTransaction(uuid, amount, balance, dayStart)) {
+                        insertCreditTransaction(uuid, amount, balance, "PLAYTIME", "Active play", null, Instant.now());
+                    }
+                    rewards.add(new PlaytimeReward(uuid, amount, balance));
+                }
+            }
+            return rewards;
+        });
+    }
+
+    /** Adds to today's playtime row if the player's latest row is one. */
+    private boolean mergePlaytimeTransaction(UUID uuid, long amount, long balance, Instant dayStart) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE fad_transactions SET amount = amount + ?, balance = ?, created_at = ? WHERE id = "
+                        + "(SELECT id FROM fad_transactions WHERE minecraft_uuid = ? ORDER BY id DESC LIMIT 1) "
+                        + "AND kind = 'PLAYTIME' AND created_at >= ?")) {
+            ps.setLong(1, amount);
+            ps.setLong(2, balance);
+            ps.setLong(3, Instant.now().toEpochMilli());
+            ps.setString(4, uuid.toString());
+            ps.setLong(5, dayStart.toEpochMilli());
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    private void ensureCreditAccount(UUID uuid, String name) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO fad_accounts (minecraft_uuid, minecraft_name) VALUES (?, ?) "
+                        + "ON CONFLICT (minecraft_uuid) DO UPDATE SET minecraft_name = excluded.minecraft_name")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, name);
+            ps.executeUpdate();
+        }
+    }
+
+    private long creditBalance(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT credits FROM fad_accounts WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    private void insertCreditTransaction(UUID uuid, long amount, long balance, String kind, String detail, String actor,
+                                         Instant at) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO fad_transactions (minecraft_uuid, amount, balance, kind, detail, actor, created_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, amount);
+            ps.setLong(3, balance);
+            ps.setString(4, kind);
+            ps.setString(5, detail);
+            ps.setString(6, actor);
+            ps.setLong(7, at.toEpochMilli());
+            ps.executeUpdate();
+        }
+    }
+
+    public synchronized Optional<CreditAccount> creditAccount(UUID uuid) throws SQLException {
+        return findCreditAccount("SELECT * FROM fad_accounts WHERE minecraft_uuid = ?", uuid.toString());
+    }
+
+    public synchronized Optional<CreditAccount> creditAccountByName(String name) throws SQLException {
+        return findCreditAccount("SELECT * FROM fad_accounts WHERE minecraft_name = ? COLLATE NOCASE", name);
+    }
+
+    private Optional<CreditAccount> findCreditAccount(String sql, String param) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, param);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(new CreditAccount(UUID.fromString(rs.getString("minecraft_uuid")),
+                        rs.getString("minecraft_name"), rs.getLong("credits"), rs.getLong("earned"),
+                        rs.getLong("active_seconds"), rs.getLong("afk_seconds"))) : Optional.empty();
+            }
+        }
+    }
+
+    /** @param sort credits, earned, playtime, advancements, given or received */
+    public synchronized List<LeaderboardRow> leaderboard(String sort, int limit) throws SQLException {
+        String order = LEADERBOARD_ORDER.getOrDefault(sort, "credits");
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT a.minecraft_uuid, a.minecraft_name, a.credits, a.earned, a.active_seconds, "
+                        + "(SELECT COUNT(*) FROM fad_advancements v WHERE v.minecraft_uuid = a.minecraft_uuid) AS advancements, "
+                        + "(SELECT COUNT(*) FROM fad_interactions i WHERE i.actor_uuid = a.minecraft_uuid) AS given, "
+                        + "(SELECT COUNT(*) FROM fad_interactions i WHERE i.target_uuid = a.minecraft_uuid) AS received "
+                        + "FROM fad_accounts a ORDER BY " + order + " DESC, a.minecraft_name COLLATE NOCASE LIMIT ?")) {
+            ps.setInt(1, limit);
+            List<LeaderboardRow> rows = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new LeaderboardRow(UUID.fromString(rs.getString("minecraft_uuid")),
+                            rs.getString("minecraft_name"), rs.getLong("credits"), rs.getLong("earned"),
+                            rs.getLong("active_seconds"), rs.getLong("advancements"), rs.getLong("given"),
+                            rs.getLong("received")));
+                }
+            }
+            return rows;
+        }
+    }
+
+    /** 1 for the player with the most credits, or 0 if they have no account yet. */
+    public synchronized long creditRank(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 + (SELECT COUNT(*) FROM fad_accounts o WHERE o.credits > a.credits) "
+                        + "FROM fad_accounts a WHERE a.minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    public synchronized List<CreditTransaction> creditTransactions(UUID uuid, int limit) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT * FROM fad_transactions WHERE minecraft_uuid = ? ORDER BY id DESC LIMIT ?")) {
+            ps.setString(1, uuid.toString());
+            ps.setInt(2, limit);
+            List<CreditTransaction> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new CreditTransaction(rs.getLong("id"), rs.getLong("amount"), rs.getLong("balance"),
+                            rs.getString("kind"), rs.getString("detail"), rs.getString("actor"),
+                            Instant.ofEpochMilli(rs.getLong("created_at"))));
+                }
+            }
+            return list;
+        }
+    }
+
+    /** Records an advancement the first time a player makes it. False if they already had it. */
+    public synchronized boolean addAdvancement(UUID uuid, String key, String title, String frame, String server,
+                                               long credits) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR IGNORE INTO fad_advancements (minecraft_uuid, advancement, title, frame, server, credits, "
+                        + "earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, key);
+            ps.setString(3, title);
+            ps.setString(4, frame);
+            ps.setString(5, server);
+            ps.setLong(6, credits);
+            ps.setLong(7, Instant.now().toEpochMilli());
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    public synchronized List<EarnedAdvancement> advancements(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT * FROM fad_advancements WHERE minecraft_uuid = ? ORDER BY earned_at DESC")) {
+            ps.setString(1, uuid.toString());
+            List<EarnedAdvancement> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new EarnedAdvancement(rs.getString("advancement"), rs.getString("title"),
+                            rs.getString("frame"), rs.getString("server"), rs.getLong("credits"),
+                            Instant.ofEpochMilli(rs.getLong("earned_at"))));
+                }
+            }
+            return list;
+        }
+    }
+
+    public synchronized InteractionRecord addInteraction(String action, UUID actorUuid, Long actorDiscord, String actorName,
+                                                         UUID targetUuid, Long targetDiscord, String targetName,
+                                                         String source, String text) throws SQLException {
+        Instant now = Instant.now();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO fad_interactions (action, actor_uuid, actor_discord, actor_name, target_uuid, target_discord, "
+                        + "target_name, source, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, action);
+            ps.setString(2, actorUuid == null ? null : actorUuid.toString());
+            setNullableLong(ps, 3, actorDiscord);
+            ps.setString(4, actorName);
+            ps.setString(5, targetUuid == null ? null : targetUuid.toString());
+            setNullableLong(ps, 6, targetDiscord);
+            ps.setString(7, targetName);
+            ps.setString(8, source);
+            ps.setString(9, text);
+            ps.setLong(10, now.toEpochMilli());
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                keys.next();
+                return new InteractionRecord(keys.getLong(1), action, actorUuid, actorDiscord, actorName, targetUuid,
+                        targetDiscord, targetName, source, text, now);
+            }
+        }
+    }
+
+    public synchronized List<InteractionRecord> recentInteractions(int limit) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM fad_interactions ORDER BY id DESC LIMIT ?")) {
+            ps.setInt(1, limit);
+            List<InteractionRecord> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String actor = rs.getString("actor_uuid");
+                    String target = rs.getString("target_uuid");
+                    list.add(new InteractionRecord(rs.getLong("id"), rs.getString("action"),
+                            actor == null ? null : UUID.fromString(actor), nullableLong(rs, "actor_discord"),
+                            rs.getString("actor_name"), target == null ? null : UUID.fromString(target),
+                            nullableLong(rs, "target_discord"), rs.getString("target_name"), rs.getString("source"),
+                            rs.getString("text"), Instant.ofEpochMilli(rs.getLong("created_at"))));
+                }
+            }
+            return list;
+        }
+    }
+
+    /** How often each action was used, by everyone ({@code actor} null) or by one player, most used first. */
+    public synchronized Map<String, Long> interactionCounts(UUID actor) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT action, COUNT(*) FROM fad_interactions"
+                + (actor == null ? "" : " WHERE actor_uuid = ?") + " GROUP BY action ORDER BY 2 DESC, action")) {
+            if (actor != null) {
+                ps.setString(1, actor.toString());
+            }
+            Map<String, Long> counts = new java.util.LinkedHashMap<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    counts.put(rs.getString(1), rs.getLong(2));
+                }
+            }
+            return counts;
+        }
+    }
+
+    /** Interactions a player started and was picked for: {given, received}. */
+    public synchronized long[] interactionTotals(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT (SELECT COUNT(*) FROM fad_interactions WHERE actor_uuid = ?), "
+                        + "(SELECT COUNT(*) FROM fad_interactions WHERE target_uuid = ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return new long[] {rs.getLong(1), rs.getLong(2)};
+            }
+        }
+    }
+
+    /** Server-wide numbers for the website's Community page. */
+    public synchronized Map<String, Long> communityTotals(Instant dayAgo) throws SQLException {
+        Map<String, Long> totals = new java.util.LinkedHashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*), COALESCE(SUM(credits), 0), COALESCE(SUM(earned), 0), "
+                     + "COALESCE(SUM(active_seconds), 0) FROM fad_accounts")) {
+            rs.next();
+            totals.put("players", rs.getLong(1));
+            totals.put("credits", rs.getLong(2));
+            totals.put("earned", rs.getLong(3));
+            totals.put("activeSeconds", rs.getLong(4));
+        }
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM fad_advancements")) {
+            rs.next();
+            totals.put("advancements", rs.getLong(1));
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*), COALESCE(SUM(created_at >= ?), 0) FROM fad_interactions")) {
+            ps.setLong(1, dayAgo.toEpochMilli());
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                totals.put("interactions", rs.getLong(1));
+                totals.put("interactionsToday", rs.getLong(2));
+            }
+        }
+        return totals;
+    }
+
+    /** Subjects are "mc:<uuid>" and "dc:<discord id>"; a linked person is opted out if either is. */
+    public synchronized void setOptOut(Collection<String> subjects, boolean optedOut) throws SQLException {
+        for (String subject : subjects) {
+            try (PreparedStatement ps = connection.prepareStatement(optedOut
+                    ? "INSERT OR IGNORE INTO fad_opt_outs (subject, created_at) VALUES (?, ?)"
+                    : "DELETE FROM fad_opt_outs WHERE subject = ?")) {
+                ps.setString(1, subject);
+                if (optedOut) {
+                    ps.setLong(2, Instant.now().toEpochMilli());
+                }
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    public synchronized boolean isOptedOut(Collection<String> subjects) throws SQLException {
+        for (String subject : subjects) {
+            try (PreparedStatement ps = connection.prepareStatement("SELECT 1 FROM fad_opt_outs WHERE subject = ?")) {
+                ps.setString(1, subject);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    public synchronized int deleteCreditTransactionsBefore(Instant before) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM fad_transactions WHERE created_at < ?")) {
+            ps.setLong(1, before.toEpochMilli());
+            return ps.executeUpdate();
+        }
+    }
+
+    private interface SqlWork<T> {
+        T run() throws SQLException;
+    }
+
+    /** Runs {@code work} as one transaction: all of it is saved, or none of it. */
+    private <T> T transaction(SqlWork<T> work) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            T result = work.run();
+            connection.commit();
+            return result;
+        } catch (SQLException | RuntimeException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    private static void setNullableLong(PreparedStatement ps, int index, Long value) throws SQLException {
+        if (value == null) {
+            ps.setNull(index, Types.INTEGER);
+        } else {
+            ps.setLong(index, value);
+        }
+    }
+
+    private static Long nullableLong(ResultSet rs, String column) throws SQLException {
+        long value = rs.getLong(column);
+        return rs.wasNull() ? null : value;
     }
 
     // ---- Mapping ----

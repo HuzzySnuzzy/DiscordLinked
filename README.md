@@ -27,16 +27,65 @@ Set `chat-channel-id` in `config.properties`, then turn on either direction inde
 
 Chat that another plugin blocks (mutes, filters) is not sent to Discord. Mentions like `@everyone` never ping.
 
+## Community: interactions & credits (DiscordLinkedFAD)
+
+**DiscordLinkedFAD** is a second companion plugin for your **Paper or Folia** servers (1.21.4 or newer).
+Put `DiscordLinkedFAD-x.y.z.jar` in the `plugins/` folder of every Minecraft server behind the proxy. The
+proxy (this plugin, 0.10.0 or newer) keeps the credits, so they're the same on every server.
+
+**Interactions.** `/pet`, `/hug`, `/kiss`, `/boop`, `/nuzzle`, `/cuddle`, `/pounce`, `/stepon`, `/lick`,
+`/nom`, `/meow`, `/bark`, `/purr`, `/howl`, `/wag`, `/blush` and `/growl` out of the box. Each picks a random
+line, shown to everyone on every server, and plays a sound and particles where it happens (`/pounce` makes you
+leap at them). For example `/kiss Bob` might show
+
+> Bob's face lights up when Alice presses their lips against theirs, mwahhhh!~
+
+and in Discord (in `fad-channel-id`, or the chat channel), with the linked accounts as @mentions:
+
+> @Bob's face lights up when @Alice presses their lips against theirs, mwahhhh!~
+
+- Everything about them is in `plugins/DiscordLinkedFAD/config.yml`: add your own (each becomes a command),
+  change the lines, sounds, particles, aliases and cooldown. Run `/discordlinkedfad reload` after editing;
+  brand-new commands need a server restart. Use the same `config.yml` on every server.
+- The same interactions are **slash commands in Discord** (`/hug @someone`), shown in game as
+  `[Discord] …`. If the member they picked is online, the sound and particles play where they are.
+- `/interactions` lists them; **`/interactions off`** stops anyone picking you, in game and on Discord
+  (`/interactions enabled:False` on Discord).
+- Mentions don't ping anyone unless `fad-discord-ping=true`.
+- Per-interaction permission: `discordlinkedfad.interact.<name>` (everyone has them unless you take one away).
+  `discordlinkedfad.cooldown.bypass` skips the cooldown.
+
+**Credits.** Call them anything: `credits-name` / `credits-name-plural` in `config.properties`, or on the
+website's Settings page (e.g. Pawbuck / Pawbucks). Players earn them for:
+
+- **Playing**: `credits-playtime-amount` for every `credits-playtime-minutes` of *active* play (default 5 per
+  15 minutes). AFK time doesn't count: after `afk-minutes` (in DiscordLinkedFAD's config.yml, default 5)
+  without looking around, chatting or using commands, a player is AFK. AFK pools and water streams don't count
+  as activity.
+- **Advancements**: the first time a player makes one (on any server), by its kind: task 10, goal 25,
+  challenge 50 by default. Only advancements announced in chat count, so recipe unlocks never do.
+  Advancements are also announced in Discord (`fad-discord-advancements`).
+
+`/credits`, `/credits <player>` and `/credits top` in game; `/credits [player]` and `/leaderboard` in
+Discord. Admins can give or take credits on a player's page (with a reason; it's logged).
+
+**On the website.** A **Community** tab (for everyone, also in the community view) with totals, the leaderboard (by credits, earnings, active
+playtime, advancements or interactions), recent interactions and every interaction with how often it's
+used. Each player page shows their balance, playtime, advancements and favourite interactions; admins also see AFK
+time and the credit history. Interactions, advancements and credit changes are in the Logs (**Interactions, advancements &
+credits** filter); interactions count as chat for `chat-log-retention-days`.
+
 ## Website
 
 A web panel, built into the plugin, where people log in with Discord. Roles are checked again every 5 minutes
 while they're logged in.
 
 - **Everyone in your Discord server** (`web-member-access=true`, the default) gets the community view:
-  a **Community** dashboard (who's online and on which server, member and staff counts, newest members,
-  recently online), a **Players** list and simple profiles (Minecraft and Discord identity, member since,
-  online or last seen). Nothing administrative: no IPs, notes, suspensions, inventories or logs. The server
-  enforces this, not just the page.
+  **Home** (who's online and on which server, member and staff counts, newest members, recently online),
+  the **Community** page (leaderboard and interactions, when DiscordLinkedFAD's features are on), a
+  **Players** list and simple profiles (Minecraft and Discord identity, member since, online or last seen,
+  credits, playtime and advancements). Nothing administrative: no IPs, notes, suspensions, inventories,
+  logs, AFK time or credit history. The server enforces this, not just the page.
 - **Admins** (`admin-role-id`) get the admin view below. The **On duty** switch in the top bar (on by
   default) flips them to the community view and back; switching is logged.
 - IP addresses are blurred for admins until you hover (or tap) them, so they don't show on a shared or
@@ -113,11 +162,13 @@ filterable by server, with **Spy**, **Kick** and **Suspend** buttons.
 Spy and the inventory viewer need the small companion plugin on the Minecraft servers, because Velocity
 itself can't teleport players, change game modes or see inventories:
 
-1. Download **DiscordLinked** from the GitHub Actions run; the zip contains two jars.
+1. Download **DiscordLinked** from the GitHub Actions run; the zip contains three jars.
 2. `DiscordLinked-x.y.z.jar` goes in Velocity's `plugins/` folder as before.
 3. `DiscordLinkedSpy-x.y.z.jar` goes in the `plugins/` folder of **every Paper, Purpur or Folia server**
    behind the proxy (1.20.4 or newer). It has no config. On Folia it schedules everything on each player's
    own region thread, so the admin and the player can be in different regions.
+4. `DiscordLinkedFAD-x.y.z.jar` (optional) goes next to it for interactions and credits; see
+   [Community](#community-interactions--credits-discordlinkedfad).
 
 The proxy and the companion plugin talk over Minecraft's plugin messaging channel, and the proxy drops any
 such message sent by a player's client, so players can't trigger it. As with any Velocity network, make
@@ -184,10 +235,16 @@ Discord:
 | `/history <player>` | Moderate Members | Last 20 tracked events |
 | `/forceunlink <player>` | Moderate Members | Remove someone's link |
 | `/dla` | everyone | One-time login link for the website |
+| `/credits [player]`, `/leaderboard` | everyone | Credits (with DiscordLinkedFAD) |
+| `/hug @someone`, `/kiss`, `/meow`… | everyone | Interactions from DiscordLinkedFAD's config.yml |
+| `/interactions enabled:<True/False>` | everyone | Let others pick you for interactions, or not |
 
 Admin command visibility can be changed in Server Settings → Integrations → your bot.
 
 In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`.
+
+In game with DiscordLinkedFAD: every interaction (`/hug <player>`…), `/interactions [off|on]`,
+`/credits [player|top]`, and `/discordlinkedfad reload` (op).
 
 `/dla` (in Discord and in game): a one-time login link for the website. Admins get the admin view; with
 `web-member-access` on, everyone else in the Discord server gets the community view.
@@ -200,8 +257,9 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.10.0.jar`. Every push also builds on GitHub Actions; download
-the jar from the run's **Artifacts** section.
+The jars are `build/libs/DiscordLinked-0.11.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.11.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.11.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+download them from the run's **Artifacts** section.
 
 ## Setup
 

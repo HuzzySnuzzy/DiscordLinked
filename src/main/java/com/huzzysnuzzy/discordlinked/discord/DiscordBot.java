@@ -28,22 +28,26 @@ import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
+import net.dv8tion.jda.api.interactions.commands.build.CommandData;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.requests.CloseCode;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.GatewayIntent;
+import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 
 import java.awt.Color;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /** The Discord side: slash commands for linking and admin lookups, plus the log channel. */
 public final class DiscordBot extends ListenerAdapter {
@@ -55,6 +59,8 @@ public final class DiscordBot extends ListenerAdapter {
     private final Set<Long> profileRefreshes = ConcurrentHashMap.newKeySet();
     private final Set<Long> memberRefreshes = ConcurrentHashMap.newKeySet();
     private final Map<Long, CachedMember> memberCache = new ConcurrentHashMap<>();
+    /** What was last sent to Discord as the command list, so unchanged lists aren't sent again. */
+    private volatile String registeredCommands;
     private static final Duration MEMBER_CACHE_TIME = Duration.ofMinutes(10);
 
     public DiscordBot(DiscordLinked plugin) {
@@ -101,7 +107,12 @@ public final class DiscordBot extends ListenerAdapter {
             plugin.logger().error("Bot is not in the guild {} set as guild-id. Invite it first.", plugin.config().guildId());
             return;
         }
-        guild.updateCommands().addCommands(
+        refreshCommands();
+        plugin.logger().info("Discord bot ready as {} in {}", event.getJDA().getSelfUser().getName(), guild.getName());
+    }
+
+    private static List<CommandData> baseCommands() {
+        return List.of(
                 Commands.slash("link", "Link your Minecraft account using the code from the server")
                         .addOption(OptionType.STRING, "code", "The code shown when you tried to join", true),
                 Commands.slash("unlink", "Unlink your Minecraft account"),
@@ -115,9 +126,29 @@ public final class DiscordBot extends ListenerAdapter {
                 Commands.slash("forceunlink", "Remove a player's link")
                         .addOption(OptionType.STRING, "player", "Minecraft username", true)
                         .setDefaultPermissions(ADMIN),
-                Commands.slash("dla", "Get a one-time login link for the DiscordLinked website")
-        ).queue();
-        plugin.logger().info("Discord bot ready as {} in {}", event.getJDA().getSelfUser().getName(), guild.getName());
+                Commands.slash("dla", "Get a one-time login link for the DiscordLinked website"));
+    }
+
+    /**
+     * Registers the slash commands, including the community ones (/hug etc. come from the Minecraft servers and
+     * can change). Only sends them to Discord when they differ from what was last registered.
+     */
+    public synchronized void refreshCommands() {
+        Guild guild = guild();
+        if (guild == null) {
+            return;
+        }
+        List<CommandData> commands = new ArrayList<>(baseCommands());
+        commands.addAll(plugin.community().discord().commands());
+        String signature = commands.stream().map(c -> c.toData().toString()).collect(Collectors.joining("\n"));
+        if (signature.equals(registeredCommands)) {
+            return;
+        }
+        registeredCommands = signature;
+        guild.updateCommands().addCommands(commands).queue(null, error -> {
+            registeredCommands = null;
+            plugin.logger().warn("Could not register the Discord slash commands: {}", error.getMessage());
+        });
     }
 
     @Override
@@ -133,7 +164,7 @@ public final class DiscordBot extends ListenerAdapter {
                 case "history" -> handleHistory(event);
                 case "forceunlink" -> handleForceUnlink(event);
                 case "dla" -> handleDla(event);
-                default -> { }
+                default -> plugin.community().discord().handle(event);
             }
         } catch (SQLException e) {
             plugin.logger().error("Database error handling /{}", event.getName(), e);
@@ -323,6 +354,23 @@ public final class DiscordBot extends ListenerAdapter {
             role.getGuild().removeRoleFromMember(UserSnowflake.fromId(discordId), role).queue(null,
                     error -> plugin.logger().warn("Could not remove linked role from {}: {}", discordId, error.getMessage()));
         }
+    }
+
+    /** Posts to a channel. Pings nobody, except {@code pingUser} when it isn't null. */
+    public void post(long channelId, String text, Long pingUser) {
+        if (jda == null || channelId == 0L) {
+            return;
+        }
+        TextChannel channel = jda.getTextChannelById(channelId);
+        if (channel == null) {
+            return;
+        }
+        MessageCreateAction action = channel.sendMessage(truncate(text))
+                .setAllowedMentions(EnumSet.noneOf(Message.MentionType.class));
+        if (pingUser != null) {
+            action = action.mentionUsers(pingUser);
+        }
+        action.queue();
     }
 
     /** Posts to the configured log channel, if any. Never pings anyone. */

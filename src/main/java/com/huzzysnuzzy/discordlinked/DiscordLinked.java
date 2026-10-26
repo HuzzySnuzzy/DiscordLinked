@@ -5,6 +5,7 @@ import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.command.AdminCommand;
 import com.huzzysnuzzy.discordlinked.command.PanelCommand;
 import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
+import com.huzzysnuzzy.discordlinked.fad.Community;
 import com.huzzysnuzzy.discordlinked.link.LinkCodeManager;
 import com.huzzysnuzzy.discordlinked.listener.PlayerListener;
 import com.huzzysnuzzy.discordlinked.storage.Database;
@@ -44,7 +45,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.10.0";
+    public static final String VERSION = "0.11.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -59,6 +60,7 @@ public final class DiscordLinked {
     private WebServer web;
     private SpyManager spy;
     private InventoryRequests inventories;
+    private Community community;
 
     @Inject
     public DiscordLinked(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -74,6 +76,8 @@ public final class DiscordLinked {
         messages = Messages.load(dataDirectory, logger);
         linkCodes = new LinkCodeManager(() -> Duration.ofMinutes(this.config.codeExpiryMinutes()));
         audit = new AuditLog(database, messages, logger);
+        // Before the bot connects: its slash commands include the community ones.
+        community = new Community(this);
         bot = new DiscordBot(this);
         audit.setDiscordSink(bot::sendLog);
         bot.start();
@@ -85,6 +89,7 @@ public final class DiscordLinked {
         inventories = new InventoryRequests(this);
         proxy.getChannelRegistrar().register(InventoryRequests.CHANNEL);
         proxy.getEventManager().register(this, inventories);
+        community.start();
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),
                 new AdminCommand(this));
@@ -101,8 +106,9 @@ public final class DiscordLinked {
                 web = null;
             }
         }
-        logger.info("DiscordLinked {} enabled (chat bridge: minecraft->discord={}, discord->minecraft={}, website={})",
-                VERSION, config.minecraftToDiscord(), config.discordToMinecraft(), config.webEnabled());
+        logger.info("DiscordLinked {} enabled (chat bridge: minecraft->discord={}, discord->minecraft={}, website={}, "
+                + "community={})", VERSION, config.minecraftToDiscord(), config.discordToMinecraft(), config.webEnabled(),
+                config.fadEnabled());
     }
 
     @Subscribe
@@ -251,6 +257,8 @@ public final class DiscordLinked {
     /** Re-reads config.properties, e.g. after the website's Settings page saved changes. */
     public void reloadConfig() throws IOException {
         config = PluginConfig.load(dataDirectory, logger);
+        // Community settings (credit name, slash commands on/off) show in Discord's command list.
+        bot.refreshCommands();
     }
 
     /** The Discord user who may open the Settings page: web-owner-id, else the Discord server's owner (0 if unknown). */
@@ -262,7 +270,7 @@ public final class DiscordLinked {
     public synchronized String runMaintenance() {
         PluginConfig c = config;
         Instant now = Instant.now();
-        Set<String> chatTypes = Set.of(EventTypes.CHAT, EventTypes.COMMAND);
+        Set<String> chatTypes = Set.of(EventTypes.CHAT, EventTypes.COMMAND, EventTypes.INTERACTION);
         int chat = 0;
         int logs = 0;
         int ips = 0;
@@ -275,6 +283,7 @@ public final class DiscordLinked {
                 Instant before = now.minus(Duration.ofDays(c.logRetentionDays()));
                 logs = database.deleteOldEvents(before, chatTypes, false);
                 ips = database.deleteIpsBefore(before);
+                logs += database.deleteCreditTransactionsBefore(before);
             }
             if (c.snapshotRetentionDays() > 0) {
                 snapshots = database.deleteSnapshotsBefore(now.minus(Duration.ofDays(c.snapshotRetentionDays())));
@@ -283,7 +292,7 @@ public final class DiscordLinked {
             logger.error("Cleanup of old logs and snapshots failed", e);
             return "cleanup failed: " + e.getMessage();
         }
-        String summary = "deleted " + chat + " old chat/command logs, " + logs + " other log entries, " + ips
+        String summary = "deleted " + chat + " old chat/command/interaction logs, " + logs + " other log entries, " + ips
                 + " old IP records and " + snapshots + " old snapshots";
         if (chat + logs + ips + snapshots > 0) {
             logger.info("Cleanup: {}", summary);
@@ -294,6 +303,11 @@ public final class DiscordLinked {
     /** The admin website, or null when it's turned off or couldn't start. */
     public WebServer web() {
         return web;
+    }
+
+    /** Credits and interactions (DiscordLinkedFAD). */
+    public Community community() {
+        return community;
     }
 
     public InventoryRequests inventories() {

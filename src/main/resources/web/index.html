@@ -14,8 +14,9 @@
     <nav class="tabs">
       <a href="#/linked" data-view="linked" data-mode="admin">Linked</a>
       <a href="#/moderate" data-view="moderate" data-mode="admin">Moderate</a>
+      <a href="#/home" data-view="home" data-mode="member">Home</a>
+      <a href="#/community" data-view="community" id="community-tab" hidden>Community</a>
       <a href="#/logs" data-view="logs" data-mode="admin">Logs</a>
-      <a href="#/community" data-view="community" data-mode="member">Community</a>
       <a href="#/players" data-view="players" data-mode="member">Players</a>
     </nav>
     <div class="global-search">
@@ -88,6 +89,7 @@
           <option value="inventory">Inventory views, snapshots &amp; restores</option>
           <option value="deaths">Deaths</option>
           <option value="settings">Settings changes</option>
+          <option value="community">Interactions, advancements &amp; credits</option>
         </select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
         <button id="logs-csv" class="btn btn-ghost btn-small" type="button">Download CSV</button>
@@ -107,15 +109,15 @@
 
     <section id="view-player" hidden></section>
 
-    <section id="view-community" hidden>
-      <div class="toolbar"><h1>Community</h1></div>
-      <div id="community-stats" class="community-stats"></div>
-      <h2 class="section-title">Online now <span id="community-online-count" class="count"></span></h2>
-      <div id="community-online" class="people-grid"></div>
-      <p id="community-online-empty" class="empty card" hidden>Nobody is online right now.</p>
-      <div class="grid community-lists">
-        <div class="card panel"><h2>Newest members</h2><div id="community-newest" class="people-list"></div></div>
-        <div class="card panel"><h2>Recently online</h2><div id="community-recent" class="people-list"></div></div>
+    <section id="view-home" hidden>
+      <div class="toolbar"><h1>Home</h1></div>
+      <div id="home-stats" class="home-stats"></div>
+      <h2 class="section-title">Online now <span id="home-online-count" class="count"></span></h2>
+      <div id="home-online" class="people-grid"></div>
+      <p id="home-online-empty" class="empty card" hidden>Nobody is online right now.</p>
+      <div class="grid home-lists">
+        <div class="card panel"><h2>Newest members</h2><div id="home-newest" class="people-list"></div></div>
+        <div class="card panel"><h2>Recently online</h2><div id="home-recent" class="people-list"></div></div>
       </div>
     </section>
 
@@ -154,6 +156,14 @@
       </div>
     </section>
 
+    <section id="view-community" hidden>
+      <div class="toolbar">
+        <h1>Community</h1>
+        <span id="community-earning" class="muted"></span>
+      </div>
+      <div id="community-body"></div>
+    </section>
+
     <section id="view-moderate" hidden>
       <div class="toolbar">
         <h1>Online now <span id="moderate-count" class="count"></span></h1>
@@ -170,6 +180,9 @@
     <form id="action-form">
       <h2 id="dialog-title"></h2>
       <p id="dialog-text" class="muted"></p>
+      <div id="amount-fields" class="duration" hidden>
+        <label><span id="amount-label">Amount</span> <input type="number" id="dialog-amount" step="1" inputmode="numeric"></label>
+      </div>
       <div id="duration-fields" class="duration">
         <label>Days <input type="number" id="dur-days" min="0" max="3650" value="1"></label>
         <label>Hours <input type="number" id="dur-hours" min="0" max="999" value="0"></label>

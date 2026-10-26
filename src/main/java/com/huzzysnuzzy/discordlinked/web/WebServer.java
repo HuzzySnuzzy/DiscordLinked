@@ -12,6 +12,12 @@ import com.huzzysnuzzy.discordlinked.TimeFormat;
 import com.huzzysnuzzy.discordlinked.spy.SpyManager;
 import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
 import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
+import com.huzzysnuzzy.discordlinked.fad.FadActions;
+import com.huzzysnuzzy.discordlinked.storage.CreditAccount;
+import com.huzzysnuzzy.discordlinked.storage.CreditTransaction;
+import com.huzzysnuzzy.discordlinked.storage.EarnedAdvancement;
+import com.huzzysnuzzy.discordlinked.storage.InteractionRecord;
+import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.PlayerIp;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
@@ -69,12 +75,14 @@ public final class WebServer {
     private static final Set<String> SPY_ALLOWED = Set.of("GET /api/me", "GET /api/spy", "GET /api/events",
             "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend");
     /** Everything the community view (non-admins and off-duty admins) may call. */
-    private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/community", "GET /api/members",
-            "GET /api/search", "GET /api/player", "GET /api/events", "POST /api/duty");
+    private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
+            "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/events", "POST /api/duty");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
-            EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK);
+            EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
+            EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST);
     private static final int MAX_NOTE_LENGTH = 2000;
+    private static final long MAX_CREDIT_ADJUSTMENT = 1_000_000_000L;
     private static final int MAX_EXPORT_ROWS = 50_000;
     private static final DateTimeFormatter EXPORT_TIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(ZoneId.systemDefault());
@@ -90,7 +98,8 @@ public final class WebServer {
             Map.entry("admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
                     EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT,
                     EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_VIEW,
-                    EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE, EventTypes.SETTINGS_CHANGE, EventTypes.DUTY)),
+                    EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE, EventTypes.SETTINGS_CHANGE, EventTypes.DUTY,
+                    EventTypes.CREDITS_ADJUST)),
             Map.entry("kicks", Set.of(EventTypes.KICK)),
             Map.entry("notes", Set.of(EventTypes.NOTE)),
             Map.entry("links", Set.of(EventTypes.LINK, EventTypes.UNLINK)),
@@ -105,7 +114,8 @@ public final class WebServer {
             Map.entry("inventory", Set.of(EventTypes.INVENTORY_VIEW, EventTypes.INVENTORY_SNAPSHOT,
                     EventTypes.INVENTORY_RESTORE)),
             Map.entry("deaths", Set.of(EventTypes.DEATH)),
-            Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)));
+            Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)),
+            Map.entry("community", Set.of(EventTypes.INTERACTION, EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -306,7 +316,7 @@ public final class WebServer {
             return;
         }
         switch (route) {
-            case "GET /api/community" -> sendJson(ex, 200, community());
+            case "GET /api/home" -> sendJson(ex, 200, home());
             case "GET /api/members" -> sendJson(ex, 200, memberList());
             case "POST /api/duty" -> setDuty(ex, session);
             case "GET /api/online" -> sendJson(ex, 200, onlineList(session));
@@ -331,6 +341,8 @@ public final class WebServer {
             case "GET /api/events" -> liveEvents(ex, session);
             case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact" ->
                     settings(ex, method, path, session);
+            case "GET /api/community" -> sendJson(ex, 200, community(query(ex), staff));
+            case "POST /api/credits/adjust" -> adjustCredits(ex, session);
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
             case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
             case "POST /api/logs/export-sheets" -> exportSheets(ex, session);
@@ -373,7 +385,8 @@ public final class WebServer {
                 .put("onDuty", session.onDuty)
                 .put("staff", staff)
                 .put("sheetsEnabled", staff && sheets != null)
-                .put("isOwner", staff && isOwner(session));
+                .put("isOwner", staff && isOwner(session))
+                .put("communityEnabled", plugin.config().fadEnabled());
     }
 
     private void setDuty(HttpExchange ex, Sessions.Session session) throws IOException {
@@ -643,11 +656,17 @@ public final class WebServer {
             return;
         }
         LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);
-        sendJson(ex, 200, DataObject.empty().put("player", publicPlayerJson(uuid, ref.get().name(), linked)));
+        // Credits and advancements, without the staff-only parts (the ledger has admins' reasons).
+        DataObject community = playerCommunity(uuid, linked);
+        community.remove("transactions");
+        community.remove("afkSeconds");
+        community.remove("optedOut");
+        sendJson(ex, 200, DataObject.empty().put("player", publicPlayerJson(uuid, ref.get().name(), linked))
+                .put("community", community));
     }
 
-    /** The community dashboard: who's online where, the newest members and who was on recently. */
-    private DataObject community() throws SQLException {
+    /** The Home page of the community view: who's online where, the newest members and who was on recently. */
+    private DataObject home() throws SQLException {
         List<LinkedAccount> linked = plugin.database().allLinked();
         Map<UUID, LinkedAccount> byUuid = new HashMap<>();
         linked.forEach(account -> byUuid.put(account.uuid(), account));
@@ -723,7 +742,148 @@ public final class WebServer {
                     .put("lastSeen", ip.lastSeen().toEpochMilli()).put("times", ip.times()).put("others", others));
         }
         sendJson(ex, 200, DataObject.empty().put("player", player).put("suspensions", suspensions)
-                .put("notes", notes).put("ips", ips));
+                .put("notes", notes).put("ips", ips).put("community", playerCommunity(uuid, linked)));
+    }
+
+    // ---- Community: credits and interactions (DiscordLinkedFAD) ----
+
+    private DataObject currency() {
+        PluginConfig c = plugin.config();
+        return DataObject.empty().put("one", c.creditsName()).put("many", c.creditsNamePlural());
+    }
+
+    /** One player's credits, playtime, advancements and interactions, for their page. */
+    private DataObject playerCommunity(UUID uuid, LinkedAccount linked) throws SQLException {
+        Optional<CreditAccount> account = plugin.database().creditAccount(uuid);
+        long[] interactions = plugin.database().interactionTotals(uuid);
+        DataArray advancements = DataArray.empty();
+        for (EarnedAdvancement a : plugin.database().advancements(uuid)) {
+            advancements.add(DataObject.empty().put("key", a.key()).put("title", a.title()).put("frame", a.frame())
+                    .put("server", a.server()).put("credits", a.credits()).put("earnedAt", a.earnedAt().toEpochMilli()));
+        }
+        DataArray transactions = DataArray.empty();
+        for (CreditTransaction t : plugin.database().creditTransactions(uuid, 25)) {
+            transactions.add(DataObject.empty().put("amount", t.amount()).put("balance", t.balance()).put("kind", t.kind())
+                    .put("detail", t.detail() == null ? "" : t.detail()).put("actor", t.actor() == null ? "" : t.actor())
+                    .put("time", t.createdAt().toEpochMilli()));
+        }
+        DataArray favourites = DataArray.empty();
+        plugin.database().interactionCounts(uuid).entrySet().stream().limit(6).forEach(e ->
+                favourites.add(DataObject.empty().put("action", e.getKey()).put("count", e.getValue())));
+        return DataObject.empty()
+                .put("enabled", plugin.config().fadEnabled())
+                .put("currency", currency())
+                .put("credits", account.map(CreditAccount::credits).orElse(0L))
+                .put("earned", account.map(CreditAccount::earned).orElse(0L))
+                .put("activeSeconds", account.map(CreditAccount::activeSeconds).orElse(0L))
+                .put("afkSeconds", account.map(CreditAccount::afkSeconds).orElse(0L))
+                .put("rank", plugin.database().creditRank(uuid))
+                .put("given", interactions[0])
+                .put("received", interactions[1])
+                .put("optedOut", plugin.community().isOptedOut(uuid, linked == null ? null : linked.discordId()))
+                .put("favourites", favourites)
+                .put("advancements", advancements)
+                .put("transactions", transactions);
+    }
+
+    /** The Community page: totals, leaderboard, recent interactions and the interactions the servers offer. */
+    private DataObject community(Map<String, String> query, boolean staff) throws SQLException {
+        PluginConfig c = plugin.config();
+        String sort = query.getOrDefault("sort", "credits");
+        DataArray leaderboard = DataArray.empty();
+        for (LeaderboardRow row : plugin.database().leaderboard(sort, 100)) {
+            leaderboard.add(DataObject.empty()
+                    .put("uuid", row.uuid().toString())
+                    .put("name", row.name())
+                    .put("credits", row.credits())
+                    .put("earned", row.earned())
+                    .put("activeSeconds", row.activeSeconds())
+                    .put("advancements", row.advancements())
+                    .put("given", row.given())
+                    .put("received", row.received())
+                    .put("online", plugin.proxy().getPlayer(row.uuid()).isPresent()));
+        }
+        DataArray recent = DataArray.empty();
+        for (InteractionRecord i : plugin.database().recentInteractions(40)) {
+            recent.add(DataObject.empty()
+                    .put("id", i.id())
+                    .put("time", i.createdAt().toEpochMilli())
+                    .put("action", i.action())
+                    .put("actor", i.actorName())
+                    .put("actorUuid", i.actorUuid() == null ? null : i.actorUuid().toString())
+                    .put("target", i.targetName())
+                    .put("targetUuid", i.targetUuid() == null ? null : i.targetUuid().toString())
+                    .put("source", i.source())
+                    .put("text", i.text()));
+        }
+        Map<String, Long> uses = plugin.database().interactionCounts(null);
+        FadActions.Definitions definitions = plugin.community().actions().current();
+        DataArray actions = DataArray.empty();
+        if (definitions != null) {
+            for (FadActions.Action a : definitions.actions().values()) {
+                actions.add(DataObject.empty()
+                        .put("name", a.name())
+                        .put("description", a.description())
+                        .put("target", a.target())
+                        .put("lines", a.messages().size() + a.soloMessages().size())
+                        .put("uses", uses.getOrDefault(a.name(), 0L)));
+            }
+        }
+        DataArray servers = DataArray.empty();
+        if (staff) {
+            plugin.community().servers().forEach((name, version) ->
+                    servers.add(DataObject.empty().put("name", name).put("version", version)));
+        }
+        DataObject totals = DataObject.empty();
+        plugin.database().communityTotals(Instant.now().minus(Duration.ofDays(1))).forEach(totals::put);
+        return DataObject.empty()
+                .put("enabled", c.fadEnabled())
+                .put("currency", currency())
+                .put("rewards", DataObject.empty()
+                        .put("playtimeAmount", c.creditsPlaytimeAmount())
+                        .put("playtimeMinutes", c.creditsPlaytimeMinutes())
+                        .put("task", c.creditsAdvancementTask())
+                        .put("goal", c.creditsAdvancementGoal())
+                        .put("challenge", c.creditsAdvancementChallenge()))
+                .put("discordCommands", c.fadDiscordCommands())
+                .put("synced", definitions != null)
+                .put("sort", sort)
+                .put("totals", totals)
+                .put("leaderboard", leaderboard)
+                .put("recent", recent)
+                .put("actions", actions)
+                .put("servers", servers);
+    }
+
+    /** Gives (positive amount) or takes (negative) credits, with a reason. */
+    private void adjustCredits(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Optional<PlayerRef> player = resolvePlayer(parseUuid(body.getString("uuid", "")));
+        if (player.isEmpty()) {
+            sendJson(ex, 404, error("Unknown player"));
+            return;
+        }
+        long amount = body.getLong("amount", 0);
+        if (amount == 0 || Math.abs(amount) > MAX_CREDIT_ADJUSTMENT) {
+            sendJson(ex, 400, error("Enter an amount between -" + MAX_CREDIT_ADJUSTMENT + " and " + MAX_CREDIT_ADJUSTMENT
+                    + ", other than 0"));
+            return;
+        }
+        String reason = body.getString("reason", "").trim();
+        if (reason.isEmpty() || reason.length() > MAX_REASON_LENGTH) {
+            sendJson(ex, 400, error(reason.isEmpty() ? "A reason is required" : "Reason is too long"));
+            return;
+        }
+        long balance = plugin.community().adjust(player.get(), amount, reason, session.user.actor() + " (website)");
+        if (balance < 0) {
+            long has = plugin.database().creditAccount(player.get().uuid()).map(CreditAccount::credits).orElse(0L);
+            sendJson(ex, 409, error(player.get().name() + " only has " + plugin.config().credits(has)));
+            return;
+        }
+        sendJson(ex, 200, DataObject.empty().put("ok", true).put("balance", balance));
     }
 
     private List<AuditEntry> findLogs(Map<String, String> query, long before, int limit) throws SQLException {
@@ -783,8 +943,12 @@ public final class WebServer {
         public void onLog(AuditEntry entry) {
             if (session.staff()) {
                 queue.offer("event: log\ndata: " + logJson(entry) + "\n\n");
-            } else if (entry.uuid() != null && PRESENCE_EVENTS.contains(entry.eventType())) {
-                queue.offer("event: presence\ndata: " + DataObject.empty().put("uuid", entry.uuid().toString()) + "\n\n");
+            } else if (PRESENCE_EVENTS.contains(entry.eventType())) {
+                DataObject data = DataObject.empty().put("community", true);
+                if (entry.uuid() != null) {
+                    data.put("uuid", entry.uuid().toString());
+                }
+                queue.offer("event: presence\ndata: " + data + "\n\n");
             }
         }
 

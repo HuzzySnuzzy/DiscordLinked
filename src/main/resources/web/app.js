@@ -27,6 +27,9 @@ const EVENT_LABELS = {
   DEATH: ['Death', 'bad'],
   SPY_START: ['Spy started', 'info'],
   SPY_END: ['Spy ended', ''],
+  INTERACTION: ['Interaction', ''],
+  ADVANCEMENT: ['Advancement', 'good'],
+  CREDITS_ADJUST: ['Credits changed', 'warn'],
 };
 
 // ---- Helpers ----
@@ -184,7 +187,10 @@ function statusPills(p) {
 
 let dialogHandler = null;
 
-function openDialog({ title, text, confirmLabel, confirmClass, duration, label, value, maxLength, checkbox, onConfirm }) {
+function openDialog({ title, text, confirmLabel, confirmClass, duration, amount, label, value, maxLength, checkbox, onConfirm }) {
+  $('amount-fields').hidden = !amount;
+  $('amount-label').textContent = amount ? amount.label : 'Amount';
+  $('dialog-amount').value = '';
   $('dialog-check-row').hidden = !checkbox;
   $('dialog-check-label').textContent = checkbox || '';
   $('dialog-check').checked = false;
@@ -205,7 +211,7 @@ function openDialog({ title, text, confirmLabel, confirmClass, duration, label, 
   confirm.disabled = false;
   dialogHandler = onConfirm;
   $('action-dialog').showModal();
-  reason.focus();
+  (amount ? $('dialog-amount') : reason).focus();
 }
 
 $('action-form').addEventListener('submit', async (event) => {
@@ -224,10 +230,16 @@ $('action-form').addEventListener('submit', async (event) => {
     error.hidden = false;
     return;
   }
+  const amount = Number($('dialog-amount').value);
+  if (!$('amount-fields').hidden && (!Number.isInteger(amount) || amount === 0)) {
+    error.textContent = 'Enter a whole number other than 0. A negative number takes them away.';
+    error.hidden = false;
+    return;
+  }
   const confirm = $('dialog-confirm');
   confirm.disabled = true;
   try {
-    await dialogHandler({ reason, days, hours, checked: $('dialog-check').checked });
+    await dialogHandler({ reason, days, hours, amount, checked: $('dialog-check').checked });
     closeDialog();
     if (state.spy) pollSpy();
     else refreshCurrentView();
@@ -610,6 +622,7 @@ function renderPlayer() {
     profile,
     el('div', { class: 'grid' }, discord, suspension),
     inventorySection(p),
+    ...communitySection(p, state.player.community),
     ...notesSection, ...historySection, ...ipSection, ...activitySection);
 }
 
@@ -1044,6 +1057,199 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('.global-search')) $('global-results').hidden = true;
 });
 
+// ---- Community: credits and interactions (DiscordLinkedFAD) ----
+
+/** "1 Pawbuck", "1,250 Pawbucks". */
+const credits = (n, currency) => `${n.toLocaleString()} ${Math.abs(n) === 1 ? currency.one : currency.many}`;
+const signedCredits = (n, currency) => `${n > 0 ? '+' : '−'}${credits(Math.abs(n), currency)}`;
+
+/** Active playtime as hours, e.g. "76h 12m". */
+function playtime(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60).toLocaleString()}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+const stat = (label, value, title) => el('div', { class: 'stat', title },
+  el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
+
+const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
+const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff' };
+
+function creditsDialog(p, community) {
+  const currency = community.currency;
+  openDialog({
+    title: `Give or take ${currency.many}: ${p.minecraftName}`,
+    text: `They have ${credits(community.credits, currency)}. Use a negative number to take some away.`
+      + (p.online ? ' They\'re told in chat.' : ''),
+    confirmLabel: 'Save', amount: { label: `${currency.many} (+ to give, − to take)` },
+    onConfirm: async ({ reason, amount }) => {
+      const result = await api('/api/credits/adjust', { uuid: p.uuid, amount, reason });
+      toast(`${p.minecraftName} now has ${credits(result.balance, currency)}`);
+    },
+  });
+}
+
+/** Credits, playtime and advancements on a player page. The community view gets no ledger, AFK time or editing. */
+function communitySection(p, c) {
+  if (!c || !c.enabled) return [];
+  const staff = isStaff();
+  const currency = c.currency;
+  const summary = el('div', { class: 'card panel' },
+    el('div', { class: 'stats-grid' },
+      stat(c.rank ? `Balance · rank #${c.rank}` : 'Balance', credits(c.credits, currency)),
+      stat('Earned in total', credits(c.earned, currency)),
+      stat('Active playtime', playtime(c.activeSeconds), 'Time on the servers, not counting AFK'),
+      staff && stat('AFK time', playtime(c.afkSeconds)),
+      stat('Advancements', c.advancements.length.toLocaleString()),
+      stat('Interactions', `${c.given.toLocaleString()} given · ${c.received.toLocaleString()} received`)),
+    c.favourites.length > 0 && el('div', { class: 'others' },
+      el('span', { class: 'muted' }, 'Favourite interactions:'),
+      c.favourites.map((f) => el('span', { class: 'chip' }, `/${f.action} ×${f.count.toLocaleString()}`))),
+    staff && c.optedOut && el('p', { class: 'muted' }, 'Has turned interactions off, so nobody can /hug, /kiss etc. them.'));
+
+  const ledger = !staff ? null : c.transactions.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+    el('thead', {}, el('tr', {}, ['Time', 'Change', 'Balance', 'What'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, c.transactions.map((t) => el('tr', {},
+      el('td', { class: 'nowrap muted', title: formatTime(t.time) }, formatTime(t.time)),
+      el('td', { class: `nowrap ${t.amount > 0 ? 'credit-plus' : 'credit-minus'}` }, signedCredits(t.amount, currency)),
+      el('td', { class: 'nowrap' }, credits(t.balance, currency)),
+      el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind,
+        t.detail && t.kind !== 'PLAYTIME' ? `: ${t.detail}` : '', t.actor ? ` — ${t.actor}` : ''))))))
+    : el('p', { class: 'muted' }, `No ${currency.many} yet.`);
+
+  const advancements = c.advancements.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+    el('thead', {}, el('tr', {}, ['Advancement', 'Type', 'Reward', 'Server', 'When'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, c.advancements.map((a) => {
+      const [frame, tone] = FRAMES[a.frame] || [a.frame, ''];
+      return el('tr', {},
+        el('td', { class: 'detail', title: a.key }, a.title),
+        el('td', {}, el('span', { class: `badge ${tone}` }, frame)),
+        el('td', { class: 'nowrap' }, a.credits ? `+${credits(a.credits, currency)}` : '—'),
+        el('td', {}, a.server),
+        el('td', { class: 'nowrap muted' }, formatTime(a.earnedAt)));
+    }))))
+    : el('p', { class: 'muted' }, 'No advancements made since DiscordLinkedFAD was installed.');
+
+  return [
+    el('h2', { class: 'section-title' }, `${currency.many} & interactions`,
+      staff && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => creditsDialog(p, c) },
+        `Give or take ${currency.many}`)),
+    summary,
+    staff && el('h2', { class: 'section-title' }, `${currency.one} history`),
+    ledger,
+    el('h2', { class: 'section-title' }, `Advancements (${c.advancements.length})`),
+    advancements,
+  ].filter(Boolean); // the callers spread this into replaceChildren, which would print false/null
+}
+
+const COMMUNITY_SORTS = [['credits', (c) => `Most ${c.many}`], ['earned', () => 'Most earned in total'],
+  ['playtime', () => 'Most active playtime'], ['advancements', () => 'Most advancements'],
+  ['given', () => 'Most interactions given'], ['received', () => 'Most interactions received']];
+
+async function loadCommunity() {
+  try {
+    state.community = await api(`/api/community?sort=${encodeURIComponent(state.communitySort || 'credits')}`);
+    renderCommunity();
+  } catch (e) {
+    $('community-body').replaceChildren(el('p', { class: 'empty card' }, e.message));
+  }
+}
+
+function renderCommunity() {
+  const d = state.community;
+  const currency = d.currency;
+  const r = d.rewards;
+  $('community-earning').textContent = d.enabled
+    ? `${credits(r.playtimeAmount, currency)} per ${r.playtimeMinutes} active minutes · ${r.task} / ${r.goal} / ${r.challenge} `
+      + 'per advancement (task / goal / challenge)'
+    : '';
+  if (!d.enabled) {
+    $('community-body').replaceChildren(el('div', { class: 'card panel' },
+      el('p', {}, 'Community features (interactions and credits) are turned off.'),
+      state.me.isOwner && el('a', { class: 'btn btn-small', href: '#/settings' }, 'Turn them on in Settings')));
+    return;
+  }
+  const t = d.totals;
+  const stats = el('div', { class: 'card panel' }, el('div', { class: 'stats-grid' },
+    stat(`${currency.many} held`, t.credits.toLocaleString()),
+    stat('Earned in total', t.earned.toLocaleString()),
+    stat('Active playtime', playtime(t.activeSeconds)),
+    stat('Advancements made', t.advancements.toLocaleString()),
+    stat('Interactions', `${t.interactions.toLocaleString()} · ${t.interactionsToday.toLocaleString()} today`),
+    stat('Players', t.players.toLocaleString())),
+    state.me.isOwner && el('p', { class: 'muted' }, `Rename ${currency.many} or change how many players earn in `,
+      el('a', { href: '#/settings' }, 'Settings'), '.'));
+
+  const sort = el('select', { 'aria-label': 'Sort the leaderboard' },
+    COMMUNITY_SORTS.map(([value, label]) => el('option', { value }, label(currency))));
+  sort.value = d.sort;
+  sort.addEventListener('change', () => {
+    state.communitySort = sort.value;
+    loadCommunity();
+  });
+  const filter = el('input', { type: 'search', placeholder: 'Find a player…', 'aria-label': 'Filter the leaderboard' });
+  filter.value = state.communityFilter || '';
+  const rows = el('tbody');
+  const fillRows = () => {
+    state.communityFilter = filter.value;
+    const q = filter.value.trim().toLowerCase();
+    const shown = d.leaderboard.map((row, i) => [row, i + 1]).filter(([row]) => !q || row.name.toLowerCase().includes(q));
+    rows.replaceChildren(...shown.map(([row, rank]) => el('tr', {},
+      el('td', { class: 'muted' }, `#${rank}`),
+      el('td', {}, el('div', { class: 'identity' },
+        el('a', { href: playerHref(row.uuid) }, el('img', { class: 'head', src: headUrl(row.uuid, 64), alt: '', loading: 'lazy' })),
+        el('div', { class: 'leader-name' }, el('a', { class: 'name', href: playerHref(row.uuid) }, row.name),
+          row.online && el('span', { class: 'pill online' }, 'Online')))),
+      el('td', { class: 'nowrap' }, row.credits.toLocaleString()),
+      // Phones only show rank, player and balance; the rest is on each player's page.
+      el('td', { class: 'nowrap col-extra' }, playtime(row.activeSeconds)),
+      el('td', { class: 'col-extra' }, row.advancements.toLocaleString()),
+      el('td', { class: 'col-extra' }, row.given.toLocaleString()),
+      el('td', { class: 'col-extra' }, row.received.toLocaleString()))));
+    if (!shown.length) {
+      rows.append(el('tr', {}, el('td', { colspan: 7, class: 'empty' },
+        d.leaderboard.length ? 'No players match.' : `Nobody has earned any ${currency.many} yet.`)));
+    }
+  };
+  filter.addEventListener('input', fillRows);
+  fillRows();
+  const leaderboard = el('div', { class: 'card panel' },
+    el('h2', {}, 'Leaderboard', el('div', { class: 'actions' }, sort, filter)),
+    el('div', { class: 'table-wrap flat' }, el('table', { class: 'table leaderboard' },
+      el('thead', {}, el('tr', {}, ['#', 'Player', currency.many, 'Active playtime', 'Advancements', 'Given', 'Received']
+        .map((h, i) => el('th', { class: i >= 3 ? 'col-extra' : null }, h)))),
+      rows)));
+
+  const person = (name, uuid) => (uuid ? el('a', { class: 'name', href: playerHref(uuid) }, name) : el('span', { class: 'name' }, name));
+  const recent = el('div', { class: 'card panel' },
+    el('h2', {}, 'Recent interactions'),
+    d.recent.length ? el('div', { class: 'notes' }, d.recent.map((i) => el('div', { class: 'note' },
+      el('p', {}, i.text),
+      el('div', { class: 'meta' },
+        person(i.actor, i.actorUuid), i.target ? [' → ', person(i.target, i.targetUuid)] : '',
+        ` · /${i.action} · `, i.source === 'discord' ? 'Discord' : i.source, ' · ',
+        el('span', { title: formatTime(i.time) }, timeAgo(i.time))))))
+      : el('p', { class: 'muted' }, 'No interactions yet.'));
+
+  const actions = el('div', { class: 'card panel' },
+    el('h2', {}, `Interactions (${d.actions.length})`),
+    d.synced
+      ? el('div', { class: 'others' }, d.actions.map((a) => el('span', {
+        class: 'chip', title: `${a.description} · ${a.lines} lines · ${a.target === 'required' ? 'needs a player' : a.target === 'optional' ? 'player optional' : 'no player'}`,
+      }, `/${a.name} · ${a.uses.toLocaleString()}`)))
+      : el('p', { class: 'muted' }, isStaff()
+        ? 'None yet. Put DiscordLinkedFAD on your Minecraft servers; its interactions show up here once a player joins one of them.'
+        : 'None yet.'),
+    d.synced && el('p', { class: 'muted' }, d.discordCommands
+      ? 'These also work as slash commands in Discord (e.g. /hug @someone).'
+      : isStaff() && 'Slash commands for these are turned off in Settings.'),
+    d.servers.length > 0 && el('p', { class: 'muted' }, 'DiscordLinkedFAD is running on ',
+      d.servers.map((s) => `${s.name} (${s.version})`).join(', '), '.'),
+    isStaff() && el('p', { class: 'muted' }, 'The lines, sounds and commands are set in DiscordLinkedFAD\'s config.yml on each server.'));
+
+  $('community-body').replaceChildren(stats, leaderboard, el('div', { class: 'grid' }, recent, actions));
+}
+
 // ---- Moderate page ----
 
 async function loadModerate() {
@@ -1360,9 +1566,10 @@ $('settings-save').addEventListener('click', async () => {
     toast(result.needRestart.length
       ? `Saved. Restart the proxy for: ${result.needRestart.join(', ')}.`
       : `Saved ${result.changed.length} setting${result.changed.length === 1 ? '' : 's'}.`);
-    if (ownerChange) {
+    if (ownerChange || 'fad-enabled' in settingsEdits) {
       state.me = await api('/api/me');
       $('settings-link').hidden = !state.me.isOwner;
+      $('community-tab').hidden = !state.me.communityEnabled;
     }
     await loadSettings();
   } catch (e) {
@@ -1394,29 +1601,29 @@ function onlineCard(p) {
       el('span', { class: 'pill online' }, p.server || 'Connecting')));
 }
 
-async function loadCommunity() {
+async function loadHome() {
   let data;
   try {
-    data = await api('/api/community');
+    data = await api('/api/home');
   } catch (e) {
     toast(e.message);
     return;
   }
   const stat = (label, value, extra) => el('div', { class: 'card stat-card' },
     el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value), extra);
-  $('community-stats').replaceChildren(
+  $('home-stats').replaceChildren(
     stat('Online now', data.onlineCount),
     stat('Members', data.linkedCount),
     stat('Staff online', data.staffOnline),
     stat('Servers', data.servers.length,
       data.servers.length > 0 && el('div', { class: 'stat-sub' }, data.servers.map((s) => `${s.name} ${s.players}`).join(' · '))));
-  $('community-online-count').textContent = `(${data.onlineCount})`;
-  $('community-online').replaceChildren(...data.online.map(onlineCard));
-  $('community-online-empty').hidden = data.online.length > 0;
-  $('community-newest').replaceChildren(...(data.newest.length
+  $('home-online-count').textContent = `(${data.onlineCount})`;
+  $('home-online').replaceChildren(...data.online.map(onlineCard));
+  $('home-online-empty').hidden = data.online.length > 0;
+  $('home-newest').replaceChildren(...(data.newest.length
     ? data.newest.map((p) => personRow(p, `Joined the community ${timeAgo(p.linkedAt)}`))
     : [el('p', { class: 'muted' }, 'No members yet.')]));
-  $('community-recent').replaceChildren(...(data.recent.length
+  $('home-recent').replaceChildren(...(data.recent.length
     ? data.recent.map((p) => personRow(p, `Seen ${timeAgo(p.lastSeen)}`))
     : [el('p', { class: 'muted' }, 'Nobody yet.')]));
 }
@@ -1488,21 +1695,24 @@ function renderPublicPlayer() {
   $('view-player').replaceChildren(
     el('a', { class: 'back', href: '#/players' }, '← All players'),
     profile,
-    el('div', { class: 'grid' }, discord, server));
+    el('div', { class: 'grid' }, discord, server),
+    ...communitySection(p, state.player.community));
 }
 
 function onPresence(change) {
   const route = currentRoute();
-  if (route.view === 'community') soon('community', loadCommunity);
+  if (!change.uuid && route.view !== 'community') return;
+  if (route.view === 'home') soon('home', loadHome);
+  else if (route.view === 'community') soon('community', loadCommunity);
   else if (route.view === 'players') soon('players', loadPlayers);
   else if (route.view === 'player' && route.uuid === change.uuid) soon('player', () => loadPlayer(route.uuid));
 }
 
 // ---- On duty / off duty ----
 
-const ADMIN_VIEWS = new Set(['linked', 'logs', 'moderate', 'settings']);
-const MEMBER_VIEWS = new Set(['community', 'players']);
-const homeHash = () => (isStaff() ? '#/linked' : '#/community');
+const ADMIN_VIEWS = new Set(['linked', 'logs', 'moderate', 'settings', 'community']);
+const MEMBER_VIEWS = new Set(['home', 'community', 'players']);
+const homeHash = () => (isStaff() ? '#/linked' : '#/home');
 
 function applyMode() {
   const staff = isStaff();
@@ -1513,6 +1723,7 @@ function applyMode() {
   $('duty').hidden = !state.me.isAdmin;
   $('duty').classList.toggle('off', state.me.isAdmin && !state.me.onDuty);
   $('duty-switch').checked = state.me.onDuty;
+  $('community-tab').hidden = !state.me.communityEnabled;
   $('global-search').placeholder = staff ? 'Find any player…' : 'Find a player…';
   updateTabPills();
 }
@@ -1539,7 +1750,10 @@ $('duty-switch').addEventListener('change', async (e) => {
 });
 
 const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK', 'SUSPEND', 'SUSPEND_EDIT',
-  'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED']);
+  'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED', 'ADVANCEMENT',
+  'CREDITS_ADJUST']);
+// Events that change the Community page.
+const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'JOIN', 'LEAVE']);
 const pendingRefresh = {};
 
 /** Coalesces bursts of events into one refresh. */
@@ -1553,6 +1767,7 @@ function onLiveLog(entry) {
   if (route.view === 'logs') prependLog(entry);
   else if (route.view === 'linked' && STATUS_EVENTS.has(entry.type)) soon('linked', loadLinked);
   else if (route.view === 'moderate' && STATUS_EVENTS.has(entry.type)) soon('moderate', loadModerate);
+  else if (route.view === 'community' && COMMUNITY_EVENTS.has(entry.type)) soon('community', loadCommunity);
   else if (route.view === 'player' && entry.uuid === route.uuid) {
     prependPlayerLog(entry);
     if (STATUS_EVENTS.has(entry.type)) soon('player', () => loadPlayer(route.uuid));
@@ -1683,22 +1898,23 @@ function currentRoute() {
   const view = location.hash.replace(/^#\//, '');
   // Each view only exists in its own mode; anything else goes to that mode's home page.
   if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view };
-  return { view: isStaff() ? 'linked' : 'community' };
+  return { view: isStaff() ? 'linked' : 'home' };
 }
 
 function refreshCurrentView() {
   const route = currentRoute();
   if (route.view === 'linked') loadLinked();
-  else if (route.view === 'community') loadCommunity();
+  else if (route.view === 'home') loadHome();
   else if (route.view === 'players') loadPlayers();
   else if (route.view === 'player') loadPlayer(route.uuid);
   else if (route.view === 'moderate') loadModerate();
   else if (route.view === 'settings') loadSettings();
+  else if (route.view === 'community') loadCommunity();
 }
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'players']) {
+  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players']) {
     $(`view-${name}`).hidden = name !== route.view;
   }
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
@@ -1714,13 +1930,18 @@ window.addEventListener('hashchange', showView);
 setInterval(() => {
   if ($('action-dialog').open || document.hidden) return;
   if (!$('view-linked').hidden) loadLinked();
-  else if (!$('view-community').hidden) loadCommunity();
+  else if (!$('view-home').hidden) loadHome();
   else if (!$('view-players').hidden) loadPlayers();
 }, 30000);
 setInterval(() => {
   if ($('action-dialog').open || document.hidden || state.spy) return;
   if (!$('view-moderate').hidden) loadModerate();
 }, 10000);
+// Playtime and credits change every minute without a log entry.
+setInterval(() => {
+  if ($('action-dialog').open || document.hidden) return;
+  if (!$('view-community').hidden) loadCommunity();
+}, 60000);
 
 (async () => {
   try {

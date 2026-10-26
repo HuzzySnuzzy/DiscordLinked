@@ -16,7 +16,7 @@ import java.util.Properties;
  */
 public final class SettingsEditor {
 
-    public enum Type { BOOLEAN, NUMBER, DISCORD_ID, TEXT, URL, CHOICE }
+    public enum Type { BOOLEAN, NUMBER, DISCORD_ID, TEXT, URL, CHOICE, NAME }
 
     /** {@code restart}: the new value only takes effect after the proxy restarts. */
     public record Field(String key, String group, String label, String help, Type type, boolean restart,
@@ -29,6 +29,10 @@ public final class SettingsEditor {
 
     private static Field number(String key, String group, String label, String help, long min, long max) {
         return new Field(key, group, label, help, Type.NUMBER, false, min, max, List.of());
+    }
+
+    private static Field name(String key, String group, String label, String help) {
+        return new Field(key, group, label, help, Type.NAME, false, 1, 32, List.of());
     }
 
     private static Field id(String key, String group, String label, String help, boolean restart) {
@@ -58,7 +62,7 @@ public final class SettingsEditor {
             bool("log-chat", "Logging & data", "Log chat", "Store chat messages in the logs.", false),
             bool("log-commands", "Logging & data", "Log commands", "Store commands players run in the logs.", false),
             number("chat-log-retention-days", "Logging & data", "Keep chat & command logs for",
-                    "Days. Older chat and command entries are deleted. 0 = forever.", 0, 3650),
+                    "Days. Older chat, command and interaction entries are deleted. 0 = forever.", 0, 3650),
             number("log-retention-days", "Logging & data", "Keep other logs for",
                     "Days. Joins, IPs, admin actions and everything else. 0 = forever.", 0, 3650),
 
@@ -69,6 +73,33 @@ public final class SettingsEditor {
 
             number("spy-max-distance", "Spy", "Maximum spy distance",
                     "Blocks the admin may get from the player before the session ends.", 16, 100_000),
+
+            bool("fad-enabled", "Community & credits", "Community features",
+                    "Interactions (/hug, /kiss...) and credits. Needs DiscordLinkedFAD on the Minecraft servers.", false),
+            name("credits-name", "Community & credits", "Credit name (one)",
+                    "What one credit is called, e.g. \"1 Pawbuck\"."),
+            name("credits-name-plural", "Community & credits", "Credit name (several)",
+                    "What more than one are called, e.g. \"5 Pawbucks\"."),
+            number("credits-playtime-amount", "Community & credits", "Credits for playing",
+                    "Given for every block of active (not AFK) play below. 0 = none.", 0, 1_000_000),
+            number("credits-playtime-minutes", "Community & credits", "Every … minutes of active play",
+                    "How long a block of active play is.", 1, 1440),
+            number("credits-advancement-task", "Community & credits", "Credits per advancement",
+                    "Most advancements (task). Only the first time a player makes it. 0 = none.", 0, 1_000_000),
+            number("credits-advancement-goal", "Community & credits", "Credits per goal advancement",
+                    "The rounded-frame ones. 0 = none.", 0, 1_000_000),
+            number("credits-advancement-challenge", "Community & credits", "Credits per challenge advancement",
+                    "The spiky purple-frame ones. 0 = none.", 0, 1_000_000),
+            id("fad-channel-id", "Community & credits", "Interactions channel",
+                    "Discord channel for interactions and advancements. Empty = the chat channel.", false),
+            bool("fad-discord-interactions", "Community & credits", "Post interactions to Discord",
+                    "Shows /hug, /kiss and friends in the channel, with @mentions of linked members.", false),
+            bool("fad-discord-advancements", "Community & credits", "Post advancements to Discord",
+                    "Announces advancements in the channel.", false),
+            bool("fad-discord-ping", "Community & credits", "Ping who was picked",
+                    "Off = the @mention shows but doesn't send them a notification.", false),
+            bool("fad-discord-commands", "Community & credits", "Interactions as slash commands",
+                    "Lets Discord members use /hug @someone and friends; they show in game too.", false),
 
             bool("web-enabled", "Website", "Website enabled",
                     "Turning this off also turns off this page; re-enable it in config.properties.", true),
@@ -202,6 +233,12 @@ public final class SettingsEditor {
             }
             case TEXT -> {
                 // single line, checked above
+            }
+            case NAME -> {
+                if (value.isEmpty() || value.length() > field.max() || value.matches(".*[<>{}\\\\].*")) {
+                    throw new IllegalArgumentException(label + ": must be 1 to " + field.max()
+                            + " characters, without < > { } or \\");
+                }
             }
         }
         return value;
