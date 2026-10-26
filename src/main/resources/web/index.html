@@ -17,6 +17,7 @@
       <a href="#/players" data-view="players">Players</a>
       <a href="#/moderate" data-view="moderate" data-mode="admin">Moderate</a>
       <a href="#/community" data-view="community" id="community-tab" hidden>Community</a>
+      <a href="#/shop" data-view="shop" id="shop-tab" hidden>Shop</a>
       <a href="#/logs" data-view="logs" data-mode="admin">Logs</a>
     </nav>
     <div class="global-search">
@@ -90,6 +91,7 @@
           <option value="deaths">Deaths</option>
           <option value="settings">Settings changes</option>
           <option value="community">Interactions, advancements &amp; credits</option>
+          <option value="shop">Shop orders</option>
         </select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
         <button id="logs-csv" class="btn btn-ghost btn-small" type="button">Download CSV</button>
@@ -169,6 +171,31 @@
       <div id="community-body"></div>
     </section>
 
+    <section id="view-shop" hidden>
+      <div class="toolbar">
+        <h1>Shop</h1>
+        <span id="shop-balance" class="shop-balance"></span>
+        <input id="shop-search" type="search" placeholder="Search items…" aria-label="Search items">
+      </div>
+      <div id="shop-notice"></div>
+      <div class="card shop-window">
+        <div id="shop-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
+        <div id="shop-grid" class="shop-grid" role="list"></div>
+        <div id="shop-info" class="shop-info" aria-live="polite"></div>
+        <div class="shop-chest-head">
+          <h2>Your order</h2>
+          <span class="muted" id="shop-hint">Click an item to add one, shift-click for a stack, or drag it into a slot.
+            Click a slot to take one out, shift-click to empty it.</span>
+        </div>
+        <div id="shop-chest" class="shop-chest" aria-label="Order chest"></div>
+        <div class="shop-checkout">
+          <div id="shop-total" class="shop-total"></div>
+          <button id="shop-clear" class="btn btn-ghost btn-small" type="button">Empty chest</button>
+          <button id="shop-buy" class="btn" type="button">Check out</button>
+        </div>
+      </div>
+    </section>
+
     <section id="view-moderate" hidden>
       <div class="toolbar">
         <h1>Online now <span id="moderate-count" class="count"></span></h1>
@@ -200,6 +227,22 @@
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" id="dialog-cancel">Cancel</button>
         <button type="submit" class="btn" id="dialog-confirm">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="shop-item-dialog">
+    <form id="shop-item-form">
+      <h2 id="shop-item-title"></h2>
+      <p id="shop-item-text" class="muted"></p>
+      <label class="check-row"><input type="checkbox" id="shop-item-enabled"> For sale</label>
+      <label class="reason">Price (% of normal)
+        <input type="number" id="shop-item-percent" min="1" max="100000" step="1" required>
+      </label>
+      <p id="shop-item-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" id="shop-item-cancel">Cancel</button>
+        <button type="submit" class="btn" id="shop-item-save">Save</button>
       </div>
     </form>
   </dialog>

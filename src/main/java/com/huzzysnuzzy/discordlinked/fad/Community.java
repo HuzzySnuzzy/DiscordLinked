@@ -42,6 +42,7 @@ public final class Community {
     private final FadActions actions;
     private final FadBridge bridge;
     private final FadDiscord discord;
+    private final Shop shop;
     /** Players their server reported as AFK. Cleared when they switch server or leave. */
     private final Set<UUID> afk = ConcurrentHashMap.newKeySet();
     /** Servers running DiscordLinkedFAD: name -> version. */
@@ -52,6 +53,7 @@ public final class Community {
         this.actions = new FadActions(plugin.dataDirectory(), plugin.logger());
         this.bridge = new FadBridge(plugin, this);
         this.discord = new FadDiscord(plugin, this);
+        this.shop = new Shop(plugin, this);
     }
 
     public void start() {
@@ -71,6 +73,10 @@ public final class Community {
 
     FadBridge bridge() {
         return bridge;
+    }
+
+    public Shop shop() {
+        return shop;
     }
 
     /** Servers that have said hello since the proxy started, with their DiscordLinkedFAD version. */

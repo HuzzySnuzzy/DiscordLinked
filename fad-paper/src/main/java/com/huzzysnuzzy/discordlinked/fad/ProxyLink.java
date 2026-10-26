@@ -2,6 +2,7 @@ package com.huzzysnuzzy.discordlinked.fad;
 
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 
@@ -11,6 +12,8 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,6 +65,20 @@ final class ProxyLink implements PluginMessageListener {
             out.writeUTF(plugin.getPluginMeta().getVersion());
             out.writeInt(json.length);
             out.write(json);
+        });
+        // Every item this Minecraft version has, so the website's Shop only sells what exists here.
+        List<String> items = new ArrayList<>();
+        for (Material material : Material.values()) {
+            if (!material.isLegacy() && material.isItem() && !material.isAir()) {
+                items.add(material.getKey().getKey());
+            }
+        }
+        send(carrier, out -> {
+            out.writeUTF("ITEMS");
+            out.writeInt(items.size());
+            for (String item : items) {
+                out.writeUTF(item);
+            }
         });
     }
 
@@ -143,6 +160,24 @@ final class ProxyLink implements PluginMessageListener {
                 }
                 // The proxy already told the player why (e.g. the target turned interactions off).
                 case "ACK" -> finish(in.readUTF());
+                // A website Shop order for this player: deliver it as a chest and say how it went.
+                case "SHOP" -> {
+                    long receivedAt = System.currentTimeMillis();
+                    String id = in.readUTF();
+                    int count = in.readInt();
+                    if (count < 1 || count > 54) {
+                        return;
+                    }
+                    List<ShopDelivery.Line> lines = new ArrayList<>();
+                    for (int i = 0; i < count; i++) {
+                        lines.add(new ShopDelivery.Line(in.readUTF(), in.readInt()));
+                    }
+                    ShopDelivery.deliver(plugin, carrier, lines, receivedAt, outcome -> send(carrier, out -> {
+                        out.writeUTF("SHOP_RESULT");
+                        out.writeUTF(id);
+                        out.writeUTF(outcome);
+                    }));
+                }
                 // Someone on Discord picked this player: play the effects where they are.
                 case "FX" -> {
                     Action action = plugin.settings().actions.get(in.readUTF());

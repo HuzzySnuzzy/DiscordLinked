@@ -93,6 +93,18 @@ final class FadBridge {
                     });
                 }
                 case "AFK" -> community.setAfk(player.getUniqueId(), in.readBoolean());
+                case "SHOP_RESULT" -> community.shop().delivered(player.getUniqueId(), in.readUTF(), in.readUTF());
+                case "ITEMS" -> {
+                    int count = in.readInt();
+                    if (count < 0 || count > 10_000) {
+                        throw new IOException("bad item count " + count);
+                    }
+                    java.util.Set<String> items = new java.util.HashSet<>();
+                    for (int i = 0; i < count; i++) {
+                        items.add(in.readUTF());
+                    }
+                    community.shop().serverItems(server, items);
+                }
                 case "ADV" -> {
                     String key = in.readUTF();
                     String title = in.readUTF();
@@ -134,6 +146,19 @@ final class FadBridge {
             out.writeUTF("FX");
             out.writeUTF(action);
         }));
+    }
+
+    /** Asks the buyer's server to put a Shop order (as one chest) in their inventory. */
+    void shop(ServerConnection connection, String id, java.util.List<Shop.Line> lines) {
+        send(connection, out -> {
+            out.writeUTF("SHOP");
+            out.writeUTF(id);
+            out.writeInt(lines.size());
+            for (Shop.Line line : lines) {
+                out.writeUTF(line.id());
+                out.writeInt(line.amount());
+            }
+        });
     }
 
     // ---- Helpers ----

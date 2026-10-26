@@ -101,6 +101,12 @@ public final class SettingsEditor {
             bool("fad-discord-commands", "Community & credits", "Interactions as slash commands",
                     "Lets Discord members use /hug @someone and friends; they show in game too.", false),
 
+            bool("shop-enabled", "Shop", "Shop open",
+                    "Players can buy Minecraft items with their credits on the website's Shop page.", false),
+            number("shop-price-percent", "Shop", "Price multiplier (%)",
+                    "Every price times this: 100 = the built-in prices, 50 = half, 200 = double. "
+                            + "Single items are changed on the Shop page.", 1, 100_000),
+
             bool("web-enabled", "Website", "Website enabled",
                     "Turning this off also turns off this page; re-enable it in config.properties.", true),
             new Field("web-access", "Website", "How the website is reached",

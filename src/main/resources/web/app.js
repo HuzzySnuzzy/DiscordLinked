@@ -30,6 +30,7 @@ const EVENT_LABELS = {
   INTERACTION: ['Interaction', ''],
   ADVANCEMENT: ['Advancement', 'good'],
   CREDITS_ADJUST: ['Credits changed', 'warn'],
+  SHOP_PURCHASE: ['Shop', 'warn'],
 };
 
 // ---- Helpers ----
@@ -1075,7 +1076,7 @@ const stat = (label, value, title) => el('div', { class: 'stat', title },
   el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
 
 const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
-const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff' };
+const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop' };
 
 function creditsDialog(p, community) {
   const currency = community.currency;
@@ -1568,10 +1569,9 @@ $('settings-save').addEventListener('click', async () => {
     toast(result.needRestart.length
       ? `Saved. Restart the proxy for: ${result.needRestart.join(', ')}.`
       : `Saved ${result.changed.length} setting${result.changed.length === 1 ? '' : 's'}.`);
-    if (ownerChange || 'fad-enabled' in settingsEdits) {
+    if (ownerChange || 'fad-enabled' in settingsEdits || 'shop-enabled' in settingsEdits) {
       state.me = await api('/api/me');
-      $('settings-link').hidden = !state.me.isOwner;
-      $('community-tab').hidden = !state.me.communityEnabled;
+      applyMode();
     }
     await loadSettings();
   } catch (e) {
@@ -1584,6 +1584,285 @@ $('settings-save').addEventListener('click', async () => {
 // ---- Live updates: one event stream for every page ----
 
 // Events that can change what the list/player pages show.
+// ---- Shop: Minecraft items for credits, delivered as a chest ----
+
+/** The creative inventory's tabs, each with the item shown on its tab. */
+const SHOP_TABS = [['Building Blocks', 'bricks'], ['Colored Blocks', 'cyan_wool'], ['Natural Blocks', 'grass_block'],
+  ['Functional Blocks', 'crafting_table'], ['Redstone', 'redstone'], ['Tools & Utilities', 'iron_pickaxe'],
+  ['Combat', 'golden_sword'], ['Food & Drinks', 'golden_apple'], ['Ingredients', 'iron_ingot']];
+const creditFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+/** Prices are kept in hundredths of a credit. */
+const fromCents = (cents) => creditFormat.format(cents / 100);
+const shop = { data: null, tab: SHOP_TABS[0][0], chest: [], textures: new Map(), hovered: null, edit: false, busy: false };
+let shiftHeld = false;
+
+async function loadShop() {
+  let data;
+  try {
+    data = await api('/api/shop');
+  } catch (e) {
+    $('shop-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    return;
+  }
+  const first = !shop.data;
+  shop.data = data;
+  shop.byId = new Map(data.items.map((item) => [item.id, item]));
+  if (shop.chest.length !== data.slots) shop.chest = Array.from({ length: data.slots }, (_, i) => shop.chest[i] || null);
+  // Items that are no longer for sale leave the chest.
+  shop.chest = shop.chest.map((slot) => (slot && shop.byId.has(slot.id) && !shop.byId.get(slot.id).disabled ? slot : null));
+  if (first || !shop.textures.size) shop.textures = await loadTextures('99');
+  renderShop();
+}
+
+const shopName = (id) => shop.textures.get(`minecraft:${id}`)?.readable || titleCase(id);
+
+function shopIcon(id) {
+  const texture = shop.textures.get(`minecraft:${id}`)?.texture;
+  if (!texture) return el('span', { class: 'slot-text' }, shopName(id).split(' ').map((w) => w[0]).join('').slice(0, 3));
+  const img = el('img', { src: `${TEXTURES}/assets/${texture}`, alt: '', loading: 'lazy', draggable: 'false' });
+  img.addEventListener('error', () => img.replaceWith(el('span', { class: 'slot-text' }, shopName(id).slice(0, 3))));
+  return img;
+}
+
+function renderShop() {
+  const d = shop.data;
+  const b = d.buyer;
+  $('shop-balance').textContent = b.linked ? `You have ${credits(b.balance, d.currency)}` : '';
+  const notices = [];
+  if (!d.open) {
+    notices.push(el('div', { class: 'card panel shop-closed' }, d.manage
+      ? ['The shop is closed for players. Open it in ', el('a', { href: '#/settings' }, 'Settings'), '.']
+      : 'The shop is closed right now.'));
+  }
+  if (d.manage) {
+    const toggle = el('button', { class: `btn btn-small ${shop.edit ? '' : 'btn-ghost'}`, type: 'button',
+      onclick: () => { shop.edit = !shop.edit; renderShop(); } }, shop.edit ? 'Done editing' : 'Edit items');
+    notices.push(el('div', { class: 'card panel shop-manage' },
+      el('span', {}, `Prices are at ${d.percent}% (change it in `, el('a', { href: '#/settings' }, 'Settings'), '). ',
+        shop.edit ? 'Click an item to turn it off or change its price.' : ''),
+      toggle));
+  }
+  if (!b.linked) notices.push(el('p', { class: 'card panel muted' }, 'Link your Minecraft account to buy things (/link in Discord).'));
+  else if (!b.online) notices.push(el('p', { class: 'card panel muted' }, `Join the Minecraft server to check out: the chest goes straight into ${b.name}'s inventory.`));
+  else if (!b.serverReady) notices.push(el('p', { class: 'card panel muted' }, `${b.server} can't deliver orders. Move to another server to check out.`));
+  $('shop-notice').replaceChildren(...notices);
+
+  $('shop-tabs').replaceChildren(...SHOP_TABS.map(([tab, icon]) => el('button', {
+    class: `shop-tab ${tab === shop.tab && !$('shop-search').value.trim() ? 'active' : ''}`, type: 'button', role: 'tab',
+    title: tab, 'aria-label': tab, onclick: () => { shop.tab = tab; $('shop-search').value = ''; renderShop(); },
+  }, shopIcon(icon), el('span', {}, tab))));
+  renderShopGrid();
+  renderChest();
+}
+
+function renderShopGrid() {
+  const query = $('shop-search').value.trim().toLowerCase().replace(/\s+/g, ' ');
+  const items = shop.data.items.filter((item) => (query
+    ? shopName(item.id).toLowerCase().includes(query) || item.id.includes(query.replace(/ /g, '_'))
+    : item.tab === shop.tab));
+  $('shop-grid').replaceChildren(...(items.length ? items.map(shopItemNode)
+    : [el('p', { class: 'muted shop-empty' }, query ? 'No items match.' : 'Nothing for sale here.')]));
+}
+
+function shopItemNode(item) {
+  const node = el('button', {
+    class: `slot shop-item ${item.disabled ? 'off' : ''} ${item.unavailable ? 'unavailable' : ''}`, type: 'button', role: 'listitem',
+    draggable: shop.edit ? 'false' : 'true', 'aria-label': `${shopName(item.id)}, ${fromCents(item.price)} each`,
+  }, shopIcon(item.id));
+  const show = () => { shop.hovered = item; showShopTooltip(node, item); renderShopInfo(item); };
+  node.addEventListener('mouseenter', show);
+  node.addEventListener('focus', show);
+  node.addEventListener('mouseleave', () => { shop.hovered = null; hideTooltip(); });
+  node.addEventListener('blur', () => { shop.hovered = null; hideTooltip(); });
+  node.addEventListener('click', (e) => {
+    renderShopInfo(item);
+    if (shop.edit) shopItemDialog(item);
+    else if (!item.disabled) addToChest(item, e.shiftKey ? item.stack : 1);
+  });
+  node.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', item.id);
+    e.dataTransfer.effectAllowed = 'copy';
+    hideTooltip();
+  });
+  return node;
+}
+
+const perStackLabel = (item) => (item.stack === 64 ? 'per 64 (stack)' : `per ${item.stack} (stack)`);
+
+function showShopTooltip(anchor, item) {
+  tooltip ||= document.body.appendChild(el('div', { class: 'mc-tooltip', role: 'tooltip' }));
+  const d = shop.data;
+  const lines = [el('div', { class: 'tt-name' }, shopName(item.id))];
+  if (item.stack === 1) {
+    lines.push(el('div', { class: 'tt-price' }, `${fromCents(item.price)} ${d.currency.many} each`));
+    lines.push(el('div', { class: 'tt-meta' }, "Doesn't stack"));
+  } else if (shiftHeld) {
+    lines.push(el('div', { class: 'tt-price' }, `${fromCents(item.price * item.stack)} ${d.currency.many} ${perStackLabel(item)}`));
+    lines.push(el('div', { class: 'tt-meta' }, `${fromCents(item.price)} each`));
+  } else {
+    lines.push(el('div', { class: 'tt-price' }, `${fromCents(item.price)} ${d.currency.many} each`));
+    lines.push(el('div', { class: 'tt-meta' }, `Hold Shift: price ${perStackLabel(item)}`));
+  }
+  if (item.disabled) lines.push(el('div', { class: 'tt-lore' }, 'Not for sale (only you see it)'));
+  if (item.unavailable) lines.push(el('div', { class: 'tt-lore' }, "Not in your servers' Minecraft version"));
+  if (d.manage && item.percent !== 100) lines.push(el('div', { class: 'tt-lore' }, `Priced at ${item.percent}%`));
+  tooltip.replaceChildren(...lines);
+  tooltip.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  tooltip.style.left = `${Math.max(8, Math.min(window.innerWidth - tooltip.offsetWidth - 8, r.right + 8))}px`;
+  tooltip.style.top = `${Math.max(8, Math.min(window.innerHeight - tooltip.offsetHeight - 8, r.top))}px`;
+}
+
+/** The selected item with add buttons: how phones (no hover, no shift) see prices and add stacks. */
+function renderShopInfo(item) {
+  if (!item) return;
+  const d = shop.data;
+  $('shop-info').replaceChildren(
+    el('span', { class: 'shop-info-icon' }, shopIcon(item.id)),
+    el('div', { class: 'shop-info-text' },
+      el('strong', {}, shopName(item.id)),
+      el('span', { class: 'muted' }, `${fromCents(item.price)} ${d.currency.many} each`
+        + (item.stack > 1 ? ` · ${fromCents(item.price * item.stack)} ${perStackLabel(item)}` : ''))),
+    !shop.edit && !item.disabled && el('div', { class: 'actions' },
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => addToChest(item, 1) }, '+1'),
+      item.stack > 1 && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => addToChest(item, item.stack) }, `+${item.stack}`)));
+}
+
+/** Fills matching stacks first, then empty slots. */
+function addToChest(item, amount, slotIndex) {
+  let left = amount;
+  const fill = (i) => {
+    const slot = shop.chest[i];
+    if (left <= 0 || (slot && slot.id !== item.id)) return;
+    const have = slot ? slot.amount : 0;
+    const add = Math.min(left, item.stack - have);
+    if (add <= 0) return;
+    shop.chest[i] = { id: item.id, amount: have + add };
+    left -= add;
+  };
+  if (slotIndex !== undefined) fill(slotIndex);
+  shop.chest.forEach((slot, i) => { if (slot?.id === item.id) fill(i); });
+  shop.chest.forEach((slot, i) => { if (!slot) fill(i); });
+  if (left > 0) toast(left === amount ? 'The chest is full' : `Only ${amount - left} fitted in the chest`);
+  renderChest();
+}
+
+function renderChest() {
+  $('shop-chest').replaceChildren(...shop.chest.map((slot, i) => {
+    const item = slot && shop.byId.get(slot.id);
+    const node = el('button', { class: `slot chest-slot ${slot ? '' : 'empty'}`, type: 'button',
+      'aria-label': slot ? `${slot.amount} × ${shopName(slot.id)}` : 'Empty slot' },
+    slot && shopIcon(slot.id), slot && slot.amount > 1 && el('span', { class: 'slot-count' }, slot.amount));
+    if (slot) {
+      const show = () => showShopTooltip(node, item);
+      node.addEventListener('mouseenter', show);
+      node.addEventListener('focus', show);
+      node.addEventListener('mouseleave', hideTooltip);
+      node.addEventListener('blur', hideTooltip);
+      node.addEventListener('click', (e) => {
+        if (e.shiftKey || slot.amount <= 1) shop.chest[i] = null;
+        else shop.chest[i] = { ...slot, amount: slot.amount - 1 };
+        hideTooltip();
+        renderChest();
+      });
+      node.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const amount = Math.max(0, Math.min(item.stack, slot.amount + (e.deltaY < 0 ? 1 : -1)));
+        shop.chest[i] = amount ? { ...slot, amount } : null;
+        renderChest();
+      }, { passive: false });
+    }
+    node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('drop'); });
+    node.addEventListener('dragleave', () => node.classList.remove('drop'));
+    node.addEventListener('drop', (e) => {
+      e.preventDefault();
+      node.classList.remove('drop');
+      const dropped = shop.byId.get(e.dataTransfer.getData('text/plain'));
+      if (dropped && !dropped.disabled) addToChest(dropped, e.shiftKey ? dropped.stack : 1, i);
+    });
+    return node;
+  }));
+  renderShopTotal();
+}
+
+function shopTotal() {
+  const filled = shop.chest.filter(Boolean);
+  if (!filled.length) return { cents: 0, credits: 0, items: 0 };
+  const items = filled.reduce((sum, slot) => sum + shop.byId.get(slot.id).price * slot.amount, 0);
+  const cents = items + shop.data.chestPrice;
+  return { cents, credits: Math.ceil(cents / 100), items, stacks: filled.length };
+}
+
+function renderShopTotal() {
+  const d = shop.data;
+  const t = shopTotal();
+  const b = d.buyer;
+  $('shop-total').replaceChildren(...(t.stacks
+    ? [el('span', { class: 'muted' }, `${t.stacks} stack${t.stacks === 1 ? '' : 's'} ${fromCents(t.items)} + chest ${fromCents(d.chestPrice)} = `),
+      el('strong', {}, credits(t.credits, d.currency))]
+    : [el('span', { class: 'muted' }, 'The chest is empty.')]));
+  const buy = $('shop-buy');
+  const reason = !d.open ? 'The shop is closed' : !b.linked ? 'Link your Minecraft account first'
+    : !t.stacks ? 'Put something in the chest first' : t.credits > b.balance ? `You need ${credits(t.credits - b.balance, d.currency)} more`
+      : !b.online ? 'Join the Minecraft server to check out' : !b.serverReady ? `${b.server} can't deliver orders` : '';
+  buy.disabled = !!reason || shop.busy;
+  buy.title = reason;
+  buy.textContent = shop.busy ? 'Delivering…' : t.stacks && !reason ? `Buy for ${credits(t.credits, d.currency)}` : 'Check out';
+  $('shop-clear').disabled = !t.stacks;
+}
+
+$('shop-search').addEventListener('input', () => { renderShop(); });
+$('shop-clear').addEventListener('click', () => { shop.chest = shop.chest.map(() => null); renderChest(); });
+$('shop-buy').addEventListener('click', async () => {
+  const items = shop.chest.filter(Boolean).map((slot) => ({ id: slot.id, amount: slot.amount }));
+  shop.busy = true;
+  renderShopTotal();
+  try {
+    const result = await api('/api/shop/checkout', { items });
+    shop.chest = shop.chest.map(() => null);
+    toast(result.message);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    shop.busy = false;
+    await loadShop();
+  }
+});
+
+// Holding Shift switches the tooltip to the price of a stack.
+for (const type of ['keydown', 'keyup']) {
+  document.addEventListener(type, (e) => {
+    if (e.key !== 'Shift' || shiftHeld === (type === 'keydown')) return;
+    shiftHeld = type === 'keydown';
+    if (shop.hovered && !tooltip?.hidden) {
+      const node = [...document.querySelectorAll('#shop-grid .shop-item')].find((n) => n.matches(':hover, :focus'));
+      if (node) showShopTooltip(node, shop.hovered);
+    }
+  });
+}
+window.addEventListener('blur', () => { shiftHeld = false; });
+
+function shopItemDialog(item) {
+  $('shop-item-title').textContent = shopName(item.id);
+  $('shop-item-text').textContent = `Normally ${fromCents(Math.round(item.price * 100 / item.percent))} each at ${shop.data.percent}% prices.`;
+  $('shop-item-enabled').checked = !item.disabled;
+  $('shop-item-percent').value = item.percent;
+  $('shop-item-error').hidden = true;
+  $('shop-item-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/shop/item', { id: item.id, enabled: $('shop-item-enabled').checked, percent: Number($('shop-item-percent').value) });
+      $('shop-item-dialog').close();
+      await loadShop();
+    } catch (err) {
+      $('shop-item-error').textContent = err.message;
+      $('shop-item-error').hidden = false;
+    }
+  };
+  $('shop-item-dialog').showModal();
+}
+$('shop-item-cancel').addEventListener('click', () => $('shop-item-dialog').close());
+
 // ---- Community view (everyone; admins see it when off duty) ----
 
 function personRow(p, sub) {
@@ -1725,14 +2004,15 @@ function onPresence(change) {
   if (!change.uuid && route.view !== 'community') return;
   if (route.view === 'home') soon('home', loadHome);
   else if (route.view === 'community') soon('community', loadCommunity);
+  else if (route.view === 'shop') soon('shop', loadShop);
   else if (route.view === 'players') soon('players', loadPlayers);
   else if (route.view === 'player' && route.uuid === change.uuid) soon('player', () => loadPlayer(route.uuid));
 }
 
 // ---- On duty / off duty ----
 
-const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community']);
-const MEMBER_VIEWS = new Set(['home', 'community', 'players']);
+const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community', 'shop']);
+const MEMBER_VIEWS = new Set(['home', 'community', 'players', 'shop']);
 const homeHash = () => (isStaff() ? '#/linked' : '#/home');
 
 function applyMode() {
@@ -1745,6 +2025,7 @@ function applyMode() {
   $('duty').classList.toggle('off', state.me.isAdmin && !state.me.onDuty);
   $('duty-switch').checked = state.me.onDuty;
   $('community-tab').hidden = !state.me.communityEnabled;
+  $('shop-tab').hidden = !(state.me.shopOpen || (state.me.isOwner && state.me.communityEnabled));
   $('global-search').placeholder = staff ? 'Find any player…' : 'Find a player…';
   updateTabPills();
 }
@@ -1774,6 +2055,8 @@ const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK
   'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED', 'ADVANCEMENT',
   'CREDITS_ADJUST']);
 // Events that change the Community page.
+// Events that can change the Shop page (balances, whether you're online).
+const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'ADVANCEMENT', 'JOIN', 'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE']);
 const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'JOIN', 'LEAVE']);
 const pendingRefresh = {};
 
@@ -1790,6 +2073,7 @@ function onLiveLog(entry) {
   else if (route.view === 'players' && STATUS_EVENTS.has(entry.type)) soon('players', loadPlayers);
   else if (route.view === 'moderate' && STATUS_EVENTS.has(entry.type)) soon('moderate', loadModerate);
   else if (route.view === 'community' && COMMUNITY_EVENTS.has(entry.type)) soon('community', loadCommunity);
+  else if (route.view === 'shop' && SHOP_EVENTS.has(entry.type)) soon('shop', loadShop);
   else if (route.view === 'player' && entry.uuid === route.uuid) {
     prependPlayerLog(entry);
     if (STATUS_EVENTS.has(entry.type)) soon('player', () => loadPlayer(route.uuid));
@@ -1950,11 +2234,12 @@ function refreshCurrentView() {
   else if (route.view === 'moderate') loadModerate();
   else if (route.view === 'settings') loadSettings();
   else if (route.view === 'community') loadCommunity();
+  else if (route.view === 'shop') loadShop();
 }
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players']) {
+  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players', 'shop']) {
     $(`view-${name}`).hidden = name !== route.view;
   }
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));

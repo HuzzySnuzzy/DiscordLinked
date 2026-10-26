@@ -18,7 +18,9 @@ import com.huzzysnuzzy.discordlinked.storage.CreditTransaction;
 import com.huzzysnuzzy.discordlinked.storage.EarnedAdvancement;
 import com.huzzysnuzzy.discordlinked.storage.InteractionRecord;
 import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
+import com.huzzysnuzzy.discordlinked.fad.Shop;
 import com.huzzysnuzzy.discordlinked.storage.KnownPlayer;
+import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.PlayerIp;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
@@ -76,11 +78,12 @@ public final class WebServer {
             "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend");
     /** Everything the community view (non-admins and off-duty admins) may call. */
     private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
-            "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty");
+            "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty",
+            "GET /api/shop", "POST /api/shop/checkout");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
             EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
-            EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST);
+            EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST, EventTypes.SHOP_PURCHASE);
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final long MAX_CREDIT_ADJUSTMENT = 1_000_000_000L;
     private static final int MAX_EXPORT_ROWS = 50_000;
@@ -115,7 +118,9 @@ public final class WebServer {
                     EventTypes.INVENTORY_RESTORE)),
             Map.entry("deaths", Set.of(EventTypes.DEATH)),
             Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)),
-            Map.entry("community", Set.of(EventTypes.INTERACTION, EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST)));
+            Map.entry("community", Set.of(EventTypes.INTERACTION, EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST,
+                    EventTypes.SHOP_PURCHASE)),
+            Map.entry("shop", Set.of(EventTypes.SHOP_PURCHASE)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -348,6 +353,9 @@ public final class WebServer {
                     settings(ex, method, path, session);
             case "GET /api/community" -> sendJson(ex, 200, community(query(ex), staff));
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
+            case "GET /api/shop" -> sendJson(ex, 200, shop(session));
+            case "POST /api/shop/checkout" -> shopCheckout(ex, session);
+            case "POST /api/shop/item" -> shopItem(ex, session);
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
             case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
             case "POST /api/logs/export-sheets" -> exportSheets(ex, session);
@@ -391,7 +399,8 @@ public final class WebServer {
                 .put("staff", staff)
                 .put("sheetsEnabled", staff && sheets != null)
                 .put("isOwner", staff && isOwner(session))
-                .put("communityEnabled", plugin.config().fadEnabled());
+                .put("communityEnabled", plugin.config().fadEnabled())
+                .put("shopOpen", plugin.community().shop().open());
     }
 
     private void setDuty(HttpExchange ex, Sessions.Session session) throws IOException {
@@ -885,6 +894,118 @@ public final class WebServer {
                 .put("recent", recent)
                 .put("actions", actions)
                 .put("servers", servers);
+    }
+
+    // ---- Shop ----
+
+    /**
+     * The Shop page: every item for sale with its price (hundredths of a credit, after the multipliers), the
+     * buyer's balance and whether they can receive an order right now. The settings owner also gets the items
+     * that are turned off and each item's own percentage.
+     */
+    private DataObject shop(Sessions.Session session) throws SQLException {
+        Shop shop = plugin.community().shop();
+        boolean manage = session.staff() && isOwner(session);
+        Map<String, ShopOverride> overrides = plugin.database().shopOverrides();
+        Set<String> available = shop.availableItems();
+        DataArray items = DataArray.empty();
+        for (Shop.Item item : shop.catalog().values()) {
+            ShopOverride override = overrides.get(item.id());
+            boolean disabled = override != null && override.disabled();
+            boolean exists = available == null || available.contains(item.id());
+            if (!manage && (disabled || !exists)) {
+                continue;
+            }
+            DataObject row = DataObject.empty().put("id", item.id()).put("tab", item.tab()).put("stack", item.stack())
+                    .put("price", shop.unitCents(item, override));
+            if (manage) {
+                row.put("disabled", disabled).put("percent", override == null ? 100 : override.percent())
+                        .put("unavailable", !exists);
+            }
+            items.add(row);
+        }
+        DataObject buyer = DataObject.empty();
+        Optional<LinkedAccount> me = plugin.database().findByDiscordId(session.user.id());
+        buyer.put("linked", me.isPresent());
+        if (me.isPresent()) {
+            Optional<Player> online = plugin.proxy().getPlayer(me.get().uuid());
+            String server = online.flatMap(Player::getCurrentServer).map(c -> c.getServerInfo().getName()).orElse("");
+            buyer.put("name", me.get().minecraftName())
+                    .put("uuid", me.get().uuid().toString())
+                    .put("balance", plugin.database().creditAccount(me.get().uuid()).map(CreditAccount::credits).orElse(0L))
+                    .put("online", online.isPresent())
+                    .put("server", server)
+                    .put("serverReady", !server.isEmpty() && plugin.community().servers().containsKey(server));
+        }
+        return DataObject.empty()
+                .put("open", shop.open())
+                .put("fadEnabled", plugin.config().fadEnabled())
+                .put("percent", plugin.config().shopPricePercent())
+                .put("currency", currency())
+                .put("manage", manage)
+                .put("slots", Shop.CHEST_SLOTS)
+                .put("chestPrice", shop.chestCents(overrides))
+                .put("buyer", buyer)
+                .put("items", items);
+    }
+
+    private void shopCheckout(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Optional<LinkedAccount> me = plugin.database().findByDiscordId(session.user.id());
+        if (me.isEmpty()) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        DataArray slots = body.optArray("items").orElse(DataArray.empty());
+        if (slots.length() > Shop.CHEST_SLOTS) {
+            sendJson(ex, 400, error("A chest only has " + Shop.CHEST_SLOTS + " slots."));
+            return;
+        }
+        List<Shop.Line> lines = new ArrayList<>();
+        for (int i = 0; i < slots.length(); i++) {
+            DataObject slot = slots.getObject(i);
+            String id = slot.getString("id", "");
+            if (!id.matches("[a-z0-9_]{1,64}")) {
+                sendJson(ex, 400, error("Unknown item"));
+                return;
+            }
+            lines.add(new Shop.Line(id, slot.getInt("amount", 0)));
+        }
+        Shop.Result result = plugin.community().shop().checkout(me.get(), lines, session.user.actor() + " (website)");
+        sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
+                .put("cost", result.cost()).put("balance", result.balance())
+                .put("error", result.ok() ? null : result.message()));
+    }
+
+    /** The settings owner turns one item off or on, or changes its own price percentage. */
+    private void shopItem(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        if (!isOwner(session)) {
+            sendJson(ex, 403, error("Only the settings owner can change Shop items."));
+            return;
+        }
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        String id = body.getString("id", "");
+        if (!plugin.community().shop().catalog().containsKey(id)) {
+            sendJson(ex, 400, error("Unknown item"));
+            return;
+        }
+        boolean enabled = body.getBoolean("enabled", true);
+        int percent = body.getInt("percent", 100);
+        if (percent < 1 || percent > 100_000) {
+            sendJson(ex, 400, error("The percentage must be between 1 and 100000."));
+            return;
+        }
+        plugin.database().setShopOverride(id, !enabled, percent);
+        plugin.audit().log(null, null, session.user.id(), EventTypes.SETTINGS_CHANGE,
+                "shop item " + id + ": " + (enabled ? "for sale" : "not for sale") + ", " + percent + "% price",
+                session.user.actor() + " (website)");
+        sendJson(ex, 200, DataObject.empty().put("ok", true));
     }
 
     /** Gives (positive amount) or takes (negative) credits, with a reason. */

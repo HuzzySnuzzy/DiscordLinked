@@ -48,7 +48,9 @@ public record PluginConfig(
         boolean fadDiscordAdvancements,
         boolean fadDiscordPing,
         boolean fadDiscordCommands,
-        boolean webMemberAccess
+        boolean webMemberAccess,
+        boolean shopEnabled,
+        int shopPricePercent
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -94,7 +96,9 @@ public record PluginConfig(
                 parseBoolean(props, "fad-discord-advancements"),
                 parseBoolean(props, "fad-discord-ping"),
                 parseBoolean(props, "fad-discord-commands"),
-                parseBoolean(props, "web-member-access")
+                parseBoolean(props, "web-member-access"),
+                parseBoolean(props, "shop-enabled"),
+                Integer.parseInt(props.getProperty("shop-price-percent").trim())
         );
     }
 

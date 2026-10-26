@@ -110,6 +110,8 @@ public final class AuditLog {
         public static final String INTERACTION = "INTERACTION";
         public static final String ADVANCEMENT = "ADVANCEMENT";
         public static final String CREDITS_ADJUST = "CREDITS_ADJUST";
+        /** A website Shop order: delivered, or declined and refunded. */
+        public static final String SHOP_PURCHASE = "SHOP_PURCHASE";
 
         private EventTypes() {
         }

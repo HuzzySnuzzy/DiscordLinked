@@ -134,6 +134,15 @@ public final class Database implements AutoCloseable {
             }
             backfillIps();
         }
+        try (Statement st = connection.createStatement()) {
+            // Added in 0.13.0: the settings owner's per-item Shop changes.
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS shop_items (
+                        item     TEXT PRIMARY KEY,
+                        disabled INTEGER NOT NULL,
+                        percent  INTEGER NOT NULL
+                    )""");
+        }
         if (!tableExists("known_players")) {
             // Added in 0.12.0: everyone who has played, also from the servers' own player data.
             try (Statement st = connection.createStatement()) {
@@ -341,6 +350,39 @@ public final class Database implements AutoCloseable {
     }
 
     // ---- Players (linked or not) ----
+
+    // ---- Shop ----
+
+    public synchronized Map<String, ShopOverride> shopOverrides() throws SQLException {
+        Map<String, ShopOverride> overrides = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM shop_items")) {
+            while (rs.next()) {
+                overrides.put(rs.getString("item"), new ShopOverride(rs.getString("item"),
+                        rs.getInt("disabled") != 0, rs.getInt("percent")));
+            }
+        }
+        return overrides;
+    }
+
+    /** Saves an item's Shop setting; the default (on, 100%) removes the row. */
+    public synchronized void setShopOverride(String item, boolean disabled, int percent) throws SQLException {
+        if (!disabled && percent == 100) {
+            try (PreparedStatement ps = connection.prepareStatement("DELETE FROM shop_items WHERE item = ?")) {
+                ps.setString(1, item);
+                ps.executeUpdate();
+            }
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO shop_items (item, disabled, percent) VALUES (?, ?, ?) "
+                        + "ON CONFLICT (item) DO UPDATE SET disabled = excluded.disabled, percent = excluded.percent")) {
+            ps.setString(1, item);
+            ps.setInt(2, disabled ? 1 : 0);
+            ps.setInt(3, percent);
+            ps.executeUpdate();
+        }
+    }
 
     // ---- Known players (everyone who has played) ----
 
@@ -936,6 +978,15 @@ public final class Database implements AutoCloseable {
      */
     public synchronized long addCredits(UUID uuid, String name, long amount, String kind, String detail, String actor)
             throws SQLException {
+        return addCredits(uuid, name, amount, kind, detail, actor, true);
+    }
+
+    /**
+     * Adds (or, negative, takes) credits; returns the new balance, or -1 and changes nothing if that would go
+     * below 0. {@code countsAsEarned}: whether a positive amount adds to "earned in total" (not for refunds).
+     */
+    public synchronized long addCredits(UUID uuid, String name, long amount, String kind, String detail, String actor,
+                                        boolean countsAsEarned) throws SQLException {
         return transaction(() -> {
             ensureCreditAccount(uuid, name);
             long balance = creditBalance(uuid) + amount;
@@ -945,7 +996,7 @@ public final class Database implements AutoCloseable {
             try (PreparedStatement ps = connection.prepareStatement(
                     "UPDATE fad_accounts SET credits = credits + ?, earned = earned + ? WHERE minecraft_uuid = ?")) {
                 ps.setLong(1, amount);
-                ps.setLong(2, Math.max(0, amount));
+                ps.setLong(2, countsAsEarned ? Math.max(0, amount) : 0);
                 ps.setString(3, uuid.toString());
                 ps.executeUpdate();
             }
