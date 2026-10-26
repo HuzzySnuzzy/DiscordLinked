@@ -14,6 +14,7 @@
     <nav class="tabs">
       <a href="#/linked" data-view="linked">Linked</a>
       <a href="#/moderate" data-view="moderate">Moderate</a>
+      <a href="#/community" data-view="community" id="community-tab" hidden>Community</a>
       <a href="#/logs" data-view="logs">Logs</a>
     </nav>
     <div class="global-search">
@@ -82,6 +83,7 @@
           <option value="inventory">Inventory views, snapshots &amp; restores</option>
           <option value="deaths">Deaths</option>
           <option value="settings">Settings changes</option>
+          <option value="community">Interactions, advancements &amp; credits</option>
         </select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
         <button id="logs-csv" class="btn btn-ghost btn-small" type="button">Download CSV</button>
@@ -111,6 +113,14 @@
       </div>
     </section>
 
+    <section id="view-community" hidden>
+      <div class="toolbar">
+        <h1>Community</h1>
+        <span id="community-earning" class="muted"></span>
+      </div>
+      <div id="community-body"></div>
+    </section>
+
     <section id="view-moderate" hidden>
       <div class="toolbar">
         <h1>Online now <span id="moderate-count" class="count"></span></h1>
@@ -127,6 +137,9 @@
     <form id="action-form">
       <h2 id="dialog-title"></h2>
       <p id="dialog-text" class="muted"></p>
+      <div id="amount-fields" class="duration" hidden>
+        <label><span id="amount-label">Amount</span> <input type="number" id="dialog-amount" step="1" inputmode="numeric"></label>
+      </div>
       <div id="duration-fields" class="duration">
         <label>Days <input type="number" id="dur-days" min="0" max="3650" value="1"></label>
         <label>Hours <input type="number" id="dur-hours" min="0" max="999" value="0"></label>

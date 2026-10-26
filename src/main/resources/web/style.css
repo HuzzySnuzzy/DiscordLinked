@@ -804,3 +804,20 @@ input, select, textarea { transition: background-color .25s, box-shadow .25s, bo
   .btn:hover, .btn:active, .icon-btn:hover, .icon-btn:active, .mod-card:hover, .snap-item:hover,
   .slot[tabindex="0"]:hover, .search-result:hover { transform: none !important; }
 }
+
+/* ---- Community page & credits panel ---- */
+#view-community > #community-body > .card { margin-bottom: 16px; }
+#community-earning { font-size: 13px; }
+.panel h2 .actions select, .panel h2 .actions input[type=search] { border-radius: 999px; padding-left: 14px; font-size: 14px; font-weight: 400; }
+.panel h2 .actions input[type=search] { width: 200px; max-width: 100%; }
+/* A table inside a glass card doesn't need its own glass frame. */
+.table-wrap.flat { background: none; border: 0; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.panel .others { margin-top: 10px; align-items: center; }
+.panel .notes { max-height: 520px; overflow-y: auto; }
+.credit-plus { color: var(--success); font-weight: 600; }
+.credit-minus { color: var(--danger); font-weight: 600; }
+@media (max-width: 720px) {
+  .panel h2 { flex-wrap: wrap; }
+  .panel h2 .actions { width: 100%; justify-content: stretch; }
+  .panel h2 .actions select, .panel h2 .actions input[type=search] { flex: 1; width: auto; }
+}
