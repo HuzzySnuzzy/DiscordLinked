@@ -813,11 +813,18 @@ input, select, textarea { transition: background-color .25s, box-shadow .25s, bo
 /* A table inside a glass card doesn't need its own glass frame. */
 .table-wrap.flat { background: none; border: 0; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .panel .others { margin-top: 10px; align-items: center; }
-.panel .notes { max-height: 520px; overflow-y: auto; }
+@media (min-width: 721px) {
+  .panel .notes { max-height: 520px; overflow-y: auto; }
+}
 .credit-plus { color: var(--success); font-weight: 600; }
 .credit-minus { color: var(--danger); font-weight: 600; }
 @media (max-width: 720px) {
   .panel h2 { flex-wrap: wrap; }
   .panel h2 .actions { width: 100%; justify-content: stretch; }
   .panel h2 .actions select, .panel h2 .actions input[type=search] { flex: 1; width: auto; }
+  .col-extra { display: none; }
+  .leaderboard th, .leaderboard td { padding: 10px 8px; }
+  .leaderboard .identity, .leaderboard .leader-name { min-width: 0; }
+  .leaderboard .leader-name .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .leader-name .pill { display: table; margin-top: 4px; }
 }

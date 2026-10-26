@@ -1175,13 +1175,14 @@ function renderCommunity() {
       el('td', { class: 'muted' }, `#${rank}`),
       el('td', {}, el('div', { class: 'identity' },
         el('a', { href: playerHref(row.uuid) }, el('img', { class: 'head', src: headUrl(row.uuid, 64), alt: '', loading: 'lazy' })),
-        el('div', {}, el('a', { class: 'name', href: playerHref(row.uuid) }, row.name),
+        el('div', { class: 'leader-name' }, el('a', { class: 'name', href: playerHref(row.uuid) }, row.name),
           row.online && el('span', { class: 'pill online' }, 'Online')))),
-      el('td', { class: 'nowrap' }, credits(row.credits, currency)),
-      el('td', { class: 'nowrap' }, playtime(row.activeSeconds)),
-      el('td', {}, row.advancements.toLocaleString()),
-      el('td', {}, row.given.toLocaleString()),
-      el('td', {}, row.received.toLocaleString()))));
+      el('td', { class: 'nowrap' }, row.credits.toLocaleString()),
+      // Phones only show rank, player and balance; the rest is on each player's page.
+      el('td', { class: 'nowrap col-extra' }, playtime(row.activeSeconds)),
+      el('td', { class: 'col-extra' }, row.advancements.toLocaleString()),
+      el('td', { class: 'col-extra' }, row.given.toLocaleString()),
+      el('td', { class: 'col-extra' }, row.received.toLocaleString()))));
     if (!shown.length) {
       rows.append(el('tr', {}, el('td', { colspan: 7, class: 'empty' },
         d.leaderboard.length ? 'No players match.' : `Nobody has earned any ${currency.many} yet.`)));
@@ -1191,9 +1192,9 @@ function renderCommunity() {
   fillRows();
   const leaderboard = el('div', { class: 'card panel' },
     el('h2', {}, 'Leaderboard', el('div', { class: 'actions' }, sort, filter)),
-    el('div', { class: 'table-wrap flat' }, el('table', { class: 'table' },
+    el('div', { class: 'table-wrap flat' }, el('table', { class: 'table leaderboard' },
       el('thead', {}, el('tr', {}, ['#', 'Player', currency.many, 'Active playtime', 'Advancements', 'Given', 'Received']
-        .map((h) => el('th', {}, h)))),
+        .map((h, i) => el('th', { class: i >= 3 ? 'col-extra' : null }, h)))),
       rows)));
 
   const person = (name, uuid) => (uuid ? el('a', { class: 'name', href: playerHref(uuid) }, name) : el('span', { class: 'name' }, name));
