@@ -7,6 +7,7 @@ import com.huzzysnuzzy.discordlinked.TimeFormat;
 import com.huzzysnuzzy.discordlinked.storage.CreditAccount;
 import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
+import com.huzzysnuzzy.discordlinked.storage.LoginStreak;
 import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.PlaytimeReward;
 import com.velocitypowered.api.proxy.Player;
@@ -361,6 +362,44 @@ public final class Community {
             }
         });
         return balance;
+    }
+
+    // ---- Daily login rewards ----
+
+    /**
+     * Counts this join toward the player's login streak and, on their first join of the day, pays the daily
+     * reward (when credits are on). Returns the streak, or null if the database failed.
+     */
+    public LoginStreak dailyLogin(Player player) {
+        try {
+            LoginStreak streak = plugin.database().recordLogin(player.getUniqueId(), LocalDate.now(ZoneId.systemDefault()));
+            PluginConfig c = config();
+            long amount = dailyReward(streak.current());
+            if (streak.newDay() && c.fadEnabled() && amount > 0) {
+                long balance = plugin.database().addCredits(player.getUniqueId(), player.getUsername(), amount, "DAILY",
+                        "day " + streak.current() + " of a login streak", null);
+                if (!plugin.messages().isEmpty("minecraft.fad.daily-reward")) {
+                    // A moment later, so it arrives once they're on a server rather than mid-login.
+                    plugin.proxy().getScheduler().buildTask(plugin, () -> player.sendMessage(plugin.messages().minecraft(
+                            "minecraft.fad.daily-reward", "amount", c.credits(amount), "streak", String.valueOf(streak.current()),
+                            "balance", c.credits(balance)))).delay(4, TimeUnit.SECONDS).schedule();
+                }
+            }
+            return streak;
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not update the login streak of {}", player.getUsername(), e);
+            return null;
+        }
+    }
+
+    /** What the daily reward is on a given day of a streak: base, plus a bit per extra day, up to the cap. */
+    public long dailyReward(int streak) {
+        PluginConfig c = config();
+        if (c.dailyRewardBase() <= 0) {
+            return 0;
+        }
+        long amount = c.dailyRewardBase() + (long) Math.max(0, streak - 1) * c.dailyRewardPerDay();
+        return Math.min(amount, Math.max(c.dailyRewardBase(), c.dailyRewardMax()));
     }
 
     /** "76h 12m" of active play. */

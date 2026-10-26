@@ -102,6 +102,7 @@ public final class WebServer {
                     EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT,
                     EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_VIEW,
                     EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE, EventTypes.SETTINGS_CHANGE, EventTypes.DUTY,
+                    EventTypes.TELEPORT,
                     EventTypes.CREDITS_ADJUST)),
             Map.entry("kicks", Set.of(EventTypes.KICK)),
             Map.entry("notes", Set.of(EventTypes.NOTE)),
@@ -356,6 +357,7 @@ public final class WebServer {
             case "GET /api/shop" -> sendJson(ex, 200, shop(session));
             case "POST /api/shop/checkout" -> shopCheckout(ex, session);
             case "POST /api/shop/item" -> shopItem(ex, session);
+            case "POST /api/player/teleport" -> teleport(ex, session);
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
             case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
             case "POST /api/logs/export-sheets" -> exportSheets(ex, session);
@@ -682,6 +684,22 @@ public final class WebServer {
         return result;
     }
 
+    /** The daily login streak for a profile: days in a row as of today, the best ever, and today's reward. */
+    private DataObject streakJson(UUID uuid) throws SQLException {
+        java.time.LocalDate today = java.time.LocalDate.now(ZoneId.systemDefault());
+        Optional<com.huzzysnuzzy.discordlinked.storage.LoginStreak> streak = plugin.database().loginStreak(uuid);
+        int current = streak.map(s -> s.currentOn(today)).orElse(0);
+        boolean joinedToday = streak.map(s -> today.equals(s.lastDay())).orElse(false);
+        return DataObject.empty()
+                .put("current", current)
+                .put("best", streak.map(com.huzzysnuzzy.discordlinked.storage.LoginStreak::best).orElse(0))
+                .put("joinedToday", joinedToday)
+                .put("rewardsOn", plugin.config().fadEnabled() && plugin.community().dailyReward(1) > 0)
+                // Today's reward if they joined, otherwise what joining today would pay.
+                .put("reward", plugin.community().dailyReward(joinedToday ? current : current + 1))
+                .put("maxReward", Math.max(plugin.config().dailyRewardBase(), plugin.config().dailyRewardMax()));
+    }
+
     /** When the player first played, if known. */
     private Long firstPlayed(UUID uuid) throws SQLException {
         return plugin.database().knownPlayer(uuid).map(KnownPlayer::firstPlayed).map(Instant::toEpochMilli).orElse(null);
@@ -701,7 +719,8 @@ public final class WebServer {
         community.remove("afkSeconds");
         community.remove("optedOut");
         sendJson(ex, 200, DataObject.empty()
-                .put("player", publicPlayerJson(uuid, ref.get().name(), linked).put("firstPlayed", firstPlayed(uuid)))
+                .put("player", publicPlayerJson(uuid, ref.get().name(), linked).put("firstPlayed", firstPlayed(uuid))
+                        .put("streak", streakJson(uuid)))
                 .put("community", community));
     }
 
@@ -761,7 +780,8 @@ public final class WebServer {
         }
         LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);
         DataObject player = playerJson(uuid, ref.get().name(), linked,
-                plugin.database().activeSuspension(uuid).orElse(null)).put("firstPlayed", firstPlayed(uuid));
+                plugin.database().activeSuspension(uuid).orElse(null)).put("firstPlayed", firstPlayed(uuid))
+                .put("streak", streakJson(uuid));
 
         DataArray suspensions = DataArray.empty();
         for (Suspension s : plugin.database().suspensions(uuid)) {
@@ -937,7 +957,21 @@ public final class WebServer {
                     .put("server", server)
                     .put("serverReady", !server.isEmpty() && plugin.community().servers().containsKey(server));
         }
+        // Who a gift can go to: players online right now on a server that can deliver.
+        DataArray recipients = DataArray.empty();
+        List<Player> online = new ArrayList<>(plugin.proxy().getAllPlayers());
+        online.sort(java.util.Comparator.comparing(Player::getUsername, String.CASE_INSENSITIVE_ORDER));
+        for (Player player : online) {
+            String server = player.getCurrentServer().map(c -> c.getServerInfo().getName()).orElse("");
+            if (me.isPresent() && player.getUniqueId().equals(me.get().uuid())
+                    || !plugin.community().servers().containsKey(server)) {
+                continue;
+            }
+            recipients.add(DataObject.empty().put("uuid", player.getUniqueId().toString())
+                    .put("name", player.getUsername()).put("server", server));
+        }
         return DataObject.empty()
+                .put("recipients", recipients)
                 .put("open", shop.open())
                 .put("fadEnabled", plugin.config().fadEnabled())
                 .put("percent", plugin.config().shopPricePercent())
@@ -974,7 +1008,8 @@ public final class WebServer {
             }
             lines.add(new Shop.Line(id, slot.getInt("amount", 0)));
         }
-        Shop.Result result = plugin.community().shop().checkout(me.get(), lines, session.user.actor() + " (website)");
+        UUID giftTo = body.getString("giftTo", "").isEmpty() ? null : parseUuid(body.getString("giftTo", ""));
+        Shop.Result result = plugin.community().shop().checkout(me.get(), giftTo, lines, session.user.actor() + " (website)");
         sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
                 .put("cost", result.cost()).put("balance", result.balance())
                 .put("error", result.ok() ? null : result.message()));
@@ -1556,6 +1591,52 @@ public final class WebServer {
                 .put("duration", TimeFormat.preciseDuration(ended.duration()))
                 .put("failed", ended.failed()));
         return result;
+    }
+
+    /** Teleports the admin's own character to a player's location (logout spot if offline) or bed. */
+    private void teleport(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        String mode = body.getString("mode", "");
+        if (!mode.equals("player") && !mode.equals("bed")) {
+            sendJson(ex, 400, error("Unknown teleport"));
+            return;
+        }
+        Optional<LinkedAccount> self = plugin.database().findByDiscordId(session.user.id());
+        if (self.isEmpty()) {
+            sendJson(ex, 409, error("Your Discord account isn't linked to a Minecraft account. Link it and join the server first."));
+            return;
+        }
+        Optional<Player> admin = plugin.proxy().getPlayer(self.get().uuid());
+        if (admin.isEmpty()) {
+            sendJson(ex, 409, error("Join the Minecraft server as " + self.get().minecraftName() + " first."));
+            return;
+        }
+        Optional<PlayerRef> target = resolvePlayer(parseUuid(body.getString("uuid", "")));
+        if (target.isEmpty()) {
+            sendJson(ex, 404, error("Unknown player"));
+            return;
+        }
+        if (target.get().uuid().equals(self.get().uuid())) {
+            sendJson(ex, 409, error("That's you."));
+            return;
+        }
+        boolean online = plugin.proxy().getPlayer(target.get().uuid()).isPresent();
+        String problem = plugin.spy().teleport(admin.get(), target.get(), mode);
+        if (problem != null) {
+            sendJson(ex, 409, error(problem));
+            return;
+        }
+        String place = mode.equals("bed") ? "bed / respawn point" : online ? "location" : "logout spot";
+        String server = admin.get().getCurrentServer().map(c -> c.getServerInfo().getName()).orElse("?");
+        plugin.audit().log(target.get().uuid(), target.get().name(), target.get().discordId(), EventTypes.TELEPORT,
+                "teleported " + self.get().minecraftName() + " to their " + place + " on " + server,
+                session.user.actor() + " (website)");
+        admin.get().sendMessage(plugin.messages().minecraft("minecraft.teleport.done",
+                "player", target.get().name(), "place", place));
+        sendJson(ex, 200, DataObject.empty().put("ok", true).put("message", "Teleported to " + target.get().name() + "'s " + place + "."));
     }
 
     private void spyStart(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {

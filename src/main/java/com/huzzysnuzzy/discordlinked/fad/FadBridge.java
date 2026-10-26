@@ -148,8 +148,11 @@ final class FadBridge {
         }));
     }
 
-    /** Asks the buyer's server to put a Shop order (as one chest) in their inventory. */
-    void shop(ServerConnection connection, String id, java.util.List<Shop.Line> lines) {
+    /**
+     * Asks the receiving player's server to put a Shop order (as one chest named {@code title}) in their inventory.
+     * The title comes last, so DiscordLinkedFAD 0.13 (which doesn't read it) still understands the message.
+     */
+    void shop(ServerConnection connection, String id, java.util.List<Shop.Line> lines, String title) {
         send(connection, out -> {
             out.writeUTF("SHOP");
             out.writeUTF(id);
@@ -158,6 +161,7 @@ final class FadBridge {
                 out.writeUTF(line.id());
                 out.writeInt(line.amount());
             }
+            out.writeUTF(title);
         });
     }
 

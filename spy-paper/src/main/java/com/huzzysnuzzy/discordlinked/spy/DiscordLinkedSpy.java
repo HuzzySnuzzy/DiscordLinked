@@ -46,6 +46,7 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
     private NamespacedKey stateKey;
     private InventoryBridge inventory;
+    private Teleports teleports;
     private boolean folia;
 
     /** Where the target was last seen, copied by the target's own scheduler. */
@@ -94,6 +95,7 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
         getServer().getMessenger().registerIncomingPluginChannel(this, INVENTORY_CHANNEL, this);
         getServer().getMessenger().registerOutgoingPluginChannel(this, INVENTORY_CHANNEL);
         getServer().getPluginManager().registerEvents(this, this);
+        teleports = new Teleports(this);
         try {
             SnapshotOutbox outbox = new SnapshotOutbox(this, getDataFolder().toPath().resolve("outbox"), getLogger());
             inventory = new InventoryBridge(this, outbox);
@@ -131,11 +133,17 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
         String type;
         UUID targetId = null;
         double maxDistance = 0;
+        String teleportId = null;
+        String teleportMode = null;
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(message))) {
             type = in.readUTF();
             if (type.equals("START")) {
                 targetId = UUID.fromString(in.readUTF());
                 maxDistance = in.readDouble();
+            } else if (type.equals("TP")) {
+                teleportId = in.readUTF();
+                teleportMode = in.readUTF();
+                targetId = UUID.fromString(in.readUTF());
             }
         } catch (IOException | IllegalArgumentException e) {
             getLogger().warning("Bad spy message: " + e.getMessage());
@@ -147,6 +155,7 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
         double max = maxDistance;
         switch (type) {
             case "START" -> start(admin, target, max);
+            case "TP" -> teleports.teleport(admin, teleportId, teleportMode, target);
             case "STOP" -> admin.getScheduler().run(this, task -> {
                 Session session = sessions.get(admin.getUniqueId());
                 if (session != null) {
@@ -293,6 +302,10 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
+        if (!sessions.containsKey(player.getUniqueId())) {
+            // Where they logged out, for the website's teleport (not an admin's spectating spot).
+            teleports.saveLogoutSpot(player);
+        }
         Session session = sessions.remove(player.getUniqueId());
         if (session != null) {
             session.cancelTasks();
@@ -355,6 +368,10 @@ public final class DiscordLinkedSpy extends JavaPlugin implements PluginMessageL
 
     private static Position position(Location location) {
         return new Position(location.getWorld().getName(), location.getX(), location.getY(), location.getZ());
+    }
+
+    boolean inSpySession(Player admin) {
+        return sessions.containsKey(admin.getUniqueId());
     }
 
     private void send(Player carrier, String type, String detail) {

@@ -31,6 +31,7 @@ const EVENT_LABELS = {
   ADVANCEMENT: ['Advancement', 'good'],
   CREDITS_ADJUST: ['Credits changed', 'warn'],
   SHOP_PURCHASE: ['Shop', 'warn'],
+  TELEPORT: ['Teleport', 'info'],
 };
 
 // ---- Helpers ----
@@ -518,6 +519,48 @@ async function loadPlayer(uuid) {
   }
 }
 
+// ---- Login streaks ----
+
+/** Streak tiers: the longer the streak, the wilder the badge. Always counted in days. */
+const STREAK_TIERS = [[100, 't7', '👑'], [60, 't6', '🌈'], [30, 't5', '💠'], [14, 't4', '🔥'], [7, 't3', '🔥'], [3, 't2', '🔥'], [1, 't1', '🔥']];
+
+function streakBadge(streak) {
+  if (!streak) return null;
+  const days = streak.current;
+  const sub = [
+    streak.best > days ? `Best: ${streak.best.toLocaleString()} day${streak.best === 1 ? '' : 's'}` : null,
+    streak.rewardsOn ? (streak.joinedToday ? `Today's reward: +${streak.reward} ${streakCurrency()}`
+      : `Join today for +${streak.reward} ${streakCurrency()}`) : null,
+  ].filter(Boolean).join(' · ');
+  if (!days) {
+    return el('div', { class: 'streak t0' }, el('span', { class: 'streak-text' }, 'No login streak'),
+      sub && el('span', { class: 'streak-sub' }, sub));
+  }
+  const [, tier, icon] = STREAK_TIERS.find(([from]) => days >= from);
+  return el('div', { class: `streak ${tier}`, title: 'Days in a row this player has joined the server' },
+    el('span', { class: 'streak-icon', 'aria-hidden': 'true' }, icon),
+    el('span', { class: 'streak-text' }, `${days.toLocaleString()} day streak`),
+    tier === 't7' && el('span', { class: 'streak-sparkles', 'aria-hidden': 'true' }, '✦ ✧ ✦'),
+    sub && el('span', { class: 'streak-sub' }, sub));
+}
+
+const streakCurrency = () => state.player?.community?.currency?.many || 'credits';
+
+async function teleportTo(p, mode, button) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = 'Teleporting…';
+  try {
+    const result = await api('/api/player/teleport', { uuid: p.uuid, mode });
+    toast(result.message);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
 function renderPlayer() {
   const { player: p, suspensions, notes, ips } = state.player;
   const badges = [
@@ -532,10 +575,15 @@ function renderPlayer() {
     el('div', { class: 'info' },
       el('h1', { class: nameClass(p) }, p.minecraftName),
       el('div', { class: 'badges' }, badges),
+      streakBadge(p.streak),
       copyButton(p.uuid, 'UUID'),
       el('div', { class: 'actions' },
         el('a', { class: 'btn btn-ghost btn-small', href: `https://namemc.com/profile/${p.uuid}`, target: '_blank', rel: 'noopener' },
-          'View on NameMC ↗'))),
+          'View on NameMC ↗'),
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', title: 'Teleports your own Minecraft character',
+          onclick: (e) => teleportTo(p, 'player', e.currentTarget) }, p.online ? 'Teleport to them' : 'Teleport to logout spot'),
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', title: 'Their bed or respawn anchor',
+          onclick: (e) => teleportTo(p, 'bed', e.currentTarget) }, 'Teleport to their bed'))),
     actionButtons(p));
 
   const discord = el('div', { class: 'card panel' },
@@ -1076,7 +1124,7 @@ const stat = (label, value, title) => el('div', { class: 'stat', title },
   el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
 
 const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
-const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop' };
+const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop', DAILY: 'Daily reward' };
 
 function creditsDialog(p, community) {
   const currency = community.currency;
@@ -1652,6 +1700,7 @@ function renderShop() {
     title: tab, 'aria-label': tab, onclick: () => { shop.tab = tab; $('shop-search').value = ''; renderShop(); },
   }, shopIcon(icon), el('span', {}, tab))));
   renderShopGrid();
+  renderGiftChoice();
   renderChest();
 }
 
@@ -2005,10 +2054,23 @@ function shopTotal() {
   return { cents, credits: Math.ceil(cents / 100), items, stacks: filled.length };
 }
 
+/** "For me" or one of the players online right now (gifts only go to players who are on). */
+function renderGiftChoice() {
+  const select = $('shop-gift');
+  const recipients = shop.data.recipients || [];
+  const chosen = recipients.some((r) => r.uuid === select.value) ? select.value : '';
+  select.replaceChildren(el('option', { value: '' }, 'For me'),
+    ...recipients.map((r) => el('option', { value: r.uuid }, `Gift to ${r.name}${r.server ? ` (${r.server})` : ''}`)));
+  select.value = chosen;
+  select.disabled = !recipients.length;
+  select.title = recipients.length ? 'Send this chest to someone who is online' : 'Nobody else is online to send a gift to';
+}
+
 function renderShopTotal() {
   const d = shop.data;
   const t = shopTotal();
   const b = d.buyer;
+  const giftTo = (d.recipients || []).find((r) => r.uuid === $('shop-gift').value);
   const held = shop.cursor && !shop.drag
     ? el('div', { class: 'muted shop-holding' }, `In your hand: ${shop.cursor.amount} × ${shopName(shop.cursor.id)}`
       + (lastPointerType === 'mouse' ? ' (Esc puts it back)' : ' (tap a slot to put it down)'))
@@ -2020,14 +2082,16 @@ function renderShopTotal() {
   const buy = $('shop-buy');
   const reason = !d.open ? 'The shop is closed' : !b.linked ? 'Link your Minecraft account first'
     : !t.stacks ? 'Put something in the chest first' : t.credits > b.balance ? `You need ${credits(t.credits - b.balance, d.currency)} more`
-      : !b.online ? 'Join the Minecraft server to check out' : !b.serverReady ? `${b.server} can't deliver orders` : '';
+      : giftTo ? '' : !b.online ? 'Join the Minecraft server to check out' : !b.serverReady ? `${b.server} can't deliver orders` : '';
   buy.disabled = !!reason || shop.busy;
   buy.title = reason;
-  buy.textContent = shop.busy ? 'Delivering…' : t.stacks && !reason ? `Buy for ${credits(t.credits, d.currency)}` : 'Check out';
+  buy.textContent = shop.busy ? 'Delivering…' : !t.stacks || reason ? 'Check out'
+    : giftTo ? `Gift to ${giftTo.name} for ${credits(t.credits, d.currency)}` : `Buy for ${credits(t.credits, d.currency)}`;
   $('shop-clear').disabled = !t.stacks;
 }
 
 $('shop-search').addEventListener('input', () => { renderShop(); });
+$('shop-gift').addEventListener('change', renderShopTotal);
 $('shop-clear').addEventListener('click', () => { shop.chest = shop.chest.map(() => null); renderChest(); });
 $('shop-buy').addEventListener('click', async () => {
   // Like closing an inventory: whatever is in your hand goes into the chest.
@@ -2040,7 +2104,7 @@ $('shop-buy').addEventListener('click', async () => {
   shop.busy = true;
   renderShopTotal();
   try {
-    const result = await api('/api/shop/checkout', { items });
+    const result = await api('/api/shop/checkout', { items, giftTo: $('shop-gift').value || '' });
     shop.chest = shop.chest.map(() => null);
     toast(result.message);
   } catch (e) {
@@ -2195,6 +2259,7 @@ function renderPublicPlayer() {
         p.isAdmin && el('span', { class: 'badge warn' }, 'Staff'),
         p.linked ? el('span', { class: 'badge good' }, 'Member') : el('span', { class: 'badge' }, 'Not linked'),
         ...statusPills(p)),
+      streakBadge(p.streak),
       copyButton(p.uuid, 'UUID'),
       el('div', { class: 'actions' },
         el('a', { class: 'btn btn-ghost btn-small', href: `https://namemc.com/profile/${p.uuid}`, target: '_blank', rel: 'noopener' },

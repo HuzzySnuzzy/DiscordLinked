@@ -29,7 +29,7 @@ final class ShopDelivery {
     }
 
     /** Runs on the player's own thread; {@code reply} gets "ok" or why not. */
-    static void deliver(DiscordLinkedFAD plugin, Player player, List<Line> lines, long receivedAt,
+    static void deliver(DiscordLinkedFAD plugin, Player player, List<Line> lines, String title, long receivedAt,
                         java.util.function.Consumer<String> reply) {
         player.getScheduler().run(plugin, task -> {
             if (System.currentTimeMillis() - receivedAt > DEADLINE_MILLIS) {
@@ -61,9 +61,13 @@ final class ShopDelivery {
                     inventory.setItem(slot, stacks.get(slot));
                 }
                 meta.setBlockState(state);
-                meta.displayName(Component.text("Shop order", NamedTextColor.GOLD).decoration(TextDecoration.ITALIC, false));
+                boolean gift = title.startsWith("Gift");
+                String name = title.length() > 64 ? title.substring(0, 64) : title;
+                meta.displayName(Component.text(name, gift ? NamedTextColor.LIGHT_PURPLE : NamedTextColor.GOLD)
+                        .decoration(TextDecoration.ITALIC, false));
                 meta.lore(List.of(Component.text(stacks.size() + (stacks.size() == 1 ? " stack" : " stacks")
-                        + " bought on the website", NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)));
+                        + (gift ? " sent from the website" : " bought on the website"), NamedTextColor.GRAY)
+                        .decoration(TextDecoration.ITALIC, false)));
             });
             if (!player.getInventory().addItem(chest).isEmpty()) {
                 reply.accept("full");

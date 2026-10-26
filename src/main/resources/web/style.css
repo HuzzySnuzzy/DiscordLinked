@@ -926,3 +926,58 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .shop-cursor[hidden] { display: none; }
 .shop-cursor.spent { opacity: .35; }
 .shop-holding { flex-basis: 100%; font-size: 12px; margin-top: 2px; }
+
+/* ---- Login streak badge: the longer the streak, the wilder it gets ---- */
+.streak {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0 4px; padding: 6px 12px;
+  border-radius: 12px; font-weight: 700; font-size: 14px; position: relative; overflow: hidden; max-width: 100%;
+  width: fit-content; align-self: flex-start; justify-self: start;
+  background: var(--glass-soft); border: 1px solid var(--glass-border);
+}
+.streak-sub { font-weight: 500; font-size: 12px; color: var(--muted); flex-basis: 100%; }
+.streak.t0 { font-weight: 500; color: var(--muted); }
+.streak.t1 .streak-text { color: var(--text); }
+.streak.t2 { border-color: rgba(255, 140, 0, .45); }
+.streak.t2 .streak-text { color: #e8730c; }
+.streak.t3 {
+  background: linear-gradient(135deg, rgba(255, 170, 40, .22), rgba(255, 70, 30, .22)); border-color: rgba(255, 110, 20, .6);
+  animation: streak-glow 2.4s ease-in-out infinite;
+}
+.streak.t3 .streak-text { color: #f05a14; }
+.streak.t4, .streak.t5, .streak.t6, .streak.t7 { color: #fff; border: none; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.streak.t4 .streak-sub, .streak.t5 .streak-sub, .streak.t6 .streak-sub, .streak.t7 .streak-sub { color: rgba(255, 255, 255, .88); }
+.streak.t4 {
+  background: linear-gradient(120deg, #ff4d00, #ff9500, #ffd000, #ff6a00, #e01e00); background-size: 300% 300%;
+  animation: streak-flow 3s ease infinite, streak-glow 1.8s ease-in-out infinite;
+}
+.streak.t4 .streak-icon { display: inline-block; animation: streak-flicker .6s ease-in-out infinite alternate; }
+.streak.t5 {
+  background: linear-gradient(120deg, #2b5bff, #7a2bff, #00c2ff, #b02bff, #2b5bff); background-size: 300% 300%;
+  animation: streak-flow 2.6s ease infinite, streak-glow-blue 1.6s ease-in-out infinite;
+}
+.streak.t5 .streak-icon { display: inline-block; animation: streak-spin 3s linear infinite; }
+.streak.t6, .streak.t7 {
+  background: linear-gradient(90deg, #ff004c, #ff8a00, #ffe600, #2bff6a, #00c8ff, #7a2bff, #ff00c8, #ff004c);
+  background-size: 400% 100%; animation: streak-flow 4s linear infinite, streak-glow-rainbow 2s ease-in-out infinite;
+}
+.streak.t7 { font-size: 17px; padding: 9px 16px; border-radius: 16px; }
+.streak.t7::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, .7) 45%, transparent 60%);
+  transform: translateX(-100%); animation: streak-shine 2.2s ease-in-out infinite;
+}
+.streak.t7 .streak-icon { display: inline-block; animation: streak-bob 1.4s ease-in-out infinite; }
+.streak-sparkles { letter-spacing: 4px; animation: streak-twinkle 1.2s ease-in-out infinite alternate; }
+@keyframes streak-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+@keyframes streak-glow { 0%, 100% { box-shadow: 0 0 0 rgba(255, 90, 0, 0); } 50% { box-shadow: 0 0 18px rgba(255, 90, 0, .55); } }
+@keyframes streak-glow-blue { 0%, 100% { box-shadow: 0 0 6px rgba(80, 90, 255, .3); } 50% { box-shadow: 0 0 22px rgba(120, 60, 255, .7); } }
+@keyframes streak-glow-rainbow { 0%, 100% { box-shadow: 0 0 10px rgba(255, 0, 140, .45); } 50% { box-shadow: 0 0 28px rgba(0, 200, 255, .7); } }
+@keyframes streak-flicker { from { transform: scale(1) rotate(-4deg); } to { transform: scale(1.18) rotate(4deg); } }
+@keyframes streak-spin { to { transform: rotate(360deg); } }
+@keyframes streak-bob { 0%, 100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-3px) rotate(6deg); } }
+@keyframes streak-shine { 0% { transform: translateX(-100%); } 60%, 100% { transform: translateX(100%); } }
+@keyframes streak-twinkle { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .streak, .streak *, .streak::after { animation: none !important; }
+}
+#shop-gift { max-width: 220px; }

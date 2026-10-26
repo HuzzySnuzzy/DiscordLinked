@@ -200,7 +200,8 @@ public final class DiscordBot extends ListenerAdapter {
     }
 
     /** Minecraft -> Discord side of the chat bridge. Does nothing if disabled or the message is empty. */
-    public void bridgeToDiscord(String key, String player, String server, String message) {
+    /** {@code extra}: more placeholder name/value pairs (values are escaped like the others). */
+    public void bridgeToDiscord(String key, String player, String server, String message, String... extra) {
         PluginConfig config = plugin.config();
         if (jda == null || !config.chatBridgeEnabled() || !config.minecraftToDiscord() || plugin.messages().isEmpty(key)) {
             return;
@@ -209,10 +210,15 @@ public final class DiscordBot extends ListenerAdapter {
         if (channel == null) {
             return;
         }
-        String text = plugin.messages().discord(key,
+        List<String> placeholders = new ArrayList<>(List.of(
                 "player", MarkdownSanitizer.escape(player),
                 "server", MarkdownSanitizer.escape(server),
-                "message", MarkdownSanitizer.escape(message));
+                "message", MarkdownSanitizer.escape(message)));
+        for (int i = 0; i + 1 < extra.length; i += 2) {
+            placeholders.add(extra[i]);
+            placeholders.add(MarkdownSanitizer.escape(extra[i + 1]));
+        }
+        String text = plugin.messages().discord(key, placeholders.toArray(String[]::new));
         channel.sendMessage(truncate(text)).setAllowedMentions(EnumSet.noneOf(Message.MentionType.class)).queue();
     }
 

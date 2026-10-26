@@ -168,6 +168,17 @@ public final class Database implements AutoCloseable {
                         SELECT minecraft_uuid, minecraft_name, linked_at, last_seen FROM linked_accounts""");
             }
         }
+        // Added in 0.14.0: the server a player was last on (where their logout spot and bed are), and login streaks.
+        addColumnIfMissing("known_players", "last_server", "TEXT");
+        try (Statement st = connection.createStatement()) {
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS login_streaks (
+                        minecraft_uuid TEXT PRIMARY KEY,
+                        last_day       TEXT NOT NULL,
+                        streak         INTEGER NOT NULL,
+                        best           INTEGER NOT NULL
+                    )""");
+        }
         try (Statement st = connection.createStatement()) {
             // Added in 0.10.0: credits, interactions and advancements from DiscordLinkedFAD.
             st.execute("""
@@ -429,6 +440,63 @@ public final class Database implements AutoCloseable {
             }
         }
         return players;
+    }
+
+    public synchronized void setLastServer(UUID uuid, String name, String server) throws SQLException {
+        touchKnownPlayer(uuid, name);
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE known_players SET last_server = ? WHERE minecraft_uuid = ?")) {
+            ps.setString(1, server);
+            ps.setString(2, uuid.toString());
+            ps.executeUpdate();
+        }
+    }
+
+    public synchronized Optional<String> lastServer(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT last_server FROM known_players WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.ofNullable(rs.getString(1)) : Optional.empty();
+            }
+        }
+    }
+
+    // ---- Login streaks ----
+
+    /**
+     * Counts a join on {@code today}: the first join of a day continues the streak if they also joined the day
+     * before, and starts it again at 1 otherwise. Later joins the same day change nothing.
+     */
+    public synchronized LoginStreak recordLogin(UUID uuid, java.time.LocalDate today) throws SQLException {
+        return transaction(() -> {
+            LoginStreak old = loginStreak(uuid).orElse(null);
+            if (old != null && today.equals(old.lastDay())) {
+                return old;
+            }
+            int streak = old != null && today.minusDays(1).equals(old.lastDay()) ? old.current() + 1 : 1;
+            int best = Math.max(streak, old == null ? 0 : old.best());
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO login_streaks (minecraft_uuid, last_day, streak, best) VALUES (?, ?, ?, ?) "
+                            + "ON CONFLICT (minecraft_uuid) DO UPDATE SET last_day = excluded.last_day, "
+                            + "streak = excluded.streak, best = excluded.best")) {
+                ps.setString(1, uuid.toString());
+                ps.setString(2, today.toString());
+                ps.setInt(3, streak);
+                ps.setInt(4, best);
+                ps.executeUpdate();
+            }
+            return new LoginStreak(streak, best, today, true);
+        });
+    }
+
+    public synchronized Optional<LoginStreak> loginStreak(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM login_streaks WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(new LoginStreak(rs.getInt("streak"), rs.getInt("best"),
+                        java.time.LocalDate.parse(rs.getString("last_day")), false)) : Optional.empty();
+            }
+        }
     }
 
     public synchronized int knownPlayerCount() throws SQLException {

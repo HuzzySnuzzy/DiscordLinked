@@ -18,13 +18,17 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Website "Spy" sessions: puts an admin's Minecraft character in spectator next to a player, via the
@@ -193,6 +197,9 @@ public final class SpyManager {
             return;
         }
         Player admin = connection.getPlayer();
+        if (teleportResult(admin, event.getData())) {
+            return;
+        }
         Session session = byAdmin.get(admin.getUniqueId());
         if (session == null) {
             return;
@@ -252,6 +259,96 @@ public final class SpyManager {
                 end(session, "the player changed server");
             }
         }
+    }
+
+    // ---- Teleports from the website ----
+
+    private record PendingTeleport(UUID admin, CompletableFuture<String> outcome) {
+    }
+
+    private final Map<String, PendingTeleport> teleports = new ConcurrentHashMap<>();
+
+    /**
+     * Teleports the admin's own character to a player: {@code "player"} = where they are now (or where they logged
+     * out), {@code "bed"} = their bed or respawn anchor. Moves the admin to that player's (last) server first if
+     * needed. Blocks for up to about 20 seconds; returns null when done, otherwise why not.
+     */
+    public String teleport(Player admin, PlayerRef target, String mode) {
+        if (byAdmin.containsKey(admin.getUniqueId())) {
+            return "End your spy session first.";
+        }
+        if (admin.getCurrentServer().isEmpty()) {
+            return "Your character needs to be on a server.";
+        }
+        Optional<Player> online = plugin.proxy().getPlayer(target.uuid());
+        String serverName = online.flatMap(Player::getCurrentServer).map(c -> c.getServerInfo().getName()).orElse(null);
+        if (serverName == null) {
+            try {
+                serverName = plugin.database().lastServer(target.uuid()).orElse(null);
+            } catch (SQLException e) {
+                plugin.logger().error("Could not look up the last server of {}", target.name(), e);
+                return "Database error.";
+            }
+        }
+        if (serverName == null) {
+            return "It isn't known which server " + target.name() + " was last on (they haven't played since DiscordLinked "
+                    + "0.14 was installed).";
+        }
+        Optional<RegisteredServer> server = plugin.proxy().getServer(serverName);
+        if (server.isEmpty()) {
+            return target.name() + " was last on " + serverName + ", which isn't a server on this proxy anymore.";
+        }
+        if (!isOn(admin, serverName)) {
+            try {
+                var result = admin.createConnectionRequest(server.get()).connect().get(10, TimeUnit.SECONDS);
+                if (result == null || !result.isSuccessful()) {
+                    return "Couldn't move you to " + serverName + ".";
+                }
+                // Give the server a moment to finish the join before it gets the teleport.
+                Thread.sleep(1500);
+            } catch (TimeoutException | ExecutionException e) {
+                return "Couldn't move you to " + serverName + ".";
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return "Interrupted.";
+            }
+        }
+        String id = UUID.randomUUID().toString();
+        CompletableFuture<String> outcome = new CompletableFuture<>();
+        teleports.put(id, new PendingTeleport(admin.getUniqueId(), outcome));
+        try {
+            send(admin, "TP", out -> {
+                out.writeUTF(id);
+                out.writeUTF(mode);
+                out.writeUTF(target.uuid().toString());
+            });
+            String result = outcome.get(8, TimeUnit.SECONDS);
+            return "ok".equals(result) ? null : result;
+        } catch (TimeoutException | ExecutionException e) {
+            return "No reply from " + serverName + ". Is DiscordLinkedSpy 0.14 or newer installed there?";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "Interrupted.";
+        } finally {
+            teleports.remove(id);
+        }
+    }
+
+    /** Handles "TPRESULT" from a backend; returns whether the message was one. */
+    private boolean teleportResult(Player admin, byte[] data) {
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
+            if (!in.readUTF().equals("TPRESULT")) {
+                return false;
+            }
+            PendingTeleport pending = teleports.get(in.readUTF());
+            String outcome = in.readUTF();
+            if (pending != null && pending.admin().equals(admin.getUniqueId())) {
+                pending.outcome().complete(outcome);
+            }
+        } catch (IOException e) {
+            plugin.logger().warn("Bad teleport reply: {}", e.getMessage());
+        }
+        return true;
     }
 
     public void shutdown() {

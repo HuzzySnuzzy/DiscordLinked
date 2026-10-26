@@ -3,6 +3,7 @@ package com.huzzysnuzzy.discordlinked.listener;
 import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
+import com.huzzysnuzzy.discordlinked.storage.LoginStreak;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
 import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.ResultedEvent.ComponentResult;
@@ -87,7 +88,15 @@ public final class PlayerListener {
                 EventTypes.JOIN, "ip=" + ip(player));
         updateLastSeen(player);
         recordIp(player);
-        plugin.bot().bridgeToDiscord("discord.bridge.join", player.getUsername(), "", "");
+        LoginStreak streak = plugin.community().dailyLogin(player);
+        int days = streak == null ? 0 : streak.current();
+        int announceFrom = plugin.config().streakAnnounceDays();
+        if (announceFrom > 0 && days >= announceFrom) {
+            plugin.bot().bridgeToDiscord("discord.bridge.join-streak", player.getUsername(), "", "",
+                    "streak", String.valueOf(days));
+        } else {
+            plugin.bot().bridgeToDiscord("discord.bridge.join", player.getUsername(), "", "");
+        }
     }
 
     @Subscribe
@@ -107,6 +116,12 @@ public final class PlayerListener {
         String from = event.getPreviousServer().map(s -> s.getServerInfo().getName()).orElse("(proxy)");
         plugin.audit().log(player.getUniqueId(), player.getUsername(), null, EventTypes.SERVER_SWITCH,
                 from + " -> " + event.getServer().getServerInfo().getName());
+        // Where their logout spot and bed will be, for the website's teleport buttons.
+        try {
+            plugin.database().setLastServer(player.getUniqueId(), player.getUsername(), event.getServer().getServerInfo().getName());
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not store the server of {}", player.getUsername(), e);
+        }
     }
 
     // Run last so mutes/filters from other plugins have already decided.

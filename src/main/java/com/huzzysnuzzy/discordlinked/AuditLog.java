@@ -112,6 +112,8 @@ public final class AuditLog {
         public static final String CREDITS_ADJUST = "CREDITS_ADJUST";
         /** A website Shop order: delivered, or declined and refunded. */
         public static final String SHOP_PURCHASE = "SHOP_PURCHASE";
+        /** An admin teleported to a player's location or bed from the website. */
+        public static final String TELEPORT = "TELEPORT";
 
         private EventTypes() {
         }

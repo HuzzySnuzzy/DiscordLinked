@@ -50,7 +50,11 @@ public record PluginConfig(
         boolean fadDiscordCommands,
         boolean webMemberAccess,
         boolean shopEnabled,
-        int shopPricePercent
+        int shopPricePercent,
+        int dailyRewardBase,
+        int dailyRewardPerDay,
+        int dailyRewardMax,
+        int streakAnnounceDays
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -98,7 +102,11 @@ public record PluginConfig(
                 parseBoolean(props, "fad-discord-commands"),
                 parseBoolean(props, "web-member-access"),
                 parseBoolean(props, "shop-enabled"),
-                Integer.parseInt(props.getProperty("shop-price-percent").trim())
+                Integer.parseInt(props.getProperty("shop-price-percent").trim()),
+                Integer.parseInt(props.getProperty("daily-reward-base").trim()),
+                Integer.parseInt(props.getProperty("daily-reward-per-day").trim()),
+                Integer.parseInt(props.getProperty("daily-reward-max").trim()),
+                Integer.parseInt(props.getProperty("streak-announce-days").trim())
         );
     }
 

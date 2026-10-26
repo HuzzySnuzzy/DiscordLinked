@@ -129,10 +129,11 @@ public final class Shop {
     }
 
     /**
-     * Pays for an order and has it delivered to the buyer's Minecraft character. Blocks until the server answers
+     * Pays for an order and has it delivered: to the buyer's own Minecraft character, or as a gift to {@code giftTo}
+     * (another player who is online right now; the buyer doesn't need to be). Blocks until the server answers
      * (a few seconds at most), so call it off the network threads.
      */
-    public Result checkout(LinkedAccount buyer, List<Line> lines, String actor) throws SQLException {
+    public Result checkout(LinkedAccount buyer, UUID giftTo, List<Line> lines, String actor) throws SQLException {
         if (!open()) {
             return fail("The shop is closed.");
         }
@@ -157,15 +158,24 @@ public final class Shop {
         }
         long cost = total(cents);
 
-        Optional<Player> online = plugin.proxy().getPlayer(buyer.uuid());
-        Optional<ServerConnection> connection = online.flatMap(Player::getCurrentServer);
-        if (connection.isEmpty()) {
-            return fail("Join the Minecraft server first: the chest is put straight into your inventory.");
+        boolean gift = giftTo != null;
+        if (gift && giftTo.equals(buyer.uuid())) {
+            gift = false;
         }
+        UUID receiverId = gift ? giftTo : buyer.uuid();
+        Optional<Player> online = plugin.proxy().getPlayer(buyer.uuid());
+        Optional<Player> receiver = plugin.proxy().getPlayer(receiverId);
+        Optional<ServerConnection> connection = receiver.flatMap(Player::getCurrentServer);
+        if (connection.isEmpty()) {
+            return fail(gift ? "Gifts can only go to players who are on the Minecraft server right now."
+                    : "Join the Minecraft server first: the chest is put straight into your inventory.");
+        }
+        String receiverName = receiver.get().getUsername();
         String server = connection.get().getServerInfo().getName();
         if (!community.servers().containsKey(server)) {
-            return fail("The server you're on (" + server + ") can't deliver orders. Move to another server, "
-                    + "or ask an admin to install DiscordLinkedFAD there.");
+            return fail((gift ? receiverName + " is on " + server : "The server you're on (" + server + ")")
+                    + ", which can't deliver orders" + (gift ? "." : ". Move to another server, or ask an admin to install "
+                    + "DiscordLinkedFAD there."));
         }
         Set<String> known = serverItems.get(server);
         if (known != null) {
@@ -179,25 +189,36 @@ public final class Shop {
             return fail("Your previous order is still on its way.");
         }
         try {
-            String summary = summary(lines);
+            String summary = summary(lines) + (gift ? " (gift to " + receiverName + ")" : "");
             PluginConfig c = plugin.config();
             long balance = plugin.database().addCredits(buyer.uuid(), buyer.minecraftName(), -cost, "SHOP", summary, actor);
             if (balance < 0) {
                 long has = plugin.database().creditAccount(buyer.uuid()).map(a -> a.credits()).orElse(0L);
                 return fail("This costs " + c.credits(cost) + " but you have " + c.credits(has) + ".");
             }
-            String outcome = deliver(connection.get(), buyer.uuid(), lines);
+            String title = gift ? "Gift from " + buyer.minecraftName() : "Shop order";
+            String outcome = deliver(connection.get(), receiverId, lines, title);
+            String stacks = lines.size() + (lines.size() == 1 ? " stack" : " stacks");
             if ("ok".equals(outcome)) {
                 plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.SHOP_PURCHASE,
-                        "bought " + summary + " in a chest for " + c.credits(cost) + ", now " + c.credits(balance), actor);
-                online.get().sendMessage(plugin.messages().minecraft("minecraft.shop.delivered",
-                        "stacks", lines.size() + (lines.size() == 1 ? " stack" : " stacks"), "cost", c.credits(cost)));
+                        (gift ? "gifted " : "bought ") + summary + " in a chest for " + c.credits(cost) + ", now "
+                                + c.credits(balance), actor);
+                if (gift) {
+                    receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.gift-received",
+                            "from", buyer.minecraftName(), "stacks", stacks));
+                    online.ifPresent(player -> player.sendMessage(plugin.messages().minecraft("minecraft.shop.gift-sent",
+                            "to", receiverName, "stacks", stacks, "cost", c.credits(cost))));
+                    return new Result(true, "Delivered! " + receiverName + " got your gift.", cost, balance);
+                }
+                receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.delivered",
+                        "stacks", stacks, "cost", c.credits(cost)));
                 return new Result(true, "Delivered! The chest is in your inventory.", cost, balance);
             }
+            String whose = gift ? receiverName + "'s" : "your";
             String reason = switch (outcome) {
-                case "full" -> "your inventory has no free slot for the chest";
+                case "full" -> whose + " inventory has no free slot for the chest";
                 case "timeout" -> "the server didn't answer";
-                case "offline" -> "you left the server";
+                case "offline" -> gift ? receiverName + " left the server" : "you left the server";
                 case "expired" -> "the server was too busy";
                 default -> outcome.startsWith("unknown:") ? name(outcome.substring(8)) + " doesn't exist on that server"
                         : outcome.startsWith("stack:") ? name(outcome.substring(6)) + " doesn't stack that high on that server"
@@ -215,12 +236,12 @@ public final class Shop {
         }
     }
 
-    private String deliver(ServerConnection connection, UUID player, List<Line> lines) {
+    private String deliver(ServerConnection connection, UUID player, List<Line> lines, String title) {
         String id = UUID.randomUUID().toString();
         CompletableFuture<String> outcome = new CompletableFuture<>();
         deliveries.put(id, new Delivery(player, outcome));
         try {
-            community.bridge().shop(connection, id, lines);
+            community.bridge().shop(connection, id, lines, title);
             return outcome.get(DELIVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             return "timeout";
@@ -234,7 +255,7 @@ public final class Shop {
         }
     }
 
-    /** The server's answer to a delivery. Only the buyer's own server connection can answer. */
+    /** The server's answer to a delivery. Only the receiving player's own server connection can answer. */
     void delivered(UUID carrier, String id, String outcome) {
         Delivery delivery = deliveries.get(id);
         if (delivery != null && delivery.player().equals(carrier)) {

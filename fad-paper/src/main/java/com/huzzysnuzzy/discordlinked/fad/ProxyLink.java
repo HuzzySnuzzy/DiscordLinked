@@ -172,7 +172,9 @@ final class ProxyLink implements PluginMessageListener {
                     for (int i = 0; i < count; i++) {
                         lines.add(new ShopDelivery.Line(in.readUTF(), in.readInt()));
                     }
-                    ShopDelivery.deliver(plugin, carrier, lines, receivedAt, outcome -> send(carrier, out -> {
+                    // The chest's name ("Shop order", "Gift from ..."); older proxies don't send one.
+                    String title = in.available() > 0 ? in.readUTF() : "Shop order";
+                    ShopDelivery.deliver(plugin, carrier, lines, title, receivedAt, outcome -> send(carrier, out -> {
                         out.writeUTF("SHOP_RESULT");
                         out.writeUTF(id);
                         out.writeUTF(outcome);
