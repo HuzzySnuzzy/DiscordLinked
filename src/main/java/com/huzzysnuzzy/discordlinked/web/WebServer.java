@@ -18,6 +18,7 @@ import com.huzzysnuzzy.discordlinked.storage.CreditTransaction;
 import com.huzzysnuzzy.discordlinked.storage.EarnedAdvancement;
 import com.huzzysnuzzy.discordlinked.storage.InteractionRecord;
 import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
+import com.huzzysnuzzy.discordlinked.fad.Market;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
 import com.huzzysnuzzy.discordlinked.storage.KnownPlayer;
 import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
@@ -81,11 +82,12 @@ public final class WebServer {
     /** Everything the community view (non-admins and off-duty admins) may call. */
     private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
             "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty",
-            "GET /api/shop", "POST /api/shop/checkout");
+            "GET /api/shop", "POST /api/shop/checkout", "GET /api/market", "POST /api/market/exchange");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
             EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
-            EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST, EventTypes.SHOP_PURCHASE);
+            EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST, EventTypes.SHOP_PURCHASE, EventTypes.SALE,
+            EventTypes.EXCHANGE);
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final long MAX_CREDIT_ADJUSTMENT = 1_000_000_000L;
     private static final int MAX_EXPORT_ROWS = 50_000;
@@ -122,8 +124,9 @@ public final class WebServer {
             Map.entry("deaths", Set.of(EventTypes.DEATH)),
             Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)),
             Map.entry("community", Set.of(EventTypes.INTERACTION, EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST,
-                    EventTypes.SHOP_PURCHASE)),
-            Map.entry("shop", Set.of(EventTypes.SHOP_PURCHASE)));
+                    EventTypes.SHOP_PURCHASE, EventTypes.SALE, EventTypes.EXCHANGE)),
+            Map.entry("shop", Set.of(EventTypes.SHOP_PURCHASE)),
+            Map.entry("market", Set.of(EventTypes.SALE, EventTypes.EXCHANGE)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -535,6 +538,8 @@ public final class WebServer {
             case "GET /api/shop" -> sendJson(ex, 200, shop(session));
             case "POST /api/shop/checkout" -> shopCheckout(ex, session);
             case "POST /api/shop/item" -> shopItem(ex, session);
+            case "GET /api/market" -> sendJson(ex, 200, market(session));
+            case "POST /api/market/exchange" -> marketExchange(ex, session);
             case "POST /api/player/teleport" -> teleport(ex, session);
             case "GET /api/logs" -> sendJson(ex, 200, logs(query(ex)));
             case "GET /api/logs/export.csv" -> exportCsv(ex, query(ex), session);
@@ -580,7 +585,8 @@ public final class WebServer {
                 .put("sheetsEnabled", staff && sheets != null)
                 .put("isOwner", staff && isOwner(session))
                 .put("communityEnabled", plugin.config().fadEnabled())
-                .put("shopOpen", plugin.community().shop().open());
+                .put("shopOpen", plugin.community().shop().open())
+                .put("marketOpen", plugin.community().market().open());
     }
 
     private void setDuty(HttpExchange ex, Sessions.Session session) throws IOException {
@@ -907,6 +913,7 @@ public final class WebServer {
         // Credits and advancements, without the staff-only parts (the ledger has admins' reasons).
         DataObject community = playerCommunity(uuid, linked);
         community.remove("transactions");
+        community.remove("microTransactions");
         community.remove("afkSeconds");
         community.remove("optedOut");
         sendJson(ex, 200, DataObject.empty()
@@ -1019,6 +1026,12 @@ public final class WebServer {
                     .put("detail", t.detail() == null ? "" : t.detail()).put("actor", t.actor() == null ? "" : t.actor())
                     .put("time", t.createdAt().toEpochMilli()));
         }
+        DataArray microTransactions = DataArray.empty();
+        for (CreditTransaction t : plugin.database().microTransactions(uuid, 25)) {
+            microTransactions.add(DataObject.empty().put("amount", t.amount()).put("balance", t.balance())
+                    .put("kind", t.kind()).put("detail", t.detail() == null ? "" : t.detail())
+                    .put("actor", t.actor() == null ? "" : t.actor()).put("time", t.createdAt().toEpochMilli()));
+        }
         DataArray favourites = DataArray.empty();
         plugin.database().interactionCounts(uuid).entrySet().stream().limit(6).forEach(e ->
                 favourites.add(DataObject.empty().put("action", e.getKey()).put("count", e.getValue())));
@@ -1035,7 +1048,18 @@ public final class WebServer {
                 .put("optedOut", plugin.community().isOptedOut(uuid, linked == null ? null : linked.discordId()))
                 .put("favourites", favourites)
                 .put("advancements", advancements)
-                .put("transactions", transactions);
+                .put("transactions", transactions)
+                .put("market", plugin.community().market().open())
+                .put("micro", account.map(CreditAccount::micro).orElse(0L))
+                .put("microEarned", account.map(CreditAccount::microEarned).orElse(0L))
+                .put("microRank", plugin.community().market().rank(uuid))
+                .put("microCurrency", microCurrency())
+                .put("microTransactions", microTransactions);
+    }
+
+    private DataObject microCurrency() {
+        PluginConfig c = plugin.config();
+        return DataObject.empty().put("one", c.microName()).put("many", c.microNamePlural()).put("symbol", c.microSymbol());
     }
 
     /** The Community page: totals, leaderboard, recent interactions and the interactions the servers offer. */
@@ -1131,7 +1155,10 @@ public final class WebServer {
                     .put("price", shop.unitCents(item, override));
             if (manage) {
                 row.put("disabled", disabled).put("percent", override == null ? 100 : override.percent())
-                        .put("unavailable", !exists);
+                        .put("unavailable", !exists)
+                        .put("sellDisabled", override != null && override.sellDisabled())
+                        .put("sellPercent", override == null ? 100 : override.sellPercent())
+                        .put("sell", plugin.community().market().normalPrice(item, override));
             }
             items.add(row);
         }
@@ -1167,6 +1194,9 @@ public final class WebServer {
                 .put("fadEnabled", plugin.config().fadEnabled())
                 .put("percent", plugin.config().shopPricePercent())
                 .put("currency", currency())
+                .put("market", plugin.community().market().open())
+                .put("sellPercent", plugin.config().sellPricePercent())
+                .put("microCurrency", microCurrency())
                 .put("manage", manage)
                 .put("slots", Shop.CHEST_SLOTS)
                 .put("chestPrice", shop.chestCents(overrides))
@@ -1221,17 +1251,93 @@ public final class WebServer {
             sendJson(ex, 400, error("Unknown item"));
             return;
         }
+        ShopOverride old = plugin.database().shopOverrides().get(id);
         boolean enabled = body.getBoolean("enabled", true);
         int percent = body.getInt("percent", 100);
-        if (percent < 1 || percent > 100_000) {
+        boolean sellEnabled = body.getBoolean("sellEnabled", old == null || !old.sellDisabled());
+        int sellPercent = body.getInt("sellPercent", old == null ? 100 : old.sellPercent());
+        if (percent < 1 || percent > 100_000 || sellPercent < 1 || sellPercent > 100_000) {
             sendJson(ex, 400, error("The percentage must be between 1 and 100000."));
             return;
         }
-        plugin.database().setShopOverride(id, !enabled, percent);
+        plugin.database().setShopOverride(id, !enabled, percent, !sellEnabled, sellPercent);
         plugin.audit().log(null, null, session.user.id(), EventTypes.SETTINGS_CHANGE,
-                "shop item " + id + ": " + (enabled ? "for sale" : "not for sale") + ", " + percent + "% price",
+                "shop item " + id + ": " + (enabled ? "for sale" : "not for sale") + ", " + percent + "% price; "
+                        + (sellEnabled ? "sellable at " + sellPercent + "% of its sell price" : "can't be sold"),
                 session.user.actor() + " (website)");
         sendJson(ex, 200, DataObject.empty().put("ok", true));
+    }
+
+    // ---- Market ----
+
+    /**
+     * The Market page: the microcredit leaderboard, the viewer's balances for exchanging, and what every item sells
+     * for (thousandths of a microcredit each, normally and right now).
+     */
+    private DataObject market(Sessions.Session session) throws SQLException {
+        PluginConfig c = plugin.config();
+        Market market = plugin.community().market();
+        DataArray leaderboard = DataArray.empty();
+        for (LeaderboardRow row : market.top(50)) {
+            leaderboard.add(DataObject.empty().put("uuid", row.uuid().toString()).put("name", row.name())
+                    .put("micro", row.micro()).put("microEarned", row.microEarned())
+                    .put("online", plugin.proxy().getPlayer(row.uuid()).isPresent()));
+        }
+        DataObject me = DataObject.empty();
+        Optional<LinkedAccount> linked = plugin.database().findByDiscordId(session.user.id());
+        me.put("linked", linked.isPresent());
+        if (linked.isPresent()) {
+            Optional<CreditAccount> account = plugin.database().creditAccount(linked.get().uuid());
+            me.put("uuid", linked.get().uuid().toString()).put("name", linked.get().minecraftName())
+                    .put("micro", account.map(CreditAccount::micro).orElse(0L))
+                    .put("microEarned", account.map(CreditAccount::microEarned).orElse(0L))
+                    .put("credits", account.map(CreditAccount::credits).orElse(0L))
+                    .put("rank", market.rank(linked.get().uuid()));
+        }
+        DataArray items = DataArray.empty();
+        Map<String, Shop.Item> catalog = plugin.community().shop().catalog();
+        for (Market.Price price : market.prices(plugin.community().shop().availableItems())) {
+            Shop.Item item = catalog.get(price.id());
+            items.add(DataObject.empty().put("id", price.id()).put("tab", item.tab()).put("stack", item.stack())
+                    .put("normal", price.normal()).put("now", price.now()));
+        }
+        Map<String, Long> totals = plugin.database().communityTotals(Instant.now().minus(Duration.ofDays(1)));
+        return DataObject.empty()
+                .put("open", market.open())
+                .put("fadEnabled", c.fadEnabled())
+                .put("currency", microCurrency())
+                .put("credits", currency())
+                .put("rate", c.microPerCredit())
+                .put("sellPercent", c.sellPricePercent())
+                .put("ranking", market.byEarned() ? "earned" : "balance")
+                .put("dropping", c.sellPriceDrop())
+                .put("dropAfter", c.sellPriceDropAfter())
+                .put("recoveryHours", c.sellPriceRecoveryHours())
+                .put("held", totals.getOrDefault("micro", 0L))
+                .put("earned", totals.getOrDefault("microEarned", 0L))
+                .put("manage", session.staff() && isOwner(session))
+                .put("me", me)
+                .put("leaderboard", leaderboard)
+                .put("items", items);
+    }
+
+    /** Microcredits to credits for the viewer's own linked account: {"credits": n} or {"all": true}. */
+    private void marketExchange(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Optional<LinkedAccount> me = plugin.database().findByDiscordId(session.user.id());
+        if (me.isEmpty()) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        long credits = body.getBoolean("all", false) ? -1 : body.getLong("credits", 0);
+        Market.ExchangeResult result = plugin.community().market().exchange(me.get().uuid(), me.get().minecraftName(),
+                credits, session.user.actor() + " (website)");
+        sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
+                .put("micro", result.micro()).put("credits", result.credits())
+                .put("error", result.ok() ? null : result.message()));
     }
 
     /** Gives (positive amount) or takes (negative) credits, with a reason. */

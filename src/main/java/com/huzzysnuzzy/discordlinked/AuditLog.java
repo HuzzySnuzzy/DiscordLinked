@@ -114,6 +114,10 @@ public final class AuditLog {
         public static final String SHOP_PURCHASE = "SHOP_PURCHASE";
         /** An admin teleported to a player's location or bed from the website. */
         public static final String TELEPORT = "TELEPORT";
+        /** Items sold in game for microcredits. */
+        public static final String SALE = "SALE";
+        /** Microcredits exchanged for credits. */
+        public static final String EXCHANGE = "EXCHANGE";
 
         private EventTypes() {
         }

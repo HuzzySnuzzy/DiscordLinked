@@ -107,6 +107,11 @@ public final class Shop {
         return all;
     }
 
+    /** Items each server knows, by server name. */
+    Map<String, Set<String>> serverItems() {
+        return serverItems;
+    }
+
     void serverItems(String server, Set<String> items) {
         serverItems.put(server, Set.copyOf(items));
     }

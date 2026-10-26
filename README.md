@@ -112,6 +112,34 @@ the Discord join message shows it: ":green_circle: **Huzzeh** joined the server 
   `shop-price-percent`) on the Settings page, and on the Shop page **Edit items** turns single items off or
   gives them their own price percentage.
 
+**Market: selling for microcredits.** Players sell items in game for **microcredits**, a second currency with
+its own leaderboard, made for people building farms and factories. Needs DiscordLinked and DiscordLinkedFAD
+0.16.0 or newer.
+- `/sell` opens a double chest: put items in and close it (or click **Sell now**) to sell them. The bottom row
+  shows what it's all worth as you go; **Cancel** gives everything back. Leaving the game, dying or teleporting
+  with it open gives everything back too, so nothing is sold by surprise.
+- `/sellhand` sells what you hold, `/sellhand all` every one of that item in your inventory (not armour or the
+  off hand). `/worth` shows what the held item sells for.
+- Items sell for **10%** of their Shop price (`sell-price-percent`, at most 100, so buying from the Shop and
+  selling back never pays). Only plain items sell: anything enchanted, renamed, damaged, filled or with potion
+  effects is given back.
+- **1,000 microcredits = 1 credit** (`microcredits-per-credit`). Sell prices follow the rate, so changing it
+  doesn't change what an item is worth in credits. `/exchange <amount|all>` in game, or the Market page, turns
+  microcredits into credits. It only goes that way.
+- `/mct` (`/microcredittop`) and `/mct` in Discord show the leaderboard. It ranks by what players hold right now
+  (`microcredits-leaderboard=balance`, so exchanging costs rank) or by everything ever sold (`earned`).
+- Optional **dropping prices** (`sell-price-drop`, off by default): the more of one item everyone sells, the less
+  it's worth. It sells for half once `sell-price-drop-after` credits' worth of it was sold (default 100), and
+  recovers halfway every `sell-price-recovery-hours` (default 24). A sale pays the average price over the
+  amount, so splitting a sale up doesn't pay more.
+- Every Monday, last week's top sellers are posted to the interactions channel (`market-weekly-post`).
+- The website's **Market** page has the leaderboard (with a podium for the top three), exchanging, and every
+  item's sell price. Player pages show their microcredits and rank; staff also see the sale history. The
+  settings owner can turn selling off for single items or give them their own sell percentage in the Shop's
+  **Edit items**. Sales and exchanges are in the Logs (**Sales & exchanges** filter).
+- If another plugin (like EssentialsX) already has `/sell` or `/worth`, rename DiscordLinkedFAD's commands in
+  its config.yml, or use `/discordlinkedfad:sell`.
+
 ## Website
 
 A web panel, built into the plugin, where people log in with Discord. Roles are checked again every 5 minutes
@@ -304,13 +332,15 @@ Discord:
 | `/credits [player]`, `/leaderboard` | everyone | Credits (with DiscordLinkedFAD) |
 | `/hug @someone`, `/kiss`, `/meow`… | everyone | Interactions from DiscordLinkedFAD's config.yml |
 | `/interactions enabled:<True/False>` | everyone | Let others pick you for interactions, or not |
+| `/mct [player]` | everyone | Microcredit leaderboard (with selling on) |
 
 Admin command visibility can be changed in Server Settings → Integrations → your bot.
 
 In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`.
 
 In game with DiscordLinkedFAD: every interaction (`/hug <player>`…), `/interactions [off|on]`,
-`/credits [player|top]`, and `/discordlinkedfad reload` (op).
+`/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, and
+`/discordlinkedfad reload` (op).
 
 `/dla` (in Discord and in game): a one-time login link for the website. Admins get the admin view; with
 `web-member-access` on, everyone else in the Discord server gets the community view.
@@ -323,8 +353,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.15.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.15.1.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.15.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.16.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.16.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.16.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

@@ -15,6 +15,8 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -104,6 +106,37 @@ final class FadBridge {
                         items.add(in.readUTF());
                     }
                     community.shop().serverItems(server, items);
+                    // Sent right after HELLO, so this server now gets the sell prices for exactly its items.
+                    later(() -> community.market().sendPrices(connection));
+                }
+                // Items the server already took from the player (/sell, /sellhand): pay for them.
+                case "SELL" -> {
+                    String id = in.readUTF();
+                    List<Market.Line> lines = readLines(in);
+                    later(() -> {
+                        Market.Sale sale = community.market().sell(player, server, lines);
+                        send(connection, out -> {
+                            out.writeUTF("SOLD");
+                            out.writeUTF(id);
+                            out.writeLong(sale.paid());
+                            writeLines(out, sale.refused());
+                        });
+                    });
+                }
+                case "MCT" -> {
+                    String id = in.readUTF();
+                    later(() -> {
+                        community.market().topFromGame(player);
+                        reply(connection, "ACK", id);
+                    });
+                }
+                case "EXCHANGE" -> {
+                    String id = in.readUTF();
+                    String amount = in.readUTF().trim();
+                    later(() -> {
+                        community.market().exchangeFromGame(player, amount);
+                        reply(connection, "ACK", id);
+                    });
                 }
                 case "ADV" -> {
                     String key = in.readUTF();
@@ -163,6 +196,55 @@ final class FadBridge {
             }
             out.writeUTF(title);
         });
+    }
+
+    /** Most prices per message: plugin messages to a server can't be much bigger than 32 KB. */
+    private static final int PRICES_PER_MESSAGE = 400;
+
+    /**
+     * Sends a server the current sell prices (for /worth and the /sell menu), split over a few messages. An empty
+     * list with {@code open} false means selling is closed.
+     */
+    void prices(ServerConnection connection, boolean open, String symbol, List<Market.Price> prices) {
+        int parts = Math.max(1, (prices.size() + PRICES_PER_MESSAGE - 1) / PRICES_PER_MESSAGE);
+        for (int part = 0; part < parts; part++) {
+            List<Market.Price> chunk = prices.subList(part * PRICES_PER_MESSAGE,
+                    Math.min(prices.size(), (part + 1) * PRICES_PER_MESSAGE));
+            int index = part;
+            send(connection, out -> {
+                out.writeUTF("PRICES");
+                out.writeInt(index);
+                out.writeInt(parts);
+                out.writeBoolean(open);
+                out.writeUTF(symbol);
+                out.writeInt(chunk.size());
+                for (Market.Price price : chunk) {
+                    out.writeUTF(price.id());
+                    out.writeLong(price.now());
+                    out.writeLong(price.normal());
+                }
+            });
+        }
+    }
+
+    private static List<Market.Line> readLines(DataInputStream in) throws IOException {
+        int count = in.readInt();
+        if (count < 0 || count > 2_000) {
+            throw new IOException("bad line count " + count);
+        }
+        List<Market.Line> lines = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            lines.add(new Market.Line(in.readUTF(), in.readInt()));
+        }
+        return lines;
+    }
+
+    private static void writeLines(DataOutputStream out, List<Market.Line> lines) throws IOException {
+        out.writeInt(lines.size());
+        for (Market.Line line : lines) {
+            out.writeUTF(line.id());
+            out.writeInt(line.amount());
+        }
     }
 
     // ---- Helpers ----

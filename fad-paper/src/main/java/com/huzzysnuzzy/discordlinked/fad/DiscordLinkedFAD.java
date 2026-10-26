@@ -7,6 +7,7 @@ import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.permissions.Permission;
 import org.bukkit.permissions.PermissionDefault;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -34,6 +35,7 @@ public final class DiscordLinkedFAD extends JavaPlugin {
 
     private volatile FadSettings settings;
     private ProxyLink link;
+    private final SellPrices sellPrices = new SellPrices();
     private final Map<UUID, Long> lastInteraction = new ConcurrentHashMap<>();
     /** Interaction commands registered at startup; new ones in config.yml need a restart. */
     private final Set<String> registered = new HashSet<>();
@@ -48,6 +50,7 @@ public final class DiscordLinkedFAD extends JavaPlugin {
         PlayerTracker tracker = new PlayerTracker(this);
         getServer().getPluginManager().registerEvents(tracker, this);
         tracker.start();
+        getServer().getPluginManager().registerEvents(new SellMenu.Events(this), this);
         PluginCommand admin = getCommand("discordlinkedfad");
         if (admin != null) {
             admin.setExecutor((sender, command, label, args) -> {
@@ -64,6 +67,7 @@ public final class DiscordLinkedFAD extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        SellMenu.closeAll();
         if (link != null) {
             link.cancelAll();
         }
@@ -77,6 +81,11 @@ public final class DiscordLinkedFAD extends JavaPlugin {
         }
         register(map, new FadCommands.CreditsCommand(this, settings.creditsCommand));
         register(map, new FadCommands.InteractionsCommand(this, settings.interactionsCommand));
+        register(map, new FadCommands.SellCommand(this, settings.sellCommand));
+        register(map, new FadCommands.SellHandCommand(this, settings.sellHandCommand));
+        register(map, new FadCommands.WorthCommand(this, settings.worthCommand));
+        register(map, new FadCommands.MicroTopCommand(this, settings.microTopCommand));
+        register(map, new FadCommands.ExchangeCommand(this, settings.exchangeCommand));
     }
 
     private void register(CommandMap map, Command command) {
@@ -122,6 +131,33 @@ public final class DiscordLinkedFAD extends JavaPlugin {
 
     ProxyLink link() {
         return link;
+    }
+
+    SellPrices sellPrices() {
+        return sellPrices;
+    }
+
+    /**
+     * Sells items already taken from the player: what can be sold goes to the proxy, the rest is given back right
+     * away. Runs on the player's own thread.
+     */
+    void sell(Player player, List<ItemStack> items) {
+        Map<String, Integer> lines = new java.util.LinkedHashMap<>();
+        List<ItemStack> keep = new ArrayList<>();
+        for (ItemStack stack : items) {
+            if (sellPrices.sellable(stack)) {
+                lines.merge(stack.getType().getKey().getKey(), stack.getAmount(), Integer::sum);
+            } else {
+                keep.add(stack);
+            }
+        }
+        if (!keep.isEmpty()) {
+            SellMenu.giveBack(player, keep);
+            player.sendMessage(settings.message("sell-returned"));
+        }
+        if (!lines.isEmpty()) {
+            link.sell(player, lines);
+        }
     }
 
     /** An online player the sender can see, by exact name first, then by the start of their name. */

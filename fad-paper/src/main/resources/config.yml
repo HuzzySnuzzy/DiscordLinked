@@ -1,6 +1,6 @@
-# DiscordLinkedFAD: interaction commands and credits for DiscordLinked.
+# DiscordLinkedFAD: interaction commands, credits and selling items for DiscordLinked.
 #
-# Needs DiscordLinked 0.10.0 or newer on the Velocity proxy. The proxy keeps everyone's credits, shows
+# Needs DiscordLinked 0.10.0 or newer on the Velocity proxy (0.16.0 or newer for selling). The proxy keeps everyone's credits, shows
 # interactions on every server and in Discord, and puts it all on the admin website.
 #
 # Credits themselves (their name, how many players get for playing and for advancements) are set on the
@@ -41,6 +41,34 @@ interactions-command:
   name: interactions
   aliases: []
 
+# Selling items for microcredits. Prices, the exchange rate and turning selling off are set on the proxy
+# (config.properties or the website's Settings page). If another plugin (like EssentialsX) already has /sell or
+# /worth, rename these here, or use /discordlinkedfad:sell.
+# /sell opens a chest: put items in and close it to sell them. Items it won't buy are given back.
+sell-command:
+  name: sell
+  aliases: []
+
+# /sellhand sells what you're holding; /sellhand all sells every one of it in your inventory.
+sellhand-command:
+  name: sellhand
+  aliases: []
+
+# /worth shows what the item you're holding sells for.
+worth-command:
+  name: worth
+  aliases: []
+
+# /mct: who has the most microcredits.
+microcredit-top-command:
+  name: mct
+  aliases: [microcredittop]
+
+# /exchange <amount|all>: turn microcredits into credits.
+exchange-command:
+  name: exchange
+  aliases: []
+
 messages:
   # <command> = the command as typed
   usage-target: "<red>Usage: /<command> <player></red>"
@@ -61,6 +89,32 @@ messages:
   reloaded: "<green>DiscordLinkedFAD reloaded with <count> interactions.</green>"
   # <names>
   reloaded-restart: "<yellow>Restart the server to add these new commands: <names></yellow>"
+
+  # Selling. Amounts look like "1,234 µc". <item> is the item's name.
+  sell-title: "<dark_gray>Sell items · close to sell</dark_gray>"
+  # The bottom row of the /sell menu. <amount> = what everything in it sells for, <items> = how many items
+  sell-worth: "<gold>Sells for <amount></gold>"
+  sell-worth-lore: "<gray><items> items · close the menu to sell</gray>"
+  # <count> = items that can't be sold (they're given back)
+  sell-unsellable-lore: "<red><count> can't be sold and will be given back</red>"
+  sell-button: "<green><bold>Sell now</bold></green>"
+  sell-button-lore: "<gray>Or just close the menu</gray>"
+  sell-cancel: "<red><bold>Cancel</bold></red>"
+  sell-cancel-lore: "<gray>Give everything back</gray>"
+  sell-cancelled: "<gray>Nothing was sold; everything is back in your inventory.</gray>"
+  sell-returned: "<gray>Some items can't be sold, so you got them back.</gray>"
+  sell-closed: "<red>Selling is closed right now.</red>"
+  sell-unsupported: "<red>Selling isn't available: the proxy needs DiscordLinked 0.16.0 or newer.</red>"
+  sell-empty-hand: "<red>Hold the item you want to sell.</red>"
+  sell-unsellable: "<red><item> can't be sold.</red>"
+  sell-special: "<red>Items with enchantments, a name, damage or contents can't be sold.</red>"
+  sell-no-answer: "<red>The proxy didn't confirm your sale. If you weren't paid, please tell staff.</red>"
+  # /worth. <each>, <stack> = price for a full stack, <size> = how many make a stack
+  worth: "<white><item></white><gray>: <gold><each></gold> each, <gold><stack></gold> per <size></gray>"
+  # <amount> = how many they hold, <total>
+  worth-holding: "<gray>Your <amount> sell for <gold><total></gold>.</gray>"
+  # When lots of it was sold lately and prices drop. <percent> of the normal price
+  worth-dropped: "<yellow>Lots of this was sold lately, so it sells for <percent>% of its normal price.</yellow>"
 
 # The interactions. Each one becomes a command named after it, e.g. "kiss" is /kiss.
 #   description:   shown in tab-completion help and on Discord, where these are also slash commands.

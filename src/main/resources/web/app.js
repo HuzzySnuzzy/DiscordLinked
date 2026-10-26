@@ -1135,7 +1135,8 @@ const stat = (label, value, title) => el('div', { class: 'stat', title },
   el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
 
 const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
-const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop', DAILY: 'Daily reward' };
+const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop', DAILY: 'Daily reward',
+  SALE: 'Sold', EXCHANGE: 'Exchange' };
 
 function creditsDialog(p, community) {
   const currency = community.currency;
@@ -1163,7 +1164,10 @@ function communitySection(p, c) {
       stat('Active playtime', playtime(c.activeSeconds), 'Time on the servers, not counting AFK'),
       staff && stat('AFK time', playtime(c.afkSeconds)),
       stat('Advancements', c.advancements.length.toLocaleString()),
-      stat('Interactions', `${c.given.toLocaleString()} given · ${c.received.toLocaleString()} received`)),
+      stat('Interactions', `${c.given.toLocaleString()} given · ${c.received.toLocaleString()} received`),
+      c.market && stat(c.microRank ? `${c.microCurrency.many} · rank #${c.microRank}` : c.microCurrency.many,
+        micro(c.micro, c.microCurrency)),
+      c.market && stat('Earned by selling', micro(c.microEarned, c.microCurrency))),
     c.favourites.length > 0 && el('div', { class: 'others' },
       el('span', { class: 'muted' }, 'Favourite interactions:'),
       c.favourites.map((f) => el('span', { class: 'chip' }, `/${f.action} ×${f.count.toLocaleString()}`))),
@@ -1178,6 +1182,19 @@ function communitySection(p, c) {
       el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind,
         t.detail && t.kind !== 'PLAYTIME' ? `: ${t.detail}` : '', t.actor ? ` — ${t.actor}` : ''))))))
     : el('p', { class: 'muted' }, `No ${currency.many} yet.`);
+
+  const mc = c.microCurrency;
+  const microLedger = !staff || !c.market ? null : c.microTransactions.length
+    ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+      el('thead', {}, el('tr', {}, ['Time', 'Change', 'Balance', 'What'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, c.microTransactions.map((t) => el('tr', {},
+        el('td', { class: 'nowrap muted', title: formatTime(t.time) }, formatTime(t.time)),
+        el('td', { class: `nowrap ${t.amount > 0 ? 'credit-plus' : 'credit-minus'}` },
+          `${t.amount > 0 ? '+' : '−'}${micro(Math.abs(t.amount), mc)}`),
+        el('td', { class: 'nowrap' }, micro(t.balance, mc)),
+        el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind, t.detail ? `: ${t.detail}` : '',
+          t.actor ? ` — ${t.actor}` : ''))))))
+    : el('p', { class: 'muted' }, `Hasn't sold anything yet.`);
 
   const advancements = c.advancements.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
     el('thead', {}, el('tr', {}, ['Advancement', 'Type', 'Reward', 'Server', 'When'].map((h) => el('th', {}, h)))),
@@ -1199,6 +1216,8 @@ function communitySection(p, c) {
     summary,
     staff && el('h2', { class: 'section-title' }, `${currency.one} history`),
     ledger,
+    microLedger && el('h2', { class: 'section-title' }, `${c.microCurrency.one} history`),
+    microLedger,
     el('h2', { class: 'section-title' }, `Advancements (${c.advancements.length})`),
     advancements,
   ].filter(Boolean); // the callers spread this into replaceChildren, which would print false/null
@@ -2267,11 +2286,20 @@ function shopItemDialog(item) {
   $('shop-item-text').textContent = `Normally ${fromCents(Math.round(item.price * 100 / item.percent))} each at ${shop.data.percent}% prices.`;
   $('shop-item-enabled').checked = !item.disabled;
   $('shop-item-percent').value = item.percent;
+  $('shop-item-sell').hidden = !shop.data.market;
+  $('shop-item-sellable').checked = !item.sellDisabled;
+  $('shop-item-sell-percent').value = item.sellPercent;
+  const normalSell = item.sellPercent ? Math.round(item.sell * 100 / item.sellPercent) : 0;
+  $('shop-item-sell-text').textContent = item.sellDisabled
+    ? `Players can't sell it. At 100% it would sell for ${formatMicro(normalSell || 0, shop.data.microCurrency)} each.`
+    : `Sells for ${formatMicro(item.sell, shop.data.microCurrency)} each (${shop.data.sellPercent}% of the Shop price, `
+      + `times this). It never sells for more than the Shop asks.`;
   $('shop-item-error').hidden = true;
   $('shop-item-form').onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api('/api/shop/item', { id: item.id, enabled: $('shop-item-enabled').checked, percent: Number($('shop-item-percent').value) });
+      await api('/api/shop/item', { id: item.id, enabled: $('shop-item-enabled').checked, percent: Number($('shop-item-percent').value),
+        sellEnabled: $('shop-item-sellable').checked, sellPercent: Number($('shop-item-sell-percent').value) });
       $('shop-item-dialog').close();
       await loadShop();
     } catch (err) {
@@ -2282,6 +2310,150 @@ function shopItemDialog(item) {
   $('shop-item-dialog').showModal();
 }
 $('shop-item-cancel').addEventListener('click', () => $('shop-item-dialog').close());
+
+// ---- Market: selling items in game for microcredits ----
+
+/** Sell prices are kept in thousandths of a microcredit: "1,234 µc", or "0.3 µc" for fractions. */
+function formatMicro(milli, currency) {
+  const value = milli / 1000;
+  const digits = milli % 1000 === 0 || milli >= 100000 ? 0 : milli >= 10000 ? 1 : 2;
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: digits })} ${currency.symbol}`;
+}
+/** Whole microcredits (balances): "12,345 µc". */
+const micro = (n, currency) => `${n.toLocaleString()} ${currency.symbol}`;
+const MEDALS = ['🥇', '🥈', '🥉'];
+
+const market = { data: null, tab: SHOP_TABS[0][0] };
+
+async function loadMarket() {
+  let data;
+  try {
+    data = await api('/api/market');
+  } catch (e) {
+    $('market-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    return;
+  }
+  market.data = data;
+  if (!shop.textures.size) shop.textures = await loadTextures('99');
+  renderMarket();
+}
+
+function renderMarket() {
+  const d = market.data;
+  const cur = d.currency;
+  const me = d.me;
+  $('market-balance').textContent = me.linked ? `You have ${micro(me.micro, cur)}${me.rank ? ` · #${me.rank}` : ''}` : '';
+  const notices = [];
+  if (!d.open) {
+    notices.push(el('div', { class: 'card panel shop-closed' }, d.manage
+      ? ['Selling is turned off for players. Turn it on in ', el('a', { href: '#/settings' }, 'Settings'), '.']
+      : 'Selling is closed right now.'));
+  }
+  $('market-notice').replaceChildren(...notices);
+
+  // Leaderboard: a podium for the top three, then a list.
+  const value = (row) => (d.ranking === 'earned' ? row.microEarned : row.micro);
+  const rows = d.leaderboard;
+  const podium = rows.slice(0, 3).map((row, i) => el('a', { class: `podium-place place-${i + 1}`, href: playerHref(row.uuid) },
+    el('span', { class: 'podium-medal', 'aria-label': `#${i + 1}` }, MEDALS[i]),
+    el('img', { class: 'head', src: headUrl(row.uuid, 96), alt: '', loading: 'lazy' }),
+    el('span', { class: 'name' }, row.name),
+    el('span', { class: 'podium-value' }, micro(value(row), cur)),
+    row.online && el('span', { class: 'pill online' }, 'Online')));
+  const rest = rows.slice(3).map((row, i) => el('a', { class: 'leader-row', href: playerHref(row.uuid) },
+    el('span', { class: 'muted leader-rank' }, `#${i + 4}`),
+    el('img', { class: 'head', src: headUrl(row.uuid, 48), alt: '', loading: 'lazy' }),
+    el('span', { class: 'name' }, row.name),
+    row.online && el('span', { class: 'pill online' }, 'Online'),
+    el('span', { class: 'leader-value' }, micro(value(row), cur))));
+  $('market-leaders').replaceChildren(
+    el('h2', {}, `Most ${cur.many}`, el('span', { class: 'muted market-ranking' },
+      d.ranking === 'earned' ? 'earned by selling, in total' : 'held right now')),
+    rows.length
+      ? el('div', {}, el('div', { class: 'podium' }, podium), rest.length > 0 && el('div', { class: 'leader-rows' }, rest))
+      : el('p', { class: 'muted' }, `Nobody has any ${cur.many} yet. Sell something in game with /sell!`),
+    el('p', { class: 'muted market-totals' }, `${micro(d.held, cur)} held · ${micro(d.earned, cur)} earned by everyone`));
+
+  // Exchanging: one way only, microcredits to credits.
+  const exchange = $('market-exchange');
+  if (!me.linked) {
+    exchange.replaceChildren(el('h2', {}, 'Exchange'),
+      el('p', { class: 'muted' }, 'Link your Minecraft account to sell and exchange (/link in Discord).'));
+  } else {
+    const can = Math.floor(me.micro / d.rate);
+    const amount = el('input', { type: 'number', min: '1', step: '1', value: String(Math.max(1, Math.min(can, 10))),
+      'aria-label': `${d.credits.many} to get`, inputmode: 'numeric' });
+    const cost = el('span', { class: 'muted' });
+    const updateCost = () => { cost.textContent = `costs ${micro((Number(amount.value) || 0) * d.rate, cur)}`; };
+    amount.addEventListener('input', updateCost);
+    updateCost();
+    const run = async (button, body) => {
+      button.disabled = true;
+      try {
+        const result = await api('/api/market/exchange', body);
+        toast(`${result.message} You now have ${credits(result.credits, d.credits)}.`);
+        await loadMarket();
+      } catch (err) {
+        toast(err.message);
+        button.disabled = false;
+      }
+    };
+    const one = el('button', { class: 'btn btn-small', type: 'button', disabled: !d.open || can < 1 ? '' : null },
+      'Exchange');
+    one.addEventListener('click', () => run(one, { credits: Number(amount.value) }));
+    const all = el('button', { class: 'btn btn-ghost btn-small', type: 'button', disabled: !d.open || can < 1 ? '' : null },
+      `All (${credits(can, d.credits)})`);
+    all.addEventListener('click', () => run(all, { all: true }));
+    exchange.replaceChildren(el('h2', {}, `${cur.many} → ${d.credits.many}`),
+      el('div', { class: 'stats-grid' },
+        stat(me.rank ? `Yours · rank #${me.rank}` : 'Yours', micro(me.micro, cur)),
+        stat(d.credits.many, credits(me.credits, d.credits))),
+      el('p', { class: 'muted' }, `1 ${d.credits.one} = ${micro(d.rate, cur)}. Exchanging only goes this way, `
+        + (d.ranking === 'balance' ? 'and lowers your place on the leaderboard.' : 'and doesn\'t change your place on the leaderboard.')),
+      el('div', { class: 'market-exchange-row' }, amount, cost, one, all));
+  }
+
+  $('market-how').replaceChildren(el('h2', {}, 'How to sell'),
+    el('ul', { class: 'market-how' },
+      el('li', {}, el('code', {}, '/sell'), ' opens a chest: put items in and close it.'),
+      el('li', {}, el('code', {}, '/sellhand'), ' sells what you hold, ', el('code', {}, '/sellhand all'), ' every one of it you have.'),
+      el('li', {}, el('code', {}, '/worth'), ' shows what the item in your hand is worth.'),
+      el('li', {}, el('code', {}, '/mct'), ' shows this leaderboard in game, ', el('code', {}, '/exchange'), ' turns them into ', d.credits.many, '.')),
+    el('p', { class: 'muted' }, `Items sell for ${d.sellPercent}% of their Shop price. Enchanted, named, damaged or filled items can't be sold.`
+      + (d.dropping ? ` Prices drop the more of an item everyone sells (half price after ${d.dropAfter.toLocaleString()} `
+        + `${d.credits.many}' worth) and recover over time (halfway every ${d.recoveryHours} hours).` : '')));
+
+  $('market-tabs').replaceChildren(...SHOP_TABS.map(([tab, icon]) => el('button', {
+    class: `shop-tab ${tab === market.tab && !$('market-search').value.trim() ? 'active' : ''}`, type: 'button', role: 'tab',
+    title: tab, 'aria-label': tab, onclick: () => { market.tab = tab; $('market-search').value = ''; renderMarket(); },
+  }, shopIcon(icon), el('span', {}, tab))));
+  renderMarketList();
+}
+
+function renderMarketList() {
+  const d = market.data;
+  const cur = d.currency;
+  const query = $('market-search').value.trim().toLowerCase().replace(/\s+/g, ' ');
+  let items = d.items.filter((item) => (query
+    ? shopName(item.id).toLowerCase().includes(query) || item.id.includes(query.replace(/ /g, '_'))
+    : item.tab === market.tab));
+  const sort = $('market-sort').value;
+  if (sort === 'value') items = [...items].sort((a, b) => b.now - a.now);
+  else if (sort === 'name') items = [...items].sort((a, b) => shopName(a.id).localeCompare(shopName(b.id)));
+  $('market-list').replaceChildren(...(items.length ? items.map((item) => {
+    const dropped = item.normal > 0 && item.now / item.normal < 0.95;
+    return el('div', { class: 'market-item' },
+      el('span', { class: 'slot' }, shopIcon(item.id)),
+      el('div', { class: 'market-item-text' },
+        el('span', { class: 'market-item-name' }, shopName(item.id)),
+        el('span', { class: 'muted' }, `${formatMicro(item.now, cur)} each · ${formatMicro(item.now * item.stack, cur)} per ${item.stack}`)),
+      dropped && el('span', { class: 'badge warn', title: `Normally ${formatMicro(item.normal, cur)} each` },
+        `${Math.round(item.now * 100 / item.normal)}%`));
+  }) : [el('p', { class: 'muted shop-empty' }, query ? 'No items match.' : 'Nothing sells here.')]));
+}
+
+$('market-search').addEventListener('input', () => { if (market.data) renderMarket(); });
+$('market-sort').addEventListener('change', () => { if (market.data) renderMarketList(); });
 
 // ---- Community view (everyone; admins see it when off duty) ----
 
@@ -2426,14 +2598,15 @@ function onPresence(change) {
   if (route.view === 'home') soon('home', loadHome);
   else if (route.view === 'community') soon('community', loadCommunity);
   else if (route.view === 'shop') soon('shop', loadShop);
+  else if (route.view === 'market') soon('market', loadMarket);
   else if (route.view === 'players') soon('players', loadPlayers);
   else if (route.view === 'player' && route.uuid === change.uuid) soon('player', () => loadPlayer(route.uuid));
 }
 
 // ---- On duty / off duty ----
 
-const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community', 'shop']);
-const MEMBER_VIEWS = new Set(['home', 'community', 'players', 'shop']);
+const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community', 'shop', 'market']);
+const MEMBER_VIEWS = new Set(['home', 'community', 'players', 'shop', 'market']);
 const homeHash = () => (isStaff() ? '#/linked' : '#/home');
 
 function applyMode() {
@@ -2447,6 +2620,7 @@ function applyMode() {
   $('duty-switch').checked = state.me.onDuty;
   $('community-tab').hidden = !state.me.communityEnabled;
   $('shop-tab').hidden = !(state.me.shopOpen || (state.me.isOwner && state.me.communityEnabled));
+  $('market-tab').hidden = !(state.me.marketOpen || (state.me.isOwner && state.me.communityEnabled));
   $('global-search').placeholder = staff ? 'Find any player…' : 'Find a player…';
   updateTabPills();
 }
@@ -2477,8 +2651,10 @@ const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK
   'CREDITS_ADJUST']);
 // Events that change the Community page.
 // Events that can change the Shop page (balances, whether you're online).
-const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'ADVANCEMENT', 'JOIN', 'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE']);
+const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'EXCHANGE', 'ADVANCEMENT', 'JOIN', 'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE']);
 const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'JOIN', 'LEAVE']);
+// Events that change the Market page (balances, the leaderboard, prices).
+const MARKET_EVENTS = new Set(['SALE', 'EXCHANGE', 'JOIN', 'LEAVE', 'SETTINGS_CHANGE']);
 const pendingRefresh = {};
 
 /** Coalesces bursts of events into one refresh. */
@@ -2495,6 +2671,7 @@ function onLiveLog(entry) {
   else if (route.view === 'moderate' && STATUS_EVENTS.has(entry.type)) soon('moderate', loadModerate);
   else if (route.view === 'community' && COMMUNITY_EVENTS.has(entry.type)) soon('community', loadCommunity);
   else if (route.view === 'shop' && SHOP_EVENTS.has(entry.type)) soon('shop', loadShop);
+  else if (route.view === 'market' && MARKET_EVENTS.has(entry.type)) soon('market', loadMarket);
   else if (route.view === 'player' && entry.uuid === route.uuid) {
     prependPlayerLog(entry);
     if (STATUS_EVENTS.has(entry.type)) soon('player', () => loadPlayer(route.uuid));
@@ -2663,14 +2840,21 @@ function refreshCurrentView() {
   else if (route.view === 'settings') loadSettings();
   else if (route.view === 'community') loadCommunity();
   else if (route.view === 'shop') loadShop();
+  else if (route.view === 'market') loadMarket();
 }
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players', 'shop']) {
+  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players', 'shop', 'market']) {
     $(`view-${name}`).hidden = name !== route.view;
   }
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
+  // On phones the tab row scrolls; keep the current tab in sight.
+  const tabs = document.querySelector('.tabs');
+  const active = tabs.querySelector('a.active');
+  if (active && tabs.scrollWidth > tabs.clientWidth) {
+    tabs.scrollLeft = Math.max(0, active.offsetLeft - (tabs.clientWidth - active.offsetWidth) / 2);
+  }
   if (route.view === 'logs') loadLogs(true);
   else refreshCurrentView();
   window.scrollTo(0, 0);

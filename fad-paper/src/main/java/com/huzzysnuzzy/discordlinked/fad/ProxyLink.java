@@ -3,7 +3,9 @@ package com.huzzysnuzzy.discordlinked.fad;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.Sound;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 
 import java.io.ByteArrayInputStream;
@@ -136,6 +138,59 @@ final class ProxyLink implements PluginMessageListener {
         });
     }
 
+    /** /mct. The proxy replies in chat. */
+    void microTop(Player player) {
+        String id = expect(player, null, null);
+        send(player, out -> {
+            out.writeUTF("MCT");
+            out.writeUTF(id);
+        });
+    }
+
+    /** /exchange <amount|all>. The proxy replies in chat. */
+    void exchange(Player player, String amount) {
+        String id = expect(player, null, null);
+        send(player, out -> {
+            out.writeUTF("EXCHANGE");
+            out.writeUTF(id);
+            out.writeUTF(amount);
+        });
+    }
+
+    /** A sale waiting for the proxy to say what it paid. */
+    private record PendingSale(UUID player, Map<String, Integer> lines, ScheduledTask timeout) {
+    }
+
+    private final Map<String, PendingSale> sales = new ConcurrentHashMap<>();
+
+    /**
+     * Sells items this server already took from the player. The proxy pays and tells them in chat, then sends back
+     * anything it wouldn't buy, which the player gets back.
+     */
+    void sell(Player player, Map<String, Integer> lines) {
+        String id = UUID.randomUUID().toString();
+        ScheduledTask timeout = Bukkit.getAsyncScheduler().runDelayed(plugin, task -> {
+            PendingSale sale = sales.remove(id);
+            if (sale != null) {
+                plugin.getLogger().warning("The proxy didn't confirm a sale by " + player.getName() + ": " + sale.lines());
+                Player online = Bukkit.getPlayer(sale.player());
+                if (online != null) {
+                    online.sendMessage(plugin.settings().message("sell-no-answer"));
+                }
+            }
+        }, 15, TimeUnit.SECONDS);
+        sales.put(id, new PendingSale(player.getUniqueId(), lines, timeout));
+        send(player, out -> {
+            out.writeUTF("SELL");
+            out.writeUTF(id);
+            out.writeInt(lines.size());
+            for (Map.Entry<String, Integer> line : lines.entrySet()) {
+                out.writeUTF(line.getKey());
+                out.writeInt(line.getValue());
+            }
+        });
+    }
+
     // ---- From the proxy ----
 
     @Override
@@ -180,6 +235,54 @@ final class ProxyLink implements PluginMessageListener {
                         out.writeUTF(outcome);
                     }));
                 }
+                // Sell prices, in a few parts; also says whether selling is open.
+                case "PRICES" -> {
+                    int part = in.readInt();
+                    int parts = in.readInt();
+                    boolean open = in.readBoolean();
+                    String symbol = in.readUTF();
+                    int count = in.readInt();
+                    if (part < 0 || part >= parts || parts > 100 || count < 0 || count > 10_000) {
+                        return;
+                    }
+                    Map<String, SellPrices.Price> chunk = new java.util.HashMap<>();
+                    for (int i = 0; i < count; i++) {
+                        chunk.put(in.readUTF(), new SellPrices.Price(in.readLong(), in.readLong()));
+                    }
+                    plugin.sellPrices().receive(part, parts, open, symbol, chunk);
+                }
+                // What a sale paid, and what the proxy wouldn't buy (given back).
+                case "SOLD" -> {
+                    PendingSale sale = sales.remove(in.readUTF());
+                    long paid = in.readLong();
+                    int count = in.readInt();
+                    List<ItemStack> refused = new ArrayList<>();
+                    for (int i = 0; i < count && i < 2_000; i++) {
+                        Material material = Material.matchMaterial(in.readUTF());
+                        int amount = in.readInt();
+                        if (material == null || !material.isItem() || material.isAir()) {
+                            continue;
+                        }
+                        while (amount > 0) {
+                            int stack = Math.min(amount, material.getMaxStackSize());
+                            refused.add(new ItemStack(material, stack));
+                            amount -= stack;
+                        }
+                    }
+                    if (sale == null) {
+                        return;
+                    }
+                    sale.timeout().cancel();
+                    Player player = Bukkit.getPlayer(sale.player());
+                    if (player != null) {
+                        player.getScheduler().run(plugin, task -> {
+                            SellMenu.giveBack(player, refused);
+                            if (paid > 0) {
+                                player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.6f, 1.2f);
+                            }
+                        }, null);
+                    }
+                }
                 // Someone on Discord picked this player: play the effects where they are.
                 case "FX" -> {
                     Action action = plugin.settings().actions.get(in.readUTF());
@@ -221,6 +324,8 @@ final class ProxyLink implements PluginMessageListener {
     void cancelAll() {
         pending.values().forEach(p -> p.timeout().cancel());
         pending.clear();
+        sales.values().forEach(p -> p.timeout().cancel());
+        sales.clear();
     }
 
     private interface Body {

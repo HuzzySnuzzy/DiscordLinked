@@ -18,6 +18,7 @@
       <a href="#/moderate" data-view="moderate" data-mode="admin">Moderate</a>
       <a href="#/community" data-view="community" id="community-tab" hidden>Community</a>
       <a href="#/shop" data-view="shop" id="shop-tab" hidden>Shop</a>
+      <a href="#/market" data-view="market" id="market-tab" hidden>Market</a>
       <a href="#/logs" data-view="logs" data-mode="admin">Logs</a>
     </nav>
     <div class="global-search">
@@ -92,6 +93,7 @@
           <option value="settings">Settings changes</option>
           <option value="community">Interactions, advancements &amp; credits</option>
           <option value="shop">Shop orders</option>
+          <option value="market">Sales &amp; exchanges</option>
         </select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
         <button id="logs-csv" class="btn btn-ghost btn-small" type="button">Download CSV</button>
@@ -200,6 +202,34 @@
       </div>
     </section>
 
+    <section id="view-market" hidden>
+      <div class="toolbar">
+        <h1>Market</h1>
+        <span id="market-balance" class="shop-balance"></span>
+      </div>
+      <div id="market-notice"></div>
+      <div class="grid market-top">
+        <div class="card panel" id="market-leaders"></div>
+        <div class="market-side">
+          <div class="card panel" id="market-exchange"></div>
+          <div class="card panel" id="market-how"></div>
+        </div>
+      </div>
+      <div class="card panel market-prices">
+        <div class="market-prices-head">
+          <h2>Sell prices</h2>
+          <select id="market-sort" aria-label="Sort sell prices">
+            <option value="shop">Shop order</option>
+            <option value="value">Most valuable</option>
+            <option value="name">A–Z</option>
+          </select>
+          <input id="market-search" type="search" placeholder="Search items…" aria-label="Search sell prices">
+        </div>
+        <div id="market-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
+        <div id="market-list" class="market-list"></div>
+      </div>
+    </section>
+
     <section id="view-moderate" hidden>
       <div class="toolbar">
         <h1>Online now <span id="moderate-count" class="count"></span></h1>
@@ -243,6 +273,13 @@
       <label class="reason">Price (% of normal)
         <input type="number" id="shop-item-percent" min="1" max="100000" step="1" required>
       </label>
+      <div id="shop-item-sell">
+        <label class="check-row"><input type="checkbox" id="shop-item-sellable"> Can be sold in game</label>
+        <label class="reason">Sell price (% of its normal sell price)
+          <input type="number" id="shop-item-sell-percent" min="1" max="100000" step="1" required>
+        </label>
+        <p id="shop-item-sell-text" class="muted"></p>
+      </div>
       <p id="shop-item-error" class="error" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" id="shop-item-cancel">Cancel</button>

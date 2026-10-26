@@ -37,7 +37,7 @@ public final class FadDiscord {
 
     /** Names DiscordLinked already uses; an interaction with one of these names stays in-game only. */
     private static final Set<String> RESERVED = Set.of("link", "unlink", "whois", "history", "forceunlink", "dla",
-            "credits", "leaderboard", "interactions");
+            "credits", "leaderboard", "interactions", "mct");
     /** Discord allows 100 commands per server; leave room for the built-in ones and other bots' needs. */
     private static final int MAX_COMMANDS = 90;
     private static final Color COLOR = new Color(0xFF9BD2);
@@ -63,6 +63,10 @@ public final class FadDiscord {
         list.add(Commands.slash("leaderboard", limit("Who has the most " + c.creditsNamePlural())));
         list.add(Commands.slash("interactions", "Turn interactions like /hug and /kiss off or on for yourself")
                 .addOption(OptionType.BOOLEAN, "enabled", "On or off", true));
+        if (c.marketOpen()) {
+            list.add(Commands.slash("mct", limit("Who has the most " + c.microNamePlural() + " (from selling items)"))
+                    .addOption(OptionType.USER, "player", "Also show where this player stands", false));
+        }
         FadActions.Definitions definitions = community.actions().current();
         if (!c.fadDiscordCommands() || definitions == null) {
             return list;
@@ -88,6 +92,7 @@ public final class FadDiscord {
             case "credits" -> credits(event);
             case "leaderboard" -> leaderboard(event);
             case "interactions" -> interactions(event);
+            case "mct" -> microTop(event);
             default -> {
                 FadActions.Definitions definitions = community.actions().current();
                 FadActions.Action action = definitions == null || RESERVED.contains(event.getName())
@@ -206,6 +211,43 @@ public final class FadDiscord {
                 .setTitle(truncate(msg("discord.fad.top-title", "currency", c.creditsNamePlural()), 256))
                 .setDescription(top.isEmpty() ? msg("discord.fad.top-empty", "currency", c.creditsNamePlural())
                         : truncate(body.toString(), 4000));
+        event.replyEmbeds(embed.build()).queue();
+    }
+
+    /** /mct [player]: the microcredit leaderboard, and where someone stands. */
+    private void microTop(SlashCommandInteractionEvent event) throws SQLException {
+        PluginConfig c = plugin.config();
+        Market market = community.market();
+        if (!market.open()) {
+            event.reply(msg("discord.market.closed")).setEphemeral(true).queue();
+            return;
+        }
+        String ranking = market.byEarned() ? "earned in total" : "held";
+        List<LeaderboardRow> top = market.top(10);
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < top.size(); i++) {
+            LeaderboardRow row = top.get(i);
+            String medal = Market.medal(i + 1);
+            body.append(msg("discord.market.top-line", "rank", String.valueOf(i + 1),
+                    "medal", medal.isEmpty() ? "**" + (i + 1) + ".**" : medal, "player", row.name(),
+                    "balance", c.micro(market.byEarned() ? row.microEarned() : row.micro()))).append('\n');
+        }
+        User user = event.getOption("player", event.getUser(), OptionMapping::getAsUser);
+        Optional<LinkedAccount> link = plugin.database().findByDiscordId(user.getIdLong());
+        if (link.isPresent()) {
+            Optional<CreditAccount> account = plugin.database().creditAccount(link.get().uuid());
+            long rank = market.rank(link.get().uuid());
+            body.append('\n').append(msg("discord.market.balance", "player", link.get().minecraftName(),
+                    "balance", c.micro(account.map(CreditAccount::micro).orElse(0L)),
+                    "earned", c.micro(account.map(CreditAccount::microEarned).orElse(0L)),
+                    "rank", rank == 0 ? "-" : String.valueOf(rank)));
+        }
+        EmbedBuilder embed = new EmbedBuilder()
+                .setColor(new Color(0xF2C14E))
+                .setTitle(truncate(msg("discord.market.top-title", "currency", c.microNamePlural(), "ranking", ranking), 256))
+                .setDescription(top.isEmpty() && link.isEmpty() ? msg("discord.market.top-empty", "currency", c.microNamePlural())
+                        : truncate((top.isEmpty() ? msg("discord.market.top-empty", "currency", c.microNamePlural()) + "\n" : "")
+                        + body.toString().strip(), 4000));
         event.replyEmbeds(embed.build()).queue();
     }
 

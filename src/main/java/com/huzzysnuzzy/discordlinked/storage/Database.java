@@ -237,6 +237,38 @@ public final class Database implements AutoCloseable {
                         created_at     INTEGER NOT NULL
                     )""");
         }
+        // Added in 0.16.0: microcredits from selling items, and what the market remembers.
+        addColumnIfMissing("fad_accounts", "micro", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("fad_accounts", "micro_earned", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("shop_items", "sell_disabled", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("shop_items", "sell_percent", "INTEGER NOT NULL DEFAULT 100");
+        try (Statement st = connection.createStatement()) {
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS micro_transactions (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        minecraft_uuid TEXT NOT NULL,
+                        amount         INTEGER NOT NULL,
+                        balance        INTEGER NOT NULL,
+                        kind           TEXT NOT NULL,
+                        detail         TEXT,
+                        actor          TEXT,
+                        created_at     INTEGER NOT NULL
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_micro_tx_uuid ON micro_transactions (minecraft_uuid, id)");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_micro_tx_time ON micro_transactions (created_at)");
+            // How much of each item was sold lately (for dropping prices), in thousandths of a credit's worth.
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS market_items (
+                        item       TEXT PRIMARY KEY,
+                        pressure   REAL NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS market_state (
+                        key   TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    )""");
+        }
     }
 
     private boolean tableExists(String table) throws SQLException {
@@ -370,15 +402,17 @@ public final class Database implements AutoCloseable {
              ResultSet rs = st.executeQuery("SELECT * FROM shop_items")) {
             while (rs.next()) {
                 overrides.put(rs.getString("item"), new ShopOverride(rs.getString("item"),
-                        rs.getInt("disabled") != 0, rs.getInt("percent")));
+                        rs.getInt("disabled") != 0, rs.getInt("percent"), rs.getInt("sell_disabled") != 0,
+                        rs.getInt("sell_percent")));
             }
         }
         return overrides;
     }
 
-    /** Saves an item's Shop setting; the default (on, 100%) removes the row. */
-    public synchronized void setShopOverride(String item, boolean disabled, int percent) throws SQLException {
-        if (!disabled && percent == 100) {
+    /** Saves an item's Shop and selling settings; the defaults (on, 100%) remove the row. */
+    public synchronized void setShopOverride(String item, boolean disabled, int percent, boolean sellDisabled,
+                                             int sellPercent) throws SQLException {
+        if (!disabled && percent == 100 && !sellDisabled && sellPercent == 100) {
             try (PreparedStatement ps = connection.prepareStatement("DELETE FROM shop_items WHERE item = ?")) {
                 ps.setString(1, item);
                 ps.executeUpdate();
@@ -386,11 +420,14 @@ public final class Database implements AutoCloseable {
             return;
         }
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO shop_items (item, disabled, percent) VALUES (?, ?, ?) "
-                        + "ON CONFLICT (item) DO UPDATE SET disabled = excluded.disabled, percent = excluded.percent")) {
+                "INSERT INTO shop_items (item, disabled, percent, sell_disabled, sell_percent) VALUES (?, ?, ?, ?, ?) "
+                        + "ON CONFLICT (item) DO UPDATE SET disabled = excluded.disabled, percent = excluded.percent, "
+                        + "sell_disabled = excluded.sell_disabled, sell_percent = excluded.sell_percent")) {
             ps.setString(1, item);
             ps.setInt(2, disabled ? 1 : 0);
             ps.setInt(3, percent);
+            ps.setInt(4, sellDisabled ? 1 : 0);
+            ps.setInt(5, sellPercent);
             ps.executeUpdate();
         }
     }
@@ -1048,7 +1085,8 @@ public final class Database implements AutoCloseable {
 
     private static final Map<String, String> LEADERBOARD_ORDER = Map.of(
             "credits", "credits", "earned", "earned", "playtime", "active_seconds",
-            "advancements", "advancements", "given", "given", "received", "received");
+            "advancements", "advancements", "given", "given", "received", "received",
+            "micro", "micro", "microEarned", "micro_earned");
 
     /**
      * Adds credits (or takes them, with a negative amount) and records why.
@@ -1211,7 +1249,8 @@ public final class Database implements AutoCloseable {
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? Optional.of(new CreditAccount(UUID.fromString(rs.getString("minecraft_uuid")),
                         rs.getString("minecraft_name"), rs.getLong("credits"), rs.getLong("earned"),
-                        rs.getLong("active_seconds"), rs.getLong("afk_seconds"))) : Optional.empty();
+                        rs.getLong("active_seconds"), rs.getLong("afk_seconds"), rs.getLong("micro"),
+                        rs.getLong("micro_earned"))) : Optional.empty();
             }
         }
     }
@@ -1220,7 +1259,7 @@ public final class Database implements AutoCloseable {
     public synchronized List<LeaderboardRow> leaderboard(String sort, int limit) throws SQLException {
         String order = LEADERBOARD_ORDER.getOrDefault(sort, "credits");
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT a.minecraft_uuid, a.minecraft_name, a.credits, a.earned, a.active_seconds, "
+                "SELECT a.minecraft_uuid, a.minecraft_name, a.credits, a.earned, a.active_seconds, a.micro, a.micro_earned, "
                         + "(SELECT COUNT(*) FROM fad_advancements v WHERE v.minecraft_uuid = a.minecraft_uuid) AS advancements, "
                         + "(SELECT COUNT(*) FROM fad_interactions i WHERE i.actor_uuid = a.minecraft_uuid) AS given, "
                         + "(SELECT COUNT(*) FROM fad_interactions i WHERE i.target_uuid = a.minecraft_uuid) AS received "
@@ -1232,7 +1271,7 @@ public final class Database implements AutoCloseable {
                     rows.add(new LeaderboardRow(UUID.fromString(rs.getString("minecraft_uuid")),
                             rs.getString("minecraft_name"), rs.getLong("credits"), rs.getLong("earned"),
                             rs.getLong("active_seconds"), rs.getLong("advancements"), rs.getLong("given"),
-                            rs.getLong("received")));
+                            rs.getLong("received"), rs.getLong("micro"), rs.getLong("micro_earned")));
                 }
             }
             return rows;
@@ -1383,12 +1422,15 @@ public final class Database implements AutoCloseable {
         Map<String, Long> totals = new java.util.LinkedHashMap<>();
         try (Statement st = connection.createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*), COALESCE(SUM(credits), 0), COALESCE(SUM(earned), 0), "
-                     + "COALESCE(SUM(active_seconds), 0) FROM fad_accounts")) {
+                     + "COALESCE(SUM(active_seconds), 0), COALESCE(SUM(micro), 0), COALESCE(SUM(micro_earned), 0) "
+                     + "FROM fad_accounts")) {
             rs.next();
             totals.put("players", rs.getLong(1));
             totals.put("credits", rs.getLong(2));
             totals.put("earned", rs.getLong(3));
             totals.put("activeSeconds", rs.getLong(4));
+            totals.put("micro", rs.getLong(5));
+            totals.put("microEarned", rs.getLong(6));
         }
         try (Statement st = connection.createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM fad_advancements")) {
@@ -1437,9 +1479,195 @@ public final class Database implements AutoCloseable {
     }
 
     public synchronized int deleteCreditTransactionsBefore(Instant before) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM fad_transactions WHERE created_at < ?")) {
-            ps.setLong(1, before.toEpochMilli());
-            return ps.executeUpdate();
+        int deleted = 0;
+        for (String table : List.of("fad_transactions", "micro_transactions")) {
+            try (PreparedStatement ps = connection.prepareStatement("DELETE FROM " + table + " WHERE created_at < ?")) {
+                ps.setLong(1, before.toEpochMilli());
+                deleted += ps.executeUpdate();
+            }
+        }
+        return deleted;
+    }
+
+    // ---- Market: microcredits from selling items ----
+
+    /**
+     * Adds (or, negative, takes) microcredits; returns the new balance, or -1 and changes nothing if that would go
+     * below 0. A positive amount adds to "earned in total" when {@code countsAsEarned}.
+     */
+    public synchronized long addMicro(UUID uuid, String name, long amount, String kind, String detail, String actor,
+                                      boolean countsAsEarned) throws SQLException {
+        return transaction(() -> changeMicro(uuid, name, amount, kind, detail, actor, countsAsEarned));
+    }
+
+    private long changeMicro(UUID uuid, String name, long amount, String kind, String detail, String actor,
+                             boolean countsAsEarned) throws SQLException {
+        ensureCreditAccount(uuid, name);
+        long balance = microBalance(uuid) + amount;
+        if (balance < 0) {
+            return -1L;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE fad_accounts SET micro = micro + ?, micro_earned = micro_earned + ? WHERE minecraft_uuid = ?")) {
+            ps.setLong(1, amount);
+            ps.setLong(2, countsAsEarned ? Math.max(0, amount) : 0);
+            ps.setString(3, uuid.toString());
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO micro_transactions (minecraft_uuid, amount, balance, kind, detail, actor, created_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, amount);
+            ps.setLong(3, balance);
+            ps.setString(4, kind);
+            ps.setString(5, detail);
+            ps.setString(6, actor);
+            ps.setLong(7, Instant.now().toEpochMilli());
+            ps.executeUpdate();
+        }
+        return balance;
+    }
+
+    private long microBalance(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT micro FROM fad_accounts WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    /** After an exchange: the new balances, or null (nothing changed) if there weren't enough microcredits. */
+    public record Exchange(long micro, long credits) {
+    }
+
+    /** Turns {@code micro} microcredits into {@code credits} credits, in one go. */
+    public synchronized Exchange exchangeMicro(UUID uuid, String name, long micro, long credits, String detail,
+                                               String actor) throws SQLException {
+        return transaction(() -> {
+            long microLeft = changeMicro(uuid, name, -micro, "EXCHANGE", detail, actor, false);
+            if (microLeft < 0) {
+                return null;
+            }
+            long balance = creditBalance(uuid) + credits;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET credits = credits + ? WHERE minecraft_uuid = ?")) {
+                ps.setLong(1, credits);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            insertCreditTransaction(uuid, credits, balance, "EXCHANGE", detail, actor, Instant.now());
+            return new Exchange(microLeft, balance);
+        });
+    }
+
+    /** 1 for the player with the most microcredits (or most earned, with {@code earned}); 0 without an account. */
+    public synchronized long microRank(UUID uuid, boolean earned) throws SQLException {
+        String column = earned ? "micro_earned" : "micro";
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT CASE WHEN a." + column + " > 0 THEN 1 + (SELECT COUNT(*) FROM fad_accounts o WHERE o." + column
+                        + " > a." + column + ") ELSE 0 END FROM fad_accounts a WHERE a.minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    public synchronized List<CreditTransaction> microTransactions(UUID uuid, int limit) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT * FROM micro_transactions WHERE minecraft_uuid = ? ORDER BY id DESC LIMIT ?")) {
+            ps.setString(1, uuid.toString());
+            ps.setInt(2, limit);
+            List<CreditTransaction> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new CreditTransaction(rs.getLong("id"), rs.getLong("amount"), rs.getLong("balance"),
+                            rs.getString("kind"), rs.getString("detail"), rs.getString("actor"),
+                            Instant.ofEpochMilli(rs.getLong("created_at"))));
+                }
+            }
+            return list;
+        }
+    }
+
+    /** One player's sales over a period. */
+    public record SalesRow(UUID uuid, String name, long amount, long sales) {
+    }
+
+    /** Who sold the most between {@code from} and {@code to}. */
+    public synchronized List<SalesRow> topSellers(Instant from, Instant to, int limit) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT t.minecraft_uuid, a.minecraft_name, SUM(t.amount) AS total, COUNT(*) AS sales "
+                        + "FROM micro_transactions t JOIN fad_accounts a ON a.minecraft_uuid = t.minecraft_uuid "
+                        + "WHERE t.kind = 'SALE' AND t.created_at >= ? AND t.created_at < ? "
+                        + "GROUP BY t.minecraft_uuid ORDER BY total DESC LIMIT ?")) {
+            ps.setLong(1, from.toEpochMilli());
+            ps.setLong(2, to.toEpochMilli());
+            ps.setInt(3, limit);
+            List<SalesRow> rows = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new SalesRow(UUID.fromString(rs.getString(1)), rs.getString(2), rs.getLong(3), rs.getLong(4)));
+                }
+            }
+            return rows;
+        }
+    }
+
+    /** How much of an item was sold lately, as stored: thousandths of a credit's worth, as of {@code updatedAt}. */
+    public record MarketPressure(double pressure, long updatedAt) {
+    }
+
+    public synchronized Map<String, MarketPressure> marketPressure() throws SQLException {
+        Map<String, MarketPressure> map = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM market_items")) {
+            while (rs.next()) {
+                map.put(rs.getString("item"), new MarketPressure(rs.getDouble("pressure"), rs.getLong("updated_at")));
+            }
+        }
+        return map;
+    }
+
+    public synchronized void setMarketPressure(Map<String, MarketPressure> changed) throws SQLException {
+        transaction(() -> {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO market_items (item, pressure, updated_at) VALUES (?, ?, ?) ON CONFLICT (item) "
+                            + "DO UPDATE SET pressure = excluded.pressure, updated_at = excluded.updated_at")) {
+                for (Map.Entry<String, MarketPressure> entry : changed.entrySet()) {
+                    ps.setString(1, entry.getKey());
+                    ps.setDouble(2, entry.getValue().pressure());
+                    ps.setLong(3, entry.getValue().updatedAt());
+                    ps.executeUpdate();
+                }
+            }
+            return null;
+        });
+    }
+
+    public synchronized void clearMarketPressure() throws SQLException {
+        try (Statement st = connection.createStatement()) {
+            st.execute("DELETE FROM market_items");
+        }
+    }
+
+    public synchronized Optional<String> marketState(String key) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT value FROM market_state WHERE key = ?")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+            }
+        }
+    }
+
+    public synchronized void setMarketState(String key, String value) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO market_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")) {
+            ps.setString(1, key);
+            ps.setString(2, value);
+            ps.executeUpdate();
         }
     }
 

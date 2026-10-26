@@ -3,7 +3,7 @@ version: '${version}'
 main: com.huzzysnuzzy.discordlinked.fad.DiscordLinkedFAD
 api-version: '1.21'
 folia-supported: true
-description: Community features for DiscordLinked. Interaction commands (/hug, /kiss, /pet...) and credits for playtime and advancements, shared with Discord and the admin website. Install on every Paper or Folia server behind the Velocity proxy.
+description: Community features for DiscordLinked. Interaction commands (/hug, /kiss, /pet...), credits for playtime and advancements, and selling items for microcredits (/sell), shared with Discord and the admin website. Install on every Paper or Folia server behind the Velocity proxy.
 authors: [HuzzySnuzzy]
 commands:
   discordlinkedfad:
@@ -19,7 +19,10 @@ permissions:
     description: Use interactions without waiting for the cooldown
     default: op
   discordlinkedfad.credits:
-    description: Check credits and the leaderboard
+    description: Check credits and the leaderboards (/credits, /mct)
+    default: true
+  discordlinkedfad.sell:
+    description: Sell items for microcredits and exchange them (/sell, /sellhand, /worth, /exchange)
     default: true
   discordlinkedfad.interactions:
     description: List interactions and turn them off or on for yourself

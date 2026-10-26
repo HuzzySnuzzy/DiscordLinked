@@ -4,5 +4,5 @@ import java.util.UUID;
 
 /** A player's community stats; {@code given} and {@code received} count interactions. */
 public record LeaderboardRow(UUID uuid, String name, long credits, long earned, long activeSeconds, long advancements,
-                             long given, long received) {
+                             long given, long received, long micro, long microEarned) {
 }

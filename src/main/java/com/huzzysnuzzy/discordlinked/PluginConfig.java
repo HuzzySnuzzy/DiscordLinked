@@ -57,7 +57,18 @@ public record PluginConfig(
         int streakAnnounceDays,
         String webDomain,
         String webDomainPrefix,
-        String webTunnelToken
+        String webTunnelToken,
+        boolean marketEnabled,
+        int sellPricePercent,
+        int microPerCredit,
+        String microName,
+        String microNamePlural,
+        String microSymbol,
+        String microLeaderboard,
+        boolean sellPriceDrop,
+        int sellPriceDropAfter,
+        int sellPriceRecoveryHours,
+        boolean marketWeeklyPost
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -112,7 +123,18 @@ public record PluginConfig(
                 Integer.parseInt(props.getProperty("streak-announce-days").trim()),
                 props.getProperty("web-domain").trim().toLowerCase(),
                 props.getProperty("web-domain-prefix").trim().toLowerCase(),
-                props.getProperty("web-tunnel-token").trim()
+                props.getProperty("web-tunnel-token").trim(),
+                parseBoolean(props, "market-enabled"),
+                Integer.parseInt(props.getProperty("sell-price-percent").trim()),
+                Math.max(1, Integer.parseInt(props.getProperty("microcredits-per-credit").trim())),
+                nonBlank(props, "microcredits-name", "Microcredit"),
+                nonBlank(props, "microcredits-name-plural", "Microcredits"),
+                nonBlank(props, "microcredits-symbol", "µc"),
+                "earned".equalsIgnoreCase(props.getProperty("microcredits-leaderboard").trim()) ? "earned" : "balance",
+                parseBoolean(props, "sell-price-drop"),
+                Math.max(1, Integer.parseInt(props.getProperty("sell-price-drop-after").trim())),
+                Math.max(1, Integer.parseInt(props.getProperty("sell-price-recovery-hours").trim())),
+                parseBoolean(props, "market-weekly-post")
         );
     }
 
@@ -164,6 +186,16 @@ public record PluginConfig(
     /** The credit name that fits the amount. */
     public String currency(long amount) {
         return Math.abs(amount) == 1 ? creditsName : creditsNamePlural;
+    }
+
+    /** "1,234 µc". */
+    public String micro(long amount) {
+        return String.format(java.util.Locale.ROOT, "%,d", amount) + " " + microSymbol;
+    }
+
+    /** Selling items for microcredits: needs the community features on too. */
+    public boolean marketOpen() {
+        return fadEnabled && marketEnabled;
     }
 
     public boolean chatBridgeEnabled() {

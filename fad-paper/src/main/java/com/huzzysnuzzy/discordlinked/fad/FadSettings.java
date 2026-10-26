@@ -46,6 +46,11 @@ final class FadSettings {
     final boolean advancementCredits;
     final CommandName creditsCommand;
     final CommandName interactionsCommand;
+    final CommandName sellCommand;
+    final CommandName sellHandCommand;
+    final CommandName worthCommand;
+    final CommandName microTopCommand;
+    final CommandName exchangeCommand;
     /** By command name, in config order. */
     final Map<String, Action> actions;
     private final YamlConfiguration user;
@@ -62,6 +67,11 @@ final class FadSettings {
         advancementCredits = bool("advancement-credits");
         creditsCommand = commandName("credits-command", logger);
         interactionsCommand = commandName("interactions-command", logger);
+        sellCommand = commandName("sell-command", logger);
+        sellHandCommand = commandName("sellhand-command", logger);
+        worthCommand = commandName("worth-command", logger);
+        microTopCommand = commandName("microcredit-top-command", logger);
+        exchangeCommand = commandName("exchange-command", logger);
         ConfigurationSection section = user.isConfigurationSection("actions")
                 ? user.getConfigurationSection("actions") : bundled.getConfigurationSection("actions");
         actions = Collections.unmodifiableMap(readActions(section, logger));
