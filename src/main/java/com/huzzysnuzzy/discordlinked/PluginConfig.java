@@ -54,7 +54,10 @@ public record PluginConfig(
         int dailyRewardBase,
         int dailyRewardPerDay,
         int dailyRewardMax,
-        int streakAnnounceDays
+        int streakAnnounceDays,
+        String webDomain,
+        String webDomainPrefix,
+        String webTunnelToken
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -106,7 +109,10 @@ public record PluginConfig(
                 Integer.parseInt(props.getProperty("daily-reward-base").trim()),
                 Integer.parseInt(props.getProperty("daily-reward-per-day").trim()),
                 Integer.parseInt(props.getProperty("daily-reward-max").trim()),
-                Integer.parseInt(props.getProperty("streak-announce-days").trim())
+                Integer.parseInt(props.getProperty("streak-announce-days").trim()),
+                props.getProperty("web-domain").trim().toLowerCase(),
+                props.getProperty("web-domain-prefix").trim().toLowerCase(),
+                props.getProperty("web-tunnel-token").trim()
         );
     }
 
@@ -135,6 +141,14 @@ public record PluginConfig(
     /** "tunnel": automatic HTTPS through a Cloudflare quick tunnel. "direct": listen on web-port as-is. */
     public boolean webTunnel() {
         return !"direct".equals(webAccess);
+    }
+
+    /** The website's own address (e.g. dla.example.com), or "" if no domain is set. */
+    public String webHostname() {
+        if (webDomain.isEmpty()) {
+            return "";
+        }
+        return webDomainPrefix.isEmpty() ? webDomain : webDomainPrefix + "." + webDomain;
     }
 
     /** Where interactions and advancements are posted: fad-channel-id, else the chat bridge channel. */

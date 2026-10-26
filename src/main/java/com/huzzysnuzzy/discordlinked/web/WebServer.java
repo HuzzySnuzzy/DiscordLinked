@@ -63,6 +63,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 
 /**
  * The website. Members of the Discord server log in with Discord (if {@code web-member-access} is on) and
@@ -193,13 +194,22 @@ public final class WebServer {
 
         if (config.webTunnel()) {
             secureCookies = true;
-            plugin.logger().info("Admin website starting; setting up its https:// address...");
-            tunnel = new CloudflareTunnel(plugin.dataDirectory().resolve("bin"), config.webPort(), plugin.logger(), url -> {
-                publicUrl = url;
-                plugin.logger().info("Admin website is live at {} (the address changes when the proxy restarts). "
-                        + "Run /dla in Discord or in game to log in.", url);
-            });
-            tunnel.start();
+            plugin.logger().info("Website starting; setting up its https:// address...");
+            domain = new CloudflareDomain(plugin.dataDirectory(), plugin.dataDirectory().resolve("bin"), plugin.logger(),
+                    ready -> {
+                        // Only now that it works: save the address it was asked for.
+                        String[] wanted = pendingAddress;
+                        if (wanted != null) {
+                            try {
+                                new SettingsEditor(plugin).setWebAddress(wanted[0], wanted[1]);
+                            } catch (IOException e) {
+                                plugin.logger().warn("Could not save the website address: {}", e.getMessage());
+                            }
+                            pendingAddress = null;
+                        }
+                        startTunnel(chooseTunnel());
+                    });
+            startTunnel(chooseTunnel());
         } else {
             String url = config.webPublicUrl();
             if (url.isEmpty() || url.contains("://localhost")) {
@@ -215,6 +225,143 @@ public final class WebServer {
             plugin.logger().info("Admin website running at {}. Run /dla in Discord or in game to log in.", url);
         }
         return true;
+    }
+
+    // ---- The https address (Cloudflare tunnel) ----
+
+    private CloudflareDomain domain;
+    /** The address being set up from the Settings page ({domain, prefix}), saved once it works. */
+    private volatile String[] pendingAddress;
+    /** Every tunnel started, so a stop also ends one that was being replaced. */
+    private final List<CloudflareTunnel> startedTunnels = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** The owner's own address if one is set up (token or Settings page), otherwise a quick tunnel. */
+    private CloudflareTunnel.Mode chooseTunnel() {
+        PluginConfig c = plugin.config();
+        if (!c.webTunnelToken().isEmpty() && !c.webHostname().isEmpty()) {
+            return CloudflareTunnel.token(c.webTunnelToken(), "https://" + c.webHostname());
+        }
+        if (domain != null && domain.configured()) {
+            return CloudflareTunnel.named(domain.credentials(), domain.tunnelId(), c.webPort(), "https://" + domain.hostname());
+        }
+        return CloudflareTunnel.quick(c.webPort());
+    }
+
+    /**
+     * Starts a tunnel. The one running before keeps serving until the new one is connected, so switching address
+     * never leaves the website unreachable. A tunnel on the owner's domain that can't connect falls back to a
+     * quick tunnel.
+     */
+    private synchronized void startTunnel(CloudflareTunnel.Mode mode) {
+        CloudflareTunnel previous = tunnel;
+        boolean quick = mode.name().equals("quick");
+        CloudflareTunnel[] self = new CloudflareTunnel[1];
+        self[0] = new CloudflareTunnel(plugin.dataDirectory().resolve("bin"), mode, plugin.logger(), url -> {
+            publicUrl = url;
+            plugin.logger().info(quick ? "Website is live at {} (the address changes when the proxy restarts). "
+                    + "Run /dla in Discord or in game to log in." : "Website is live at {}. Run /dla in Discord or in game "
+                    + "to log in.", url);
+            if (previous != null && previous != self[0]) {
+                // Keep the old address working a little longer, so whoever switched can follow the link to the new one.
+                webSweeper.schedule(previous::stop, 90, TimeUnit.SECONDS);
+            }
+        }, quick ? null : detail -> {
+            if (domain != null) {
+                domain.runFailed(detail);
+            }
+            synchronized (this) {
+                if (tunnel != self[0]) {
+                    return;
+                }
+                if (previous != null && previous.mode().name().equals("quick")) {
+                    tunnel = previous; // still running and serving: keep it
+                } else {
+                    startTunnel(CloudflareTunnel.quick(plugin.config().webPort()));
+                }
+            }
+        });
+        tunnel = self[0];
+        startedTunnels.add(self[0]);
+        self[0].start();
+    }
+
+    private DataObject domainJson() {
+        PluginConfig c = plugin.config();
+        boolean token = !c.webTunnelToken().isEmpty();
+        DataObject result = DataObject.empty()
+                .put("tunnel", c.webTunnel())
+                .put("prefix", pendingAddress != null ? pendingAddress[1] : c.webDomainPrefix())
+                .put("domain", pendingAddress != null ? pendingAddress[0] : c.webDomain())
+                .put("hostname", c.webHostname())
+                .put("tokenMode", token)
+                .put("publicUrl", publicUrl)
+                .put("current", tunnel == null ? null : tunnel.mode().name());
+        if (domain != null) {
+            result.put("state", domain.state().name().toLowerCase())
+                    .put("loginUrl", domain.loginUrl())
+                    .put("message", domain.message())
+                    .put("connectedHostname", domain.hostname());
+        }
+        return result;
+    }
+
+    private static final Pattern DNS_LABEL = Pattern.compile("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
+    private static final Pattern DOMAIN = Pattern.compile("([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}");
+
+    /** Settings page, "Your own address": saves the address and connects it (logging in to Cloudflare if needed). */
+    private void domainConnect(HttpExchange ex, Sessions.Session session) throws IOException {
+        if (domain == null) {
+            sendJson(ex, 409, error("Your own address needs web-access=tunnel."));
+            return;
+        }
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        String prefix = body.getString("prefix", "").trim().toLowerCase();
+        String name = body.getString("domain", "").trim().toLowerCase().replaceFirst("^https?://", "").replaceAll("/.*$", "");
+        if (!prefix.isEmpty() && !DNS_LABEL.matcher(prefix).matches()) {
+            sendJson(ex, 400, error("The part before your domain can only have letters, numbers and dashes (like dla or panel)."));
+            return;
+        }
+        if (!DOMAIN.matcher(name).matches()) {
+            sendJson(ex, 400, error("Enter your domain like example.com or example.nl."));
+            return;
+        }
+        String hostname = prefix.isEmpty() ? name : prefix + "." + name;
+        plugin.audit().log(null, null, session.user.id(), EventTypes.SETTINGS_CHANGE, "website address: " + hostname,
+                session.user.actor() + " (website)");
+        if (!plugin.config().webTunnelToken().isEmpty()) {
+            // The tunnel is set up in Cloudflare's dashboard; just use the new address.
+            new SettingsEditor(plugin).setWebAddress(name, prefix);
+            startTunnel(chooseTunnel());
+        } else {
+            pendingAddress = new String[] {name, prefix};
+            domain.connect(hostname);
+            // Give cloudflared a moment to print the Cloudflare link (or to finish, if no login is needed).
+            for (int i = 0; i < 40 && domain.state() == CloudflareDomain.State.WAITING && domain.loginUrl() == null; i++) {
+                try {
+                    Thread.sleep(250);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        sendJson(ex, 200, domainJson());
+    }
+
+    private void domainDisconnect(HttpExchange ex, Sessions.Session session) throws IOException {
+        if (domain == null) {
+            sendJson(ex, 409, error("Your own address needs web-access=tunnel."));
+            return;
+        }
+        domain.disconnect();
+        new SettingsEditor(plugin).setWebAddress("", null);
+        plugin.audit().log(null, null, session.user.id(), EventTypes.SETTINGS_CHANGE,
+                "website address: back to an automatic one", session.user.actor() + " (website)");
+        startTunnel(chooseTunnel());
+        sendJson(ex, 200, domainJson());
     }
 
     /** The address admins open, or null while the HTTPS tunnel is still starting. */
@@ -256,9 +403,7 @@ public final class WebServer {
         synchronized (liveLock) {
             liveLock.notifyAll();
         }
-        if (tunnel != null) {
-            tunnel.stop();
-        }
+        startedTunnels.forEach(CloudflareTunnel::stop);
         if (server != null) {
             server.stop(0);
             executor.shutdownNow();
@@ -361,7 +506,9 @@ public final class WebServer {
             case "POST /api/player/snapshot/save" -> snapshotSave(ex, session);
             case "POST /api/player/snapshot/restore" -> snapshotRestore(ex, session);
             case "GET /api/poll" -> poll(ex, session);
-            case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact" ->
+            case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact",
+                 "GET /api/settings/domain", "POST /api/settings/domain/connect", "POST /api/settings/domain/disconnect",
+                 "POST /api/settings/domain/login-link" ->
                     settings(ex, method, path, session);
             case "GET /api/community" -> sendJson(ex, 200, community(query(ex), staff));
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
@@ -1295,6 +1442,15 @@ public final class WebServer {
         SettingsEditor editor = new SettingsEditor(plugin);
         String actor = session.user.actor() + " (website)";
         switch (path) {
+            case "/api/settings/domain" -> sendJson(ex, 200, domainJson());
+            case "/api/settings/domain/connect" -> domainConnect(ex, session);
+            case "/api/settings/domain/disconnect" -> domainDisconnect(ex, session);
+            case "/api/settings/domain/login-link" -> {
+                // A one-time login link on the current address, for moving to the new address in one click.
+                String link = createLoginLink(session.user.id(), session.user.name(), session.user.avatarUrl());
+                sendJson(ex, link == null ? 409 : 200, link == null ? error("The new address isn't live yet.")
+                        : DataObject.empty().put("link", link));
+            }
             case "/api/settings" -> {
                 if (method.equals("POST")) {
                     DataObject body = readJson(ex);

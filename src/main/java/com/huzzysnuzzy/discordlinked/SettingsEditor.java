@@ -161,7 +161,22 @@ public final class SettingsEditor {
         secrets.put("clientSecret", !props.getProperty("discord-client-secret", "").isBlank());
         String keyFile = props.getProperty("google-service-account-file", "").trim();
         secrets.put("googleKey", !keyFile.isEmpty() && Files.exists(plugin.dataDirectory().resolve(keyFile)));
+        secrets.put("tunnelToken", !props.getProperty("web-tunnel-token", "").isBlank());
         return secrets;
+    }
+
+    /**
+     * Saves the website's own address (set from the Settings page's "Your own address" card, which validates it)
+     * and applies it. An empty domain means the automatic address.
+     */
+    public void setWebAddress(String domain, String prefix) throws IOException {
+        Map<String, String> changes = new LinkedHashMap<>();
+        changes.put("web-domain", domain);
+        if (prefix != null) {
+            changes.put("web-domain-prefix", prefix);
+        }
+        ConfigFiles.update(plugin.dataDirectory(), "config.properties", changes);
+        plugin.reloadConfig();
     }
 
     /** What was saved. */

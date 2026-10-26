@@ -172,6 +172,17 @@ while they're logged in.
   by default, or by longest login streak), search. Each player's login streak shows next to their status.
 - **On the website**: next to Online/Offline, players who have this website open right now get an
   "On the website" status (lists and player pages, updated live; it clears about 45 seconds after they close it).
+- **Your own address**: Settings → **Your own address** puts the website on your own domain, e.g.
+  `dla.example.nl`, instead of an address that changes on every restart (the part before the domain is up to
+  you). Type it in and click **Connect with Cloudflare**; open the link that appears, log in, pick the domain and
+  click Authorize. The plugin then creates a permanent Cloudflare tunnel and the DNS record by itself, and
+  switches over without downtime (the old address keeps working for a minute and a half, and **Open the new
+  address** logs you in there). The domain's DNS must be on Cloudflare (free plan is fine). **Change address**
+  moves it, **Disconnect** removes the tunnel and goes back to the automatic address. If the tunnel ever can't
+  connect, the website falls back to an automatic address so you're never locked out. The tunnel's files are in
+  `plugins/discordlinked/cloudflare/` (keep them private). Prefer the Cloudflare dashboard? Make a tunnel there
+  (Zero Trust → Networks → Tunnels) with the public hostname `<web-domain-prefix>.<web-domain>` and service
+  `http://localhost:<web-port>`, and put its token in `web-tunnel-token`.
 - **Teleports**: on a player page, **Teleport to them** puts your own Minecraft character where they are (or,
   if they're offline, where they logged out) and **Teleport to their bed** at their bed or respawn anchor,
   moving you to their server first if needed. Needs DiscordLinkedSpy 0.14+ on the servers; logout spots are
@@ -307,8 +318,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.14.2.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.14.2.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.14.2.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.15.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.15.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.15.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

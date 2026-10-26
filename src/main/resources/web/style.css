@@ -987,3 +987,12 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 @media (max-width: 760px) { .linked-table .cell-status .streak.mini { margin-left: auto; } }
 @media (max-width: 760px) { #view-players .linked-table .cell-linked::before { content: "Joined "; } }
 .pill.web { color: var(--accent); }
+
+/* ---- Settings: your own address ---- */
+.domain-fields { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }
+.domain-prefix { width: 120px; }
+.domain-name { flex: 1; min-width: 180px; }
+.domain-dot { font-weight: 800; font-size: 18px; color: var(--muted); }
+.domain-preview { color: var(--accent); margin-bottom: 10px; word-break: break-all; }
+.domain-step { margin: 8px 0; display: grid; gap: 8px; justify-items: start; }
+.domain-step p { margin: 0; }

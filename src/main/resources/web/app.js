@@ -1515,7 +1515,116 @@ async function loadSettings() {
     return;
   }
   for (const key of Object.keys(settingsEdits)) delete settingsEdits[key];
+  try {
+    state.domain = await api('/api/settings/domain');
+  } catch (e) {
+    state.domain = null;
+  }
   renderSettings();
+  watchDomain();
+}
+
+// ---- Your own address (Cloudflare) ----
+
+let domainTimer = null;
+
+/** While Cloudflare is being set up, keep the card up to date. */
+function watchDomain() {
+  clearTimeout(domainTimer);
+  const d = state.domain;
+  const switching = d && d.state === 'ready' && d.connectedHostname && d.publicUrl !== `https://${d.connectedHostname}`;
+  if (!d || !(d.state === 'waiting' || d.state === 'working' || switching) || currentRoute().view !== 'settings') return;
+  domainTimer = setTimeout(async () => {
+    try {
+      state.domain = await api('/api/settings/domain');
+      const card = document.getElementById('domain-card');
+      if (card) card.replaceWith(domainCard());
+    } catch (e) { /* keep showing the last state */ }
+    watchDomain();
+  }, 2000);
+}
+
+function domainCard() {
+  const d = state.domain;
+  const card = el('div', { class: 'card panel settings-group domain-card', id: 'domain-card' }, el('h2', {}, 'Your own address'));
+  if (!d) return card;
+  if (!d.tunnel) {
+    card.append(el('p', { class: 'muted' }, 'Your own address works with web-access=tunnel. This website uses web-access=direct, '
+      + 'so its address is web-public-url in config.properties.'));
+    return card;
+  }
+  const prefix = el('input', { type: 'text', value: d.prefix ?? 'dla', placeholder: 'dla', 'aria-label': 'Before your domain', class: 'domain-prefix', spellcheck: 'false' });
+  const name = el('input', { type: 'text', value: d.domain || '', placeholder: 'example.com', 'aria-label': 'Your domain', class: 'domain-name', spellcheck: 'false' });
+  const preview = el('div', { class: 'domain-preview mono' });
+  const update = () => {
+    const host = [prefix.value.trim().toLowerCase(), name.value.trim().toLowerCase()].filter(Boolean).join('.');
+    preview.textContent = name.value.trim() ? `https://${host}` : 'https://dla.example.com';
+  };
+  prefix.addEventListener('input', update);
+  name.addEventListener('input', update);
+  update();
+  const connected = d.state === 'ready' && d.connectedHostname;
+  const live = connected && d.publicUrl === `https://${d.connectedHostname}`;
+  const connect = el('button', { class: 'btn btn-small', type: 'button', onclick: async (e) => {
+    const button = e.currentTarget;
+    button.disabled = true;
+    button.textContent = 'Starting…';
+    try {
+      state.domain = await api('/api/settings/domain/connect', { prefix: prefix.value, domain: name.value });
+    } catch (err) {
+      toast(err.message);
+    }
+    card.replaceWith(domainCard());
+    watchDomain();
+  } }, connected ? 'Change address' : d.tokenMode ? 'Use this address' : 'Connect with Cloudflare');
+  const busy = d.state === 'waiting' || d.state === 'working';
+  connect.disabled = busy;
+  if (busy) connect.textContent = d.state === 'waiting' ? 'Waiting for Cloudflare…' : 'Setting up…';
+
+  card.append(
+    el('p', { class: 'muted' }, 'Put this website on your own domain, like dla.example.com, instead of an address that changes '
+      + 'on every restart. The domain\'s DNS has to be on Cloudflare (the free plan is fine). You choose the part before the domain.'),
+    el('div', { class: 'domain-fields' }, prefix, el('span', { class: 'domain-dot' }, '.'), name),
+    preview);
+
+  if (d.tokenMode) {
+    card.append(el('p', { class: 'muted' }, 'Using the tunnel token from config.properties: the address itself is set in the Cloudflare '
+      + 'dashboard (Zero Trust → Networks → Tunnels → Public hostname), so make sure it matches.'));
+  }
+  if (d.state === 'waiting') {
+    card.append(el('div', { class: 'domain-step' },
+      d.loginUrl
+        ? [el('a', { class: 'btn', href: d.loginUrl, target: '_blank', rel: 'noopener' }, 'Open Cloudflare and authorize ↗'),
+          el('p', { class: 'muted' }, `Log in, pick ${d.domain || 'your domain'} and click Authorize. This page continues by itself.`)]
+        : el('p', { class: 'muted shimmer' }, 'Asking Cloudflare for a login link…')));
+  } else if (d.state === 'working') {
+    card.append(el('p', { class: 'domain-step shimmer' }, d.message || 'Setting things up…'));
+  } else if (connected) {
+    card.append(el('div', { class: 'domain-step' }, live
+      ? [el('p', {}, el('span', { class: 'badge good' }, 'Live'), ' ', el('a', { href: `https://${d.connectedHostname}`, target: '_blank', rel: 'noopener' },
+        `https://${d.connectedHostname}`)),
+      location.host !== d.connectedHostname && el('button', { class: 'btn btn-small', type: 'button', onclick: async () => {
+        try {
+          const { link } = await api('/api/settings/domain/login-link', {});
+          location.href = link;
+        } catch (err) { toast(err.message); }
+      } }, 'Open the new address'),
+      location.host !== d.connectedHostname && el('p', { class: 'muted' }, 'This address keeps working for about a minute and a half; '
+        + 'after that use the new one. /dla links use it from now on.')]
+      : el('p', { class: 'muted shimmer' }, `Connecting https://${d.connectedHostname}…`)));
+  }
+  if (d.message && d.state !== 'working') card.append(el('p', { class: 'error' }, d.message));
+  card.append(el('div', { class: 'actions inv-start' }, connect,
+    connected && !d.tokenMode && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: async (e) => {
+      if (!confirm('Remove your own address? The website goes back to an automatic address that changes on restart.')) return;
+      e.currentTarget.disabled = true;
+      try {
+        state.domain = await api('/api/settings/domain/disconnect', {});
+        toast('Disconnected. Run /dla for a link to the new address.');
+      } catch (err) { toast(err.message); }
+      card.replaceWith(domainCard());
+    } }, 'Disconnect')));
+  return card;
 }
 
 const formatBytes = (n) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB`
@@ -1572,7 +1681,8 @@ function renderSettings() {
     el('p', { class: 'muted' }, 'For safety these can only be changed in plugins/discordlinked/config.properties.'),
     secret('Bot token', data.secrets.botToken, 'bot-token'),
     secret('Discord client secret', data.secrets.clientSecret, 'discord-client-secret (optional, for the Log in with Discord button)'),
-    secret('Google service account key', data.secrets.googleKey, 'the key file for Google Sheets export (optional)'));
+    secret('Google service account key', data.secrets.googleKey, 'the key file for Google Sheets export (optional)'),
+    secret('Cloudflare tunnel token', data.secrets.tunnelToken, 'web-tunnel-token (optional: a tunnel made in the Cloudflare dashboard)'));
 
   const d = data.data;
   const stat = (label, value) => el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
@@ -1589,7 +1699,7 @@ function renderSettings() {
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'cleanup') }, 'Clean up now'),
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'compact') }, 'Compact database')));
 
-  $('settings-body').replaceChildren(el('div', { class: 'settings-grid' }, ...groups, secrets, dataCard));
+  $('settings-body').replaceChildren(el('div', { class: 'settings-grid' }, domainCard(), ...groups, secrets, dataCard));
   updateSettingsBar();
 }
 
