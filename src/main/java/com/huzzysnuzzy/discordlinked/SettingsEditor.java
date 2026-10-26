@@ -43,7 +43,7 @@ public final class SettingsEditor {
 
             id("guild-id", "Discord", "Discord server", "The server the bot works in.", true),
             id("admin-role-id", "Discord", "Admin role",
-                    "Members with this role can use the admin website and /dla.", false),
+                    "Members with this role get the admin view of the website.", false),
             id("log-channel-id", "Discord", "Log channel",
                     "Where links, suspensions, kicks, restores and joins/leaves are posted. Empty = off.", false),
             bool("dm-players", "Discord", "Message players on Discord",
@@ -80,6 +80,9 @@ public final class SettingsEditor {
                     "0.0.0.0 = reachable from anywhere, 127.0.0.1 = only this machine.", Type.TEXT, true, 0, 0, List.of()),
             new Field("web-public-url", "Website", "Public address (direct mode)",
                     "e.g. https://panel.example.com. Empty = http://<public IP>:<port>.", Type.URL, true, 0, 0, List.of()),
+            bool("web-member-access", "Website", "Community view for everyone",
+                    "Let anyone in the Discord server log in and see who's online, the member list and simple "
+                            + "profiles. Nothing administrative.", false),
             id("web-owner-id", "Website", "Settings owner",
                     "The only Discord user who can open this page. Empty = the Discord server owner. "
                             + "Changing it hands this page to someone else immediately.", false),

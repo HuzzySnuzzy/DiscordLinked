@@ -34,7 +34,8 @@ public record PluginConfig(
         long webOwnerId,
         int chatLogRetentionDays,
         int logRetentionDays,
-        int snapshotRetentionDays
+        int snapshotRetentionDays,
+        boolean webMemberAccess
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -66,7 +67,8 @@ public record PluginConfig(
                 parseId(props, "web-owner-id"),
                 Integer.parseInt(props.getProperty("chat-log-retention-days").trim()),
                 Integer.parseInt(props.getProperty("log-retention-days").trim()),
-                Integer.parseInt(props.getProperty("inventory-snapshot-retention-days").trim())
+                Integer.parseInt(props.getProperty("inventory-snapshot-retention-days").trim()),
+                parseBoolean(props, "web-member-access")
         );
     }
 

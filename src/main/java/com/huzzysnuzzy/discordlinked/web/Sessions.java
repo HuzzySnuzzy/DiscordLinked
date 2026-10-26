@@ -53,9 +53,10 @@ final class Sessions {
         return expires != null && expires.isAfter(Instant.now());
     }
 
-    Session create(DiscordOAuth.DiscordUser user) {
+    Session create(DiscordOAuth.DiscordUser user, boolean admin) {
         purge();
         Session session = new Session(token(), user, token(), Instant.now().plus(SESSION_LIFETIME));
+        session.admin = admin;
         sessions.put(session.token, session);
         return session;
     }
@@ -97,12 +98,21 @@ final class Sessions {
         final String csrfToken;
         final Instant expiresAt;
         volatile Instant lastRoleCheck = Instant.now();
+        /** Has the admin role (re-checked every few minutes). */
+        volatile boolean admin;
+        /** Admins can go off duty to use the website like everyone else. */
+        volatile boolean onDuty = true;
 
         Session(String token, DiscordOAuth.DiscordUser user, String csrfToken, Instant expiresAt) {
             this.token = token;
             this.user = user;
             this.csrfToken = csrfToken;
             this.expiresAt = expiresAt;
+        }
+
+        /** Whether this page gets the admin view and admin-only data right now. */
+        boolean staff() {
+            return admin && onDuty;
         }
     }
 }

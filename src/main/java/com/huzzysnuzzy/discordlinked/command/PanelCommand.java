@@ -1,6 +1,7 @@
 package com.huzzysnuzzy.discordlinked.command;
 
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
+import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
@@ -12,8 +13,8 @@ import java.sql.SQLException;
 import java.util.Optional;
 
 /**
- * /dla — sends a one-time, clickable login link for the admin website. Anyone can run it; only players
- * whose linked Discord account has the admin role get a link.
+ * /dla — sends a one-time, clickable login link for the website. Anyone can run it; linked players get a
+ * link if their Discord account has the admin role, or is in the Discord server while web-member-access is on.
  */
 public final class PanelCommand implements SimpleCommand {
 
@@ -50,7 +51,8 @@ public final class PanelCommand implements SimpleCommand {
             player.sendMessage(plugin.messages().minecraft("minecraft.dla.offline"));
             return;
         }
-        if (!plugin.bot().isReady() || !plugin.bot().hasAdminRole(account.get().discordId())) {
+        DiscordBot.MemberInfo member = plugin.bot().isReady() ? plugin.bot().checkMember(account.get().discordId()) : null;
+        if (member == null || !(member.admin() || member.inGuild() && plugin.config().webMemberAccess())) {
             player.sendMessage(plugin.messages().minecraft("minecraft.dla.no-access"));
             return;
         }

@@ -115,7 +115,7 @@ public final class DiscordBot extends ListenerAdapter {
                 Commands.slash("forceunlink", "Remove a player's link")
                         .addOption(OptionType.STRING, "player", "Minecraft username", true)
                         .setDefaultPermissions(ADMIN),
-                Commands.slash("dla", "Get a one-time login link for the DiscordLinked admin website")
+                Commands.slash("dla", "Get a one-time login link for the DiscordLinked website")
         ).queue();
         plugin.logger().info("Discord bot ready as {} in {}", event.getJDA().getSelfUser().getName(), guild.getName());
     }
@@ -292,7 +292,7 @@ public final class DiscordBot extends ListenerAdapter {
 
     private void handleDla(SlashCommandInteractionEvent event) {
         Member member = event.getMember();
-        if (member == null || !isAdmin(member)) {
+        if (member == null || !isAdmin(member) && !plugin.config().webMemberAccess()) {
             event.reply(msg("discord.dla.no-access")).setEphemeral(true).queue();
             return;
         }
@@ -356,18 +356,25 @@ public final class DiscordBot extends ListenerAdapter {
      * so never call this from a JDA thread.
      */
     public boolean hasAdminRole(long userId) {
+        return plugin.config().adminRoleId() != 0L && checkMember(userId).admin();
+    }
+
+    /**
+     * Fresh Discord membership for a user: whether they're in the guild and have the admin role. Blocks on
+     * a REST call, so never call this from a JDA thread.
+     */
+    public MemberInfo checkMember(long userId) {
         Guild guild = guild();
-        long roleId = plugin.config().adminRoleId();
-        if (guild == null || roleId == 0L) {
-            return false;
+        if (guild == null) {
+            return new MemberInfo(false, false);
         }
         try {
             Member member = guild.retrieveMemberById(userId).complete();
             cacheMember(userId, member);
-            return isAdmin(member);
+            return new MemberInfo(true, isAdmin(member));
         } catch (ErrorResponseException e) {
             cacheMember(userId, null);
-            return false; // not a member of the guild
+            return new MemberInfo(false, false); // not a member of the guild
         }
     }
 

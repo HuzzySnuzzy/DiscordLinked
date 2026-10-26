@@ -3,18 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DiscordLinked Admin</title>
+  <title>DiscordLinked</title>
   <link rel="icon" href="/favicon.svg">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="liquid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
   <header class="topbar" id="topbar">
-    <a class="brand" href="#/linked"><img src="/favicon.svg" alt=""> <span class="brand-text">DiscordLinked</span></a>
+    <a class="brand" id="brand" href="#/"><img src="/favicon.svg" alt=""> <span class="brand-text">DiscordLinked</span></a>
     <nav class="tabs">
-      <a href="#/linked" data-view="linked">Linked</a>
-      <a href="#/moderate" data-view="moderate">Moderate</a>
-      <a href="#/logs" data-view="logs">Logs</a>
+      <a href="#/linked" data-view="linked" data-mode="admin">Linked</a>
+      <a href="#/moderate" data-view="moderate" data-mode="admin">Moderate</a>
+      <a href="#/logs" data-view="logs" data-mode="admin">Logs</a>
+      <a href="#/community" data-view="community" data-mode="member">Community</a>
+      <a href="#/players" data-view="players" data-mode="member">Players</a>
     </nav>
     <div class="global-search">
       <input id="global-search" type="search" placeholder="Find any player…" autocomplete="off"
@@ -23,6 +25,10 @@
     </div>
     <div class="me">
       <span id="live-indicator" class="live-indicator" title="Connecting…">Live</span>
+      <label id="duty" class="duty" hidden title="On duty: admin view. Off duty: see the website like everyone else.">
+        <span class="duty-text">On duty</span>
+        <span class="switch"><input type="checkbox" id="duty-switch" checked aria-label="On duty (admin view)"><span class="switch-track"></span></span>
+      </label>
       <a href="#/settings" id="settings-link" class="icon-btn" title="Settings" aria-label="Settings" hidden>
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.4 7.4 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
       </a>
@@ -100,6 +106,43 @@
     </section>
 
     <section id="view-player" hidden></section>
+
+    <section id="view-community" hidden>
+      <div class="toolbar"><h1>Community</h1></div>
+      <div id="community-stats" class="community-stats"></div>
+      <h2 class="section-title">Online now <span id="community-online-count" class="count"></span></h2>
+      <div id="community-online" class="people-grid"></div>
+      <p id="community-online-empty" class="empty card" hidden>Nobody is online right now.</p>
+      <div class="grid community-lists">
+        <div class="card panel"><h2>Newest members</h2><div id="community-newest" class="people-list"></div></div>
+        <div class="card panel"><h2>Recently online</h2><div id="community-recent" class="people-list"></div></div>
+      </div>
+    </section>
+
+    <section id="view-players" hidden>
+      <div class="toolbar">
+        <h1>Players <span id="players-count" class="count"></span></h1>
+        <div class="legend"><span><i class="dot dot-admin"></i> Staff</span></div>
+        <select id="players-sort" aria-label="Sort players">
+          <option value="name-asc">Name A–Z</option>
+          <option value="name-desc">Name Z–A</option>
+          <option value="online">Online first</option>
+          <option value="seen">Recently seen</option>
+          <option value="linked-new">Newest members</option>
+          <option value="admins">Staff first</option>
+        </select>
+        <input id="players-search" type="search" placeholder="Filter players…" aria-label="Filter players">
+      </div>
+      <div class="table-wrap">
+        <table class="table linked-table">
+          <thead>
+            <tr><th>Minecraft</th><th>Discord</th><th>Status</th><th>Member since</th></tr>
+          </thead>
+          <tbody id="players-body"></tbody>
+        </table>
+        <p id="players-empty" class="empty" hidden>No members yet.</p>
+      </div>
+    </section>
 
     <section id="view-settings" hidden>
       <div class="toolbar"><h1>Settings</h1><span class="muted" id="settings-owner-note"></span></div>

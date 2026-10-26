@@ -23,6 +23,7 @@ const EVENT_LABELS = {
   INVENTORY_SNAPSHOT: ['Snapshot saved', 'info'],
   INVENTORY_RESTORE: ['Inventory restored', 'warn'],
   SETTINGS_CHANGE: ['Settings changed', 'info'],
+  DUTY: ['Duty', 'info'],
   DEATH: ['Death', 'bad'],
   SPY_START: ['Spy started', 'info'],
   SPY_END: ['Spy ended', ''],
@@ -135,6 +136,22 @@ const discordLink = (p, ...children) =>
   el('a', { class: 'discord-link', href: discordHref(p.discordId), target: '_blank', rel: 'noopener', title: 'Open Discord profile' }, ...children);
 const discordName = (p) => discordLink(p, el('span', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName));
 
+/** Blurred until hovered (or focused/tapped), so IPs don't show on a shared or streamed screen. */
+const sensitive = (text) => el('span', { class: 'sensitive', tabindex: '0', title: 'Hover to show' }, text);
+const IP_PATTERN = /\b\d{1,3}(?:\.\d{1,3}){3}\b|(?<![\w:])(?=[0-9a-f:]*::|(?:[0-9a-f]{1,4}:){3})[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?![\w:])/gi;
+/** Text with every IP address in it blurred. */
+function maskIps(text) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(IP_PATTERN)) {
+    parts.push(text.slice(last, match.index), sensitive(match[0]));
+    last = match.index + match[0].length;
+  }
+  parts.push(text.slice(last));
+  return parts.filter((part) => part !== '');
+}
+
+const isStaff = () => !!state.me?.staff;
 const playerHref = (uuid) => `#/player/${uuid}`;
 const headUrl = (uuid, size) => `https://mc-heads.net/avatar/${uuid}/${size}`;
 
@@ -432,7 +449,7 @@ function logRow(entry, showPlayer) {
     el('td', {}, el('span', { class: `badge ${tone}` }, label)),
     showPlayer && el('td', { class: 'nowrap' }, player),
     el('td', {}, entry.actor || '—'),
-    el('td', { class: 'detail' }, entry.detail || ''));
+    el('td', { class: 'detail' }, maskIps(entry.detail || '')));
 }
 
 function downloadCsv(uuid) {
@@ -474,12 +491,16 @@ async function loadPlayer(uuid) {
   try {
     const changed = !state.player || state.player.player.uuid !== uuid;
     state.player = await api(`/api/player?uuid=${encodeURIComponent(uuid)}`);
+    if (!isStaff()) {
+      renderPublicPlayer();
+      return;
+    }
     if (changed) state.inventory = null;
     renderPlayer();
     loadPlayerLogs(true);
     if (currentRoute().inventory && state.player.player.online && changed) loadInventory();
   } catch (e) {
-    view.replaceChildren(el('a', { class: 'back', href: '#/linked' }, '← Back'), el('p', { class: 'empty' }, e.message));
+    view.replaceChildren(el('a', { class: 'back', href: homeHash() }, '← Back'), el('p', { class: 'empty' }, e.message));
   }
 }
 
@@ -558,7 +579,7 @@ function renderPlayer() {
     ips.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
       el('thead', {}, el('tr', {}, ['IP', 'First seen', 'Last seen', 'Times', 'Other accounts on this IP'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ips.map((ip) => el('tr', {},
-        el('td', { class: 'mono' }, ip.ip),
+        el('td', { class: 'mono' }, sensitive(ip.ip)),
         el('td', { class: 'nowrap muted' }, formatTime(ip.firstSeen)),
         el('td', { class: 'nowrap muted' }, formatTime(ip.lastSeen)),
         el('td', {}, ip.times),
@@ -1105,6 +1126,7 @@ async function startSpy(p) {
 
 async function pollSpy() {
   clearTimeout(spyTimer);
+  if (!isStaff()) return;
   let data;
   try {
     data = await api('/api/spy');
@@ -1353,6 +1375,169 @@ $('settings-save').addEventListener('click', async () => {
 // ---- Live updates: one event stream for every page ----
 
 // Events that can change what the list/player pages show.
+// ---- Community view (everyone; admins see it when off duty) ----
+
+function personRow(p, sub) {
+  return el('a', { class: 'person', href: playerHref(p.uuid) },
+    el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' }),
+    el('div', { class: 'person-text' },
+      el('div', { class: `name ${nameClass(p)}` }, p.minecraftName),
+      el('div', { class: 'sub' }, sub)));
+}
+
+function onlineCard(p) {
+  return el('a', { class: 'card person-card', href: playerHref(p.uuid) },
+    el('img', { class: 'head', src: headUrl(p.uuid, 112), alt: '', loading: 'lazy' }),
+    el('div', { class: 'person-text' },
+      el('div', { class: `name ${nameClass(p)}` }, p.minecraftName),
+      el('div', { class: 'sub' }, p.linked ? p.discordName : 'Not linked'),
+      el('span', { class: 'pill online' }, p.server || 'Connecting')));
+}
+
+async function loadCommunity() {
+  let data;
+  try {
+    data = await api('/api/community');
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  const stat = (label, value, extra) => el('div', { class: 'card stat-card' },
+    el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value), extra);
+  $('community-stats').replaceChildren(
+    stat('Online now', data.onlineCount),
+    stat('Members', data.linkedCount),
+    stat('Staff online', data.staffOnline),
+    stat('Servers', data.servers.length,
+      data.servers.length > 0 && el('div', { class: 'stat-sub' }, data.servers.map((s) => `${s.name} ${s.players}`).join(' · '))));
+  $('community-online-count').textContent = `(${data.onlineCount})`;
+  $('community-online').replaceChildren(...data.online.map(onlineCard));
+  $('community-online-empty').hidden = data.online.length > 0;
+  $('community-newest').replaceChildren(...(data.newest.length
+    ? data.newest.map((p) => personRow(p, `Joined the community ${timeAgo(p.linkedAt)}`))
+    : [el('p', { class: 'muted' }, 'No members yet.')]));
+  $('community-recent').replaceChildren(...(data.recent.length
+    ? data.recent.map((p) => personRow(p, `Seen ${timeAgo(p.lastSeen)}`))
+    : [el('p', { class: 'muted' }, 'Nobody yet.')]));
+}
+
+async function loadPlayers() {
+  try {
+    state.members = await api('/api/members');
+    renderPlayers();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function renderPlayers() {
+  const members = state.members || [];
+  const query = $('players-search').value.trim().toLowerCase();
+  const rows = members
+    .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
+    .sort(SORTS[$('players-sort').value] || SORTS['name-asc']);
+  $('players-count').textContent = `(${members.length})`;
+  $('players-body').replaceChildren(...rows.map((p) => el('tr', {},
+    el('td', { class: 'cell-mc' }, el('div', { class: 'identity' },
+      el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
+      el('div', {}, playerName(p)))),
+    el('td', { class: 'cell-discord' }, el('div', { class: 'identity' },
+      discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
+      el('div', {}, discordName(p)))),
+    el('td', { class: 'cell-status' }, statusPills(p)),
+    el('td', { class: 'cell-linked nowrap muted', title: formatTime(p.linkedAt) },
+      el('span', { class: 'when-long' }, shortDate(p.linkedAt)),
+      el('span', { class: 'when-short' }, shortDate(p.linkedAt))))));
+  const empty = $('players-empty');
+  empty.textContent = members.length ? 'No players match your filter.' : 'No members yet.';
+  empty.hidden = rows.length > 0;
+}
+
+$('players-search').addEventListener('input', renderPlayers);
+$('players-sort').addEventListener('change', renderPlayers);
+
+/** The simple profile everyone can see: who they are, their Discord, and whether they're on. */
+function renderPublicPlayer() {
+  const p = state.player.player;
+  const profile = el('div', { class: 'card profile' },
+    el('img', { class: 'head-large', src: headUrl(p.uuid, 192), alt: '' }),
+    el('div', { class: 'info' },
+      el('h1', { class: nameClass(p) }, p.minecraftName),
+      el('div', { class: 'badges' },
+        p.isAdmin && el('span', { class: 'badge warn' }, 'Staff'),
+        p.linked ? el('span', { class: 'badge good' }, 'Member') : el('span', { class: 'badge' }, 'Not linked'),
+        ...statusPills(p)),
+      copyButton(p.uuid, 'UUID'),
+      el('div', { class: 'actions' },
+        el('a', { class: 'btn btn-ghost btn-small', href: `https://namemc.com/profile/${p.uuid}`, target: '_blank', rel: 'noopener' },
+          'View on NameMC ↗'))));
+  const discord = el('div', { class: 'card panel' },
+    el('h2', {}, 'Discord'),
+    p.linked
+      ? el('div', { class: 'identity' },
+        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '' })),
+        el('div', {}, discordName(p), copyButton(p.discordId, 'User ID')))
+      : el('p', { class: 'muted' }, 'This player has no linked Discord account.'),
+    p.linked && el('dl', { class: 'kv' }, el('dt', {}, 'Member since'), el('dd', {}, formatTime(p.linkedAt))));
+  const server = el('div', { class: 'card panel' },
+    el('h2', {}, 'On the server'),
+    el('dl', { class: 'kv' },
+      el('dt', {}, 'Status'), el('dd', {}, p.online ? `Online${p.server ? ` on ${p.server}` : ''}` : 'Offline'),
+      !p.online && [el('dt', {}, 'Last seen'),
+        el('dd', {}, p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never')]));
+  $('view-player').replaceChildren(
+    el('a', { class: 'back', href: '#/players' }, '← All players'),
+    profile,
+    el('div', { class: 'grid' }, discord, server));
+}
+
+function onPresence(change) {
+  const route = currentRoute();
+  if (route.view === 'community') soon('community', loadCommunity);
+  else if (route.view === 'players') soon('players', loadPlayers);
+  else if (route.view === 'player' && route.uuid === change.uuid) soon('player', () => loadPlayer(route.uuid));
+}
+
+// ---- On duty / off duty ----
+
+const ADMIN_VIEWS = new Set(['linked', 'logs', 'moderate', 'settings']);
+const MEMBER_VIEWS = new Set(['community', 'players']);
+const homeHash = () => (isStaff() ? '#/linked' : '#/community');
+
+function applyMode() {
+  const staff = isStaff();
+  document.body.classList.toggle('member-view', !staff);
+  $('brand').href = homeHash();
+  $('logs-sheets').hidden = !state.me.sheetsEnabled;
+  $('settings-link').hidden = !state.me.isOwner;
+  $('duty').hidden = !state.me.isAdmin;
+  $('duty').classList.toggle('off', state.me.isAdmin && !state.me.onDuty);
+  $('duty-switch').checked = state.me.onDuty;
+  $('global-search').placeholder = staff ? 'Find any player…' : 'Find a player…';
+  updateTabPills();
+}
+
+$('duty-switch').addEventListener('change', async (e) => {
+  const input = e.currentTarget;
+  input.disabled = true;
+  try {
+    const me = await api('/api/duty', { onDuty: input.checked });
+    state.me = { ...state.me, ...me };
+    state.player = null;
+    applyMode();
+    toast(me.onDuty ? 'On duty: admin view' : 'Off duty: you see what everyone else sees');
+    const target = currentRoute().view === 'player' ? location.hash : homeHash();
+    if (location.hash === target) showView();
+    else location.hash = target;
+    if (me.onDuty) pollSpy();
+  } catch (err) {
+    input.checked = !input.checked;
+    toast(err.message);
+  } finally {
+    input.disabled = false;
+  }
+});
+
 const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK', 'SUSPEND', 'SUSPEND_EDIT',
   'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED']);
 const pendingRefresh = {};
@@ -1418,6 +1603,7 @@ function connectLive() {
   });
   events.addEventListener('log', (e) => onLiveLog(JSON.parse(e.data)));
   events.addEventListener('player', (e) => onLivePlayer(JSON.parse(e.data)));
+  events.addEventListener('presence', (e) => onPresence(JSON.parse(e.data)));
 }
 
 // ---- Motion: page entrances, liquid tab pills, ripples ----
@@ -1493,14 +1679,18 @@ document.addEventListener('pointerdown', (e) => {
 
 function currentRoute() {
   const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})(\/inventory)?$/);
-  if (match) return { view: 'player', uuid: match[1].toLowerCase(), inventory: !!match[2] };
-  const views = { '#/logs': 'logs', '#/moderate': 'moderate', '#/settings': 'settings' };
-  return { view: views[location.hash] || 'linked' };
+  if (match) return { view: 'player', uuid: match[1].toLowerCase(), inventory: !!match[2] && isStaff() };
+  const view = location.hash.replace(/^#\//, '');
+  // Each view only exists in its own mode; anything else goes to that mode's home page.
+  if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view };
+  return { view: isStaff() ? 'linked' : 'community' };
 }
 
 function refreshCurrentView() {
   const route = currentRoute();
   if (route.view === 'linked') loadLinked();
+  else if (route.view === 'community') loadCommunity();
+  else if (route.view === 'players') loadPlayers();
   else if (route.view === 'player') loadPlayer(route.uuid);
   else if (route.view === 'moderate') loadModerate();
   else if (route.view === 'settings') loadSettings();
@@ -1508,7 +1698,9 @@ function refreshCurrentView() {
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings']) $(`view-${name}`).hidden = name !== route.view;
+  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'players']) {
+    $(`view-${name}`).hidden = name !== route.view;
+  }
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
   if (route.view === 'logs') loadLogs(true);
   else refreshCurrentView();
@@ -1522,6 +1714,8 @@ window.addEventListener('hashchange', showView);
 setInterval(() => {
   if ($('action-dialog').open || document.hidden) return;
   if (!$('view-linked').hidden) loadLinked();
+  else if (!$('view-community').hidden) loadCommunity();
+  else if (!$('view-players').hidden) loadPlayers();
 }, 30000);
 setInterval(() => {
   if ($('action-dialog').open || document.hidden || state.spy) return;
@@ -1536,11 +1730,10 @@ setInterval(() => {
   }
   $('me-name').textContent = state.me.name;
   $('me-avatar').src = state.me.avatar;
-  $('logs-sheets').hidden = !state.me.sheetsEnabled;
-  $('settings-link').hidden = !state.me.isOwner;
+  applyMode();
   showView();
   pollSpy();
   connectLive();
   // Admin status is looked up in the background; pick it up shortly after the first load.
-  setTimeout(() => { if (!$('view-linked').hidden) loadLinked(); }, 3000);
+  setTimeout(() => { if (!$('view-linked').hidden) loadLinked(); else if (!$('view-players').hidden) loadPlayers(); }, 3000);
 })();

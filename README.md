@@ -27,10 +27,20 @@ Set `chat-channel-id` in `config.properties`, then turn on either direction inde
 
 Chat that another plugin blocks (mutes, filters) is not sent to Discord. Mentions like `@everyone` never ping.
 
-## Admin website
+## Website
 
-A web panel, built into the plugin, where admins log in with Discord. Only members with `admin-role-id` get in,
-and the role is checked again every 5 minutes while they're logged in.
+A web panel, built into the plugin, where people log in with Discord. Roles are checked again every 5 minutes
+while they're logged in.
+
+- **Everyone in your Discord server** (`web-member-access=true`, the default) gets the community view:
+  a **Community** dashboard (who's online and on which server, member and staff counts, newest members,
+  recently online), a **Players** list and simple profiles (Minecraft and Discord identity, member since,
+  online or last seen). Nothing administrative: no IPs, notes, suspensions, inventories or logs. The server
+  enforces this, not just the page.
+- **Admins** (`admin-role-id`) get the admin view below. The **On duty** switch in the top bar (on by
+  default) flips them to the community view and back; switching is logged.
+- IP addresses are blurred for admins until you hover (or tap) them, so they don't show on a shared or
+  streamed screen.
 
 - **Linked**: every linked player with their Minecraft head, Discord avatar, names, UUID/ID and status
   (online with server, or offline with when they were last seen, e.g. "Offline · 3 days ago").
@@ -173,14 +183,14 @@ Discord:
 | `/whois [player] [user]` | Moderate Members | Show a link |
 | `/history <player>` | Moderate Members | Last 20 tracked events |
 | `/forceunlink <player>` | Moderate Members | Remove someone's link |
-| `/dla` | admin role | One-time login link for the admin website |
+| `/dla` | everyone | One-time login link for the website |
 
 Admin command visibility can be changed in Server Settings → Integrations → your bot.
 
 In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`.
 
-`/dla` (in Discord and in game): a one-time login link for the admin website. Anyone can run it; only
-members whose Discord account has `admin-role-id` get a link.
+`/dla` (in Discord and in game): a one-time login link for the website. Admins get the admin view; with
+`web-member-access` on, everyone else in the Discord server gets the community view.
 
 ## Building
 
@@ -190,7 +200,7 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The plugin jar is `build/libs/DiscordLinked-0.9.3.jar`. Every push also builds on GitHub Actions; download
+The plugin jar is `build/libs/DiscordLinked-0.10.0.jar`. Every push also builds on GitHub Actions; download
 the jar from the run's **Artifacts** section.
 
 ## Setup

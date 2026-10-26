@@ -56,8 +56,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Executors;
 
 /**
- * The admin website. Admins log in with Discord and must hold {@code admin-role-id};
- * the role is re-checked every few minutes while they stay logged in.
+ * The website. Members of the Discord server log in with Discord (if {@code web-member-access} is on) and
+ * get the community view; holders of {@code admin-role-id} get the admin view, and can switch to the
+ * community view by going off duty. Roles are re-checked every few minutes while people stay logged in.
  */
 public final class WebServer {
 
@@ -67,6 +68,12 @@ public final class WebServer {
     /** The only requests allowed while the admin is in a spy session. */
     private static final Set<String> SPY_ALLOWED = Set.of("GET /api/me", "GET /api/spy", "GET /api/events",
             "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend");
+    /** Everything the community view (non-admins and off-duty admins) may call. */
+    private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/community", "GET /api/members",
+            "GET /api/search", "GET /api/player", "GET /api/events", "POST /api/duty");
+    /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
+    private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
+            EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK);
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final int MAX_EXPORT_ROWS = 50_000;
     private static final DateTimeFormatter EXPORT_TIME =
@@ -83,7 +90,7 @@ public final class WebServer {
             Map.entry("admin", Set.of(EventTypes.LINK, EventTypes.UNLINK, EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT,
                     EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE, EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT,
                     EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_VIEW,
-                    EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE, EventTypes.SETTINGS_CHANGE)),
+                    EventTypes.INVENTORY_SNAPSHOT, EventTypes.INVENTORY_RESTORE, EventTypes.SETTINGS_CHANGE, EventTypes.DUTY)),
             Map.entry("kicks", Set.of(EventTypes.KICK)),
             Map.entry("notes", Set.of(EventTypes.NOTE)),
             Map.entry("links", Set.of(EventTypes.LINK, EventTypes.UNLINK)),
@@ -93,7 +100,7 @@ public final class WebServer {
             Map.entry("chat", Set.of(EventTypes.CHAT)),
             Map.entry("commands", Set.of(EventTypes.COMMAND)),
             Map.entry("denied", Set.of(EventTypes.DENIED_UNLINKED, EventTypes.DENIED_SUSPENDED)),
-            Map.entry("web", Set.of(EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT)),
+            Map.entry("web", Set.of(EventTypes.WEB_LOGIN, EventTypes.LOG_EXPORT, EventTypes.DUTY)),
             Map.entry("spy", Set.of(EventTypes.SPY_START, EventTypes.SPY_END)),
             Map.entry("inventory", Set.of(EventTypes.INVENTORY_VIEW, EventTypes.INVENTORY_SNAPSHOT,
                     EventTypes.INVENTORY_RESTORE)),
@@ -192,8 +199,8 @@ public final class WebServer {
     }
 
     /**
-     * A one-time login link for an admin, or null if the website isn't reachable yet. The caller must
-     * already have checked that this Discord user has the admin role.
+     * A one-time login link, or null if the website isn't reachable yet. Whether the user may log in (and
+     * with which view) is checked when the link is used.
      */
     public String createLoginLink(long discordId, String name, String avatarUrl) {
         String base = publicUrl;
@@ -292,21 +299,30 @@ public final class WebServer {
             sendJson(ex, 423, error("You're in a spy session. End it first.").put("locked", true));
             return;
         }
+        boolean staff = session.staff();
+        if (!staff && !MEMBER_ROUTES.contains(route)) {
+            sendJson(ex, 403, error(session.admin ? "You're off duty. Switch on duty to use the admin pages."
+                    : "Only admins can do that."));
+            return;
+        }
         switch (route) {
+            case "GET /api/community" -> sendJson(ex, 200, community());
+            case "GET /api/members" -> sendJson(ex, 200, memberList());
+            case "POST /api/duty" -> setDuty(ex, session);
             case "GET /api/online" -> sendJson(ex, 200, onlineList(session));
             case "GET /api/spy" -> sendJson(ex, 200, spyStatus(session));
             case "POST /api/spy/start" -> spyStart(ex, session);
             case "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend" -> spyAction(ex, path, session);
-            case "GET /api/me" -> sendJson(ex, 200, DataObject.empty()
-                    .put("id", String.valueOf(session.user.id()))
-                    .put("name", session.user.name())
-                    .put("avatar", session.user.avatarUrl())
-                    .put("csrf", session.csrfToken)
-                    .put("sheetsEnabled", sheets != null)
-                    .put("isOwner", isOwner(session)));
+            case "GET /api/me" -> sendJson(ex, 200, meJson(session));
             case "GET /api/linked" -> sendJson(ex, 200, linkedList());
-            case "GET /api/search" -> sendJson(ex, 200, search(query(ex)));
-            case "GET /api/player" -> playerPage(ex, query(ex));
+            case "GET /api/search" -> sendJson(ex, 200, search(query(ex), staff));
+            case "GET /api/player" -> {
+                if (staff) {
+                    playerPage(ex, query(ex));
+                } else {
+                    publicPlayerPage(ex, query(ex));
+                }
+            }
             case "GET /api/player/inventory" -> inventory(ex, query(ex), session);
             case "GET /api/player/snapshots" -> snapshots(ex, query(ex));
             case "GET /api/player/snapshot" -> snapshotPreview(ex, query(ex));
@@ -325,6 +341,58 @@ public final class WebServer {
     }
 
     // ---- Login ----
+
+    private enum Access { ADMIN, MEMBER, NONE }
+
+    /** Who may use the website: admins, and (if web-member-access is on) anyone in the Discord server. */
+    private Access access(long userId) {
+        if (!plugin.bot().isReady()) {
+            return Access.NONE;
+        }
+        DiscordBot.MemberInfo member = plugin.bot().checkMember(userId);
+        if (member.admin()) {
+            return Access.ADMIN;
+        }
+        return member.inGuild() && plugin.config().webMemberAccess() ? Access.MEMBER : Access.NONE;
+    }
+
+    private void sendNoAccess(HttpExchange ex) throws IOException {
+        sendMessagePage(ex, 403, "No access", plugin.config().webMemberAccess()
+                ? "This website is only for members of the Discord server."
+                : "Your Discord account doesn't have the admin role for this website.");
+    }
+
+    private DataObject meJson(Sessions.Session session) {
+        boolean staff = session.staff();
+        return DataObject.empty()
+                .put("id", String.valueOf(session.user.id()))
+                .put("name", session.user.name())
+                .put("avatar", session.user.avatarUrl())
+                .put("csrf", session.csrfToken)
+                .put("isAdmin", session.admin)
+                .put("onDuty", session.onDuty)
+                .put("staff", staff)
+                .put("sheetsEnabled", staff && sheets != null)
+                .put("isOwner", staff && isOwner(session));
+    }
+
+    private void setDuty(HttpExchange ex, Sessions.Session session) throws IOException {
+        if (!session.admin) {
+            sendJson(ex, 403, error("Only admins have an admin view."));
+            return;
+        }
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        boolean onDuty = body.getBoolean("onDuty", true);
+        if (session.onDuty != onDuty) {
+            session.onDuty = onDuty;
+            plugin.audit().log(null, null, session.user.id(), EventTypes.DUTY, onDuty
+                    ? "went on duty (admin view)" : "went off duty (community view)", session.user.actor());
+        }
+        sendJson(ex, 200, meJson(session));
+    }
 
     private void serveLoginPage(HttpExchange ex) throws IOException {
         String button = oauth == null ? ""
@@ -347,10 +415,10 @@ public final class WebServer {
         }
         String html = new String(files.get("message.html"), StandardCharsets.UTF_8)
                 .replace("{{title}}", "Log in as " + escapeHtml(link.user().name()))
-                .replace("{{message}}", "This one-time link logs you into the admin panel."
+                .replace("{{message}}", "This one-time link logs you into the website."
                         + "</p><form method=\"post\" action=\"/login/link\" class=\"inline-form\">"
                         + "<input type=\"hidden\" name=\"t\" value=\"" + escapeHtml(token) + "\">"
-                        + "<button class=\"btn\" type=\"submit\">Continue to the admin panel</button></form><p hidden>");
+                        + "<button class=\"btn\" type=\"submit\">Continue</button></form><p hidden>");
         send(ex, 200, CONTENT_TYPES.get("html"), html.getBytes(StandardCharsets.UTF_8));
     }
 
@@ -368,13 +436,14 @@ public final class WebServer {
                     + "Run /dla again for a new one.");
             return;
         }
-        if (!plugin.bot().isReady() || !plugin.bot().hasAdminRole(link.user().id())) {
-            sendMessagePage(ex, 403, "No access", "Your Discord account doesn't have the admin role for this panel.");
+        Access access = access(link.user().id());
+        if (access == Access.NONE) {
+            sendNoAccess(ex);
             return;
         }
-        Sessions.Session session = sessions.create(link.user());
-        plugin.audit().log(null, null, link.user().id(), EventTypes.WEB_LOGIN, "logged in with a /dla link",
-                link.user().actor());
+        Sessions.Session session = sessions.create(link.user(), access == Access.ADMIN);
+        plugin.audit().log(null, null, link.user().id(), EventTypes.WEB_LOGIN, "logged in with a /dla link"
+                + (access == Access.ADMIN ? "" : " (community view)"), link.user().actor());
         ex.getResponseHeaders().add("Set-Cookie", cookie(SESSION_COOKIE, session.token,
                 Sessions.SESSION_LIFETIME.toSeconds()));
         redirect(ex, "/");
@@ -437,13 +506,16 @@ public final class WebServer {
             });
             return;
         }
-        if (!plugin.bot().hasAdminRole(user.id())) {
-            plugin.audit().log(null, null, user.id(), EventTypes.WEB_LOGIN, "denied: missing admin role", user.actor());
-            sendMessagePage(ex, 403, "No access", "Your Discord account doesn't have the admin role for this panel.");
+        Access access = access(user.id());
+        if (access == Access.NONE) {
+            plugin.audit().log(null, null, user.id(), EventTypes.WEB_LOGIN, plugin.config().webMemberAccess()
+                    ? "denied: not in the Discord server" : "denied: missing admin role", user.actor());
+            sendNoAccess(ex);
             return;
         }
-        Sessions.Session session = sessions.create(user);
-        plugin.audit().log(null, null, user.id(), EventTypes.WEB_LOGIN, "logged in", user.actor());
+        Sessions.Session session = sessions.create(user, access == Access.ADMIN);
+        plugin.audit().log(null, null, user.id(), EventTypes.WEB_LOGIN,
+                access == Access.ADMIN ? "logged in" : "logged in (community view)", user.actor());
         ex.getResponseHeaders().add("Set-Cookie", cookie(SESSION_COOKIE, session.token,
                 Sessions.SESSION_LIFETIME.toSeconds()));
         redirect(ex, "/");
@@ -455,17 +527,22 @@ public final class WebServer {
         redirect(ex, "/");
     }
 
-    /** The logged-in session, or null. Drops the session if the user lost the admin role. */
+    /**
+     * The logged-in session, or null. Drops the session if the user may no longer use the website, and
+     * moves admins who lost the role to the community view.
+     */
     private Sessions.Session currentSession(HttpExchange ex) {
         Sessions.Session session = sessions.get(cookies(ex).get(SESSION_COOKIE));
         if (session == null) {
             return null;
         }
         if (Duration.between(session.lastRoleCheck, Instant.now()).compareTo(ROLE_RECHECK) > 0) {
-            if (!plugin.bot().isReady() || !plugin.bot().hasAdminRole(session.user.id())) {
+            Access access = access(session.user.id());
+            if (access == Access.NONE) {
                 sessions.invalidate(session.token);
                 return null;
             }
+            session.admin = access == Access.ADMIN;
             session.lastRoleCheck = Instant.now();
         }
         return session;
@@ -476,6 +553,14 @@ public final class WebServer {
     /** The fields every player row shares: identity, link, Discord status, online state and suspension. */
     private DataObject playerJson(UUID uuid, String name, LinkedAccount linked, Suspension suspension)
             throws SQLException {
+        DataObject row = publicPlayerJson(uuid, name, linked);
+        DiscordBot.MemberInfo member = linked == null ? null : plugin.bot().memberInfo(linked.discordId());
+        return row.put("inGuild", member == null || member.inGuild())
+                .put("suspension", suspension == null ? null : suspensionJson(suspension));
+    }
+
+    /** What anyone logged in may see about a player: identity, Discord profile, online state and staff badge. */
+    private DataObject publicPlayerJson(UUID uuid, String name, LinkedAccount linked) throws SQLException {
         Optional<Player> online = plugin.proxy().getPlayer(uuid);
         DataObject row = DataObject.empty()
                 .put("uuid", uuid.toString())
@@ -494,15 +579,12 @@ public final class WebServer {
                             ? DiscordOAuth.avatarUrl(linked.discordId(), null) : linked.discordAvatar())
                     .put("linkedAt", linked.linkedAt().toEpochMilli())
                     .put("lastSeen", linked.lastSeen() == null ? null : linked.lastSeen().toEpochMilli())
-                    .put("isAdmin", member != null && member.admin())
-                    .put("inGuild", member == null || member.inGuild());
+                    .put("isAdmin", member != null && member.admin());
         } else {
             Instant lastActivity = plugin.database().lastActivity(uuid);
             row.put("lastSeen", lastActivity == null ? null : lastActivity.toEpochMilli())
-                    .put("isAdmin", false)
-                    .put("inGuild", true);
+                    .put("isAdmin", false);
         }
-        row.put("suspension", suspension == null ? null : suspensionJson(suspension));
         return row;
     }
 
@@ -528,7 +610,7 @@ public final class WebServer {
         return result;
     }
 
-    private DataArray search(Map<String, String> query) throws SQLException {
+    private DataArray search(Map<String, String> query, boolean staff) throws SQLException {
         String q = query.getOrDefault("q", "").trim();
         DataArray result = DataArray.empty();
         if (q.isEmpty()) {
@@ -536,10 +618,78 @@ public final class WebServer {
         }
         for (PlayerRef ref : plugin.database().searchPlayers(q, 20)) {
             LinkedAccount linked = ref.discordId() == null ? null : plugin.database().findByUuid(ref.uuid()).orElse(null);
-            result.add(playerJson(ref.uuid(), ref.name(), linked,
-                    plugin.database().activeSuspension(ref.uuid()).orElse(null)));
+            result.add(staff
+                    ? playerJson(ref.uuid(), ref.name(), linked, plugin.database().activeSuspension(ref.uuid()).orElse(null))
+                    : publicPlayerJson(ref.uuid(), ref.name(), linked));
         }
         return result;
+    }
+
+    // ---- Community view ----
+
+    private DataArray memberList() throws SQLException {
+        DataArray result = DataArray.empty();
+        for (LinkedAccount account : plugin.database().allLinked()) {
+            result.add(publicPlayerJson(account.uuid(), account.minecraftName(), account));
+        }
+        return result;
+    }
+
+    private void publicPlayerPage(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+        UUID uuid = parseUuid(query.get("uuid"));
+        Optional<PlayerRef> ref = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
+        if (ref.isEmpty()) {
+            sendJson(ex, 404, error("No player with that UUID has ever joined"));
+            return;
+        }
+        LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);
+        sendJson(ex, 200, DataObject.empty().put("player", publicPlayerJson(uuid, ref.get().name(), linked)));
+    }
+
+    /** The community dashboard: who's online where, the newest members and who was on recently. */
+    private DataObject community() throws SQLException {
+        List<LinkedAccount> linked = plugin.database().allLinked();
+        Map<UUID, LinkedAccount> byUuid = new HashMap<>();
+        linked.forEach(account -> byUuid.put(account.uuid(), account));
+
+        DataArray online = DataArray.empty();
+        Map<String, Integer> servers = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        int staffOnline = 0;
+        List<Player> players = new ArrayList<>(plugin.proxy().getAllPlayers());
+        players.sort(java.util.Comparator.comparing(Player::getUsername, String.CASE_INSENSITIVE_ORDER));
+        for (Player player : players) {
+            DataObject row = publicPlayerJson(player.getUniqueId(), player.getUsername(), byUuid.get(player.getUniqueId()));
+            online.add(row);
+            if (row.getBoolean("isAdmin", false)) {
+                staffOnline++;
+            }
+            String server = row.getString("server", "");
+            if (!server.isEmpty()) {
+                servers.merge(server, 1, Integer::sum);
+            }
+        }
+        DataArray serverCounts = DataArray.empty();
+        servers.forEach((name, count) -> serverCounts.add(DataObject.empty().put("name", name).put("players", count)));
+
+        DataArray newest = DataArray.empty();
+        for (LinkedAccount account : linked.stream()
+                .sorted(java.util.Comparator.comparing(LinkedAccount::linkedAt).reversed()).limit(8).toList()) {
+            newest.add(publicPlayerJson(account.uuid(), account.minecraftName(), account));
+        }
+        DataArray recent = DataArray.empty();
+        for (LinkedAccount account : linked.stream()
+                .filter(a -> a.lastSeen() != null && plugin.proxy().getPlayer(a.uuid()).isEmpty())
+                .sorted(java.util.Comparator.comparing(LinkedAccount::lastSeen).reversed()).limit(8).toList()) {
+            recent.add(publicPlayerJson(account.uuid(), account.minecraftName(), account));
+        }
+        return DataObject.empty()
+                .put("linkedCount", linked.size())
+                .put("onlineCount", players.size())
+                .put("staffOnline", staffOnline)
+                .put("servers", serverCounts)
+                .put("online", online)
+                .put("newest", newest)
+                .put("recent", recent);
     }
 
     private void playerPage(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
@@ -617,18 +767,32 @@ public final class WebServer {
     private static final int MAX_LIVE_STREAMS = 32;
     private final Set<LiveStream> liveStreams = ConcurrentHashMap.newKeySet();
 
-    /** One open page. Events are queued here and written by that page's request thread. */
+    /**
+     * One open page. Events are queued here and written by that page's request thread. The admin view gets
+     * the full logs; the community view only hears that a player came, went or (un)linked.
+     */
     private static final class LiveStream implements LiveEvents.Listener {
         final BlockingQueue<String> queue = new LinkedBlockingQueue<>(1000);
+        final Sessions.Session session;
+
+        LiveStream(Sessions.Session session) {
+            this.session = session;
+        }
 
         @Override
         public void onLog(AuditEntry entry) {
-            queue.offer("event: log\ndata: " + logJson(entry) + "\n\n");
+            if (session.staff()) {
+                queue.offer("event: log\ndata: " + logJson(entry) + "\n\n");
+            } else if (entry.uuid() != null && PRESENCE_EVENTS.contains(entry.eventType())) {
+                queue.offer("event: presence\ndata: " + DataObject.empty().put("uuid", entry.uuid().toString()) + "\n\n");
+            }
         }
 
         @Override
         public void onPlayerChange(String kind, UUID player) {
-            queue.offer("event: player\ndata: " + DataObject.empty().put("kind", kind).put("uuid", player.toString()) + "\n\n");
+            if (session.staff()) {
+                queue.offer("event: player\ndata: " + DataObject.empty().put("kind", kind).put("uuid", player.toString()) + "\n\n");
+            }
         }
     }
 
@@ -640,7 +804,7 @@ public final class WebServer {
         ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
         ex.getResponseHeaders().set("X-Accel-Buffering", "no");
         ex.sendResponseHeaders(200, 0);
-        LiveStream stream = new LiveStream();
+        LiveStream stream = new LiveStream(session);
         liveStreams.add(stream);
         plugin.audit().live().subscribe(stream);
         var out = ex.getResponseBody();
