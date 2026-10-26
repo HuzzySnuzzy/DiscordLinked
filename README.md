@@ -256,6 +256,11 @@ With `web-access=direct` the panel is served over plain http on `web-port` (open
 "Log in with Discord" button: set `discord-client-secret` and add `<web-public-url>/callback` under
 Developer Portal → OAuth2 → Redirects.
 
+The same button works with **Your own address** (or a `web-tunnel-token` tunnel): set `discord-client-secret`
+(Developer Portal → OAuth2 → Client Secret), add `https://<your address>/callback` under OAuth2 → Redirects
+(Settings → Your own address shows it with a copy button), and restart the proxy. It can't work on the
+automatic trycloudflare address, because Discord only sends people back to addresses listed there.
+
 ### Google Sheets export (optional)
 
 The **Download CSV** button needs no setup: open the file in Google Sheets with File → Import.
@@ -318,8 +323,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.15.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.15.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.15.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.15.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.15.1.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.15.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

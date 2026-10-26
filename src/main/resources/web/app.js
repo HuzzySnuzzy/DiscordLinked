@@ -1613,6 +1613,19 @@ function domainCard() {
         + 'after that use the new one. /dla links use it from now on.')]
       : el('p', { class: 'muted shimmer' }, `Connecting https://${d.connectedHostname}…`)));
   }
+  if (live) {
+    card.append(el('div', { class: 'domain-login' },
+      el('div', { class: 'setting-label' }, 'Log in with Discord',
+        ' ', el('span', { class: `badge ${d.discordLogin ? 'good' : 'warn'}` }, d.discordLogin ? 'On' : 'Off')),
+      d.discordLogin
+        ? el('p', { class: 'muted' }, 'The login page has a Log in with Discord button. Its redirect, listed in Discord\'s Developer Portal '
+          + '→ your app → OAuth2 → Redirects, must be:')
+        : el('p', { class: 'muted' }, d.clientSecretSet
+          ? 'Restart the proxy to turn the button on. Discord\'s Developer Portal → your app → OAuth2 → Redirects must list:'
+          : 'For a Log in with Discord button: copy the Client Secret from Discord\'s Developer Portal → your app → OAuth2 into '
+            + 'discord-client-secret in config.properties, add this redirect there, and restart the proxy:'),
+      copyButton(`https://${d.connectedHostname}/callback`, 'Redirect')));
+  }
   if (d.message && d.state !== 'working') card.append(el('p', { class: 'error' }, d.message));
   card.append(el('div', { class: 'actions inv-start' }, connect,
     connected && !d.tokenMode && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: async (e) => {

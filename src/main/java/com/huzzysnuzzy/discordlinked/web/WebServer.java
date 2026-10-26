@@ -136,7 +136,7 @@ public final class WebServer {
     private final Map<String, byte[]> files = new HashMap<>();
     private HttpServer server;
     private ExecutorService executor;
-    private DiscordOAuth oauth;
+    private volatile DiscordOAuth oauth;
     private GoogleSheetsExporter sheets;
     private volatile boolean secureCookies;
     private volatile String publicUrl;
@@ -258,6 +258,8 @@ public final class WebServer {
         CloudflareTunnel[] self = new CloudflareTunnel[1];
         self[0] = new CloudflareTunnel(plugin.dataDirectory().resolve("bin"), mode, plugin.logger(), url -> {
             publicUrl = url;
+            // Discord login needs a redirect address that doesn't change, so only on the owner's own address.
+            updateDiscordLogin(quick ? null : url);
             plugin.logger().info(quick ? "Website is live at {} (the address changes when the proxy restarts). "
                     + "Run /dla in Discord or in game to log in." : "Website is live at {}. Run /dla in Discord or in game "
                     + "to log in.", url);
@@ -285,6 +287,22 @@ public final class WebServer {
         self[0].start();
     }
 
+    /** Turns the "Log in with Discord" button on for {@code url} (if the client secret is set), or off for null. */
+    private void updateDiscordLogin(String url) {
+        String secret = plugin.config().oauthClientSecret();
+        if (url == null || secret.isEmpty()) {
+            oauth = null;
+            if (url != null) {
+                plugin.logger().info("For a \"Log in with Discord\" button on {}: put the Client Secret from Discord's Developer "
+                        + "Portal -> OAuth2 in discord-client-secret, add {}/callback under OAuth2 -> Redirects, and restart.", url, url);
+            }
+            return;
+        }
+        oauth = new DiscordOAuth(secret, url + "/callback");
+        plugin.logger().info("Log in with Discord is on. Its redirect must be listed under Developer Portal -> OAuth2 -> "
+                + "Redirects: {}/callback", url);
+    }
+
     private DataObject domainJson() {
         PluginConfig c = plugin.config();
         boolean token = !c.webTunnelToken().isEmpty();
@@ -295,7 +313,9 @@ public final class WebServer {
                 .put("hostname", c.webHostname())
                 .put("tokenMode", token)
                 .put("publicUrl", publicUrl)
-                .put("current", tunnel == null ? null : tunnel.mode().name());
+                .put("current", tunnel == null ? null : tunnel.mode().name())
+                .put("discordLogin", oauth != null)
+                .put("clientSecretSet", !c.oauthClientSecret().isEmpty());
         if (domain != null) {
             result.put("state", domain.state().name().toLowerCase())
                     .put("loginUrl", domain.loginUrl())
