@@ -1664,27 +1664,56 @@ function renderShopGrid() {
     : [el('p', { class: 'muted shop-empty' }, query ? 'No items match.' : 'Nothing for sale here.')]));
 }
 
+/**
+ * An item in the shop's creative-style list. Like Minecraft's creative tabs: left-click picks one up (again for
+ * one more), right- or middle-click picks up a full stack, shift-click sends a stack straight to the chest.
+ */
 function shopItemNode(item) {
   const node = el('button', {
     class: `slot shop-item ${item.disabled ? 'off' : ''} ${item.unavailable ? 'unavailable' : ''}`, type: 'button', role: 'listitem',
-    draggable: shop.edit ? 'false' : 'true', 'aria-label': `${shopName(item.id)}, ${fromCents(item.price)} each`,
+    'aria-label': `${shopName(item.id)}, ${fromCents(item.price)} each`,
   }, shopIcon(item.id));
-  const show = () => { shop.hovered = item; showShopTooltip(node, item); renderShopInfo(item); };
+  const show = () => {
+    shop.hovered = item;
+    if (!shop.cursor) showShopTooltip(node, item);
+    if (!shop.cursor) renderShopInfo(item);
+  };
   node.addEventListener('mouseenter', show);
   node.addEventListener('focus', show);
   node.addEventListener('mouseleave', () => { shop.hovered = null; hideTooltip(); });
   node.addEventListener('blur', () => { shop.hovered = null; hideTooltip(); });
-  node.addEventListener('click', (e) => {
-    renderShopInfo(item);
-    if (shop.edit) shopItemDialog(item);
-    else if (!item.disabled) addToChest(item, e.shiftKey ? item.stack : 1);
-  });
-  node.addEventListener('dragstart', (e) => {
-    e.dataTransfer.setData('text/plain', item.id);
-    e.dataTransfer.effectAllowed = 'copy';
+  node.addEventListener('pointerdown', (e) => {
+    // Touch picks on tap (click), so scrolling the list doesn't pick things up.
+    if (e.pointerType !== 'mouse' || e.button > 2) return;
+    e.preventDefault();
+    e.shopHandled = true;
     hideTooltip();
+    if (shop.edit) {
+      if (e.button === 0) shopItemDialog(item);
+      return;
+    }
+    if (item.disabled) return;
+    if (e.button === 0 && e.shiftKey) addToChest(item, item.stack);
+    else pickFromShop(item, e.button !== 0);
+    shop.press = { from: 'shop' };
+  });
+  node.addEventListener('click', (e) => {
+    if (shop.edit) {
+      if (e.detail === 0 || e.pointerType !== 'mouse') shopItemDialog(item);
+      return;
+    }
+    if (item.disabled) return;
+    renderShopInfo(item);
+    if (e.detail === 0) addToChest(item, 1); // keyboard: Enter / Space
+    else if (lastPointerType !== 'mouse') pickFromShop(item, false);
   });
   return node;
+}
+
+function pickFromShop(item, fullStack) {
+  if (fullStack) setCursor({ id: item.id, amount: item.stack });
+  else if (shop.cursor?.id === item.id) setCursor({ id: item.id, amount: Math.min(item.stack, shop.cursor.amount + 1) });
+  else setCursor({ id: item.id, amount: 1 });
 }
 
 const perStackLabel = (item) => (item.stack === 64 ? 'per 64 (stack)' : `per ${item.stack} (stack)`);
@@ -1747,46 +1776,229 @@ function addToChest(item, amount, slotIndex) {
   renderChest();
 }
 
+// ---- The stack in your hand, Minecraft style ----
+//
+// shop.cursor is the stack being held ({ id, amount } or null); it's drawn at the mouse. In the chest:
+// left-click picks up a stack / puts down all / merges / swaps; right-click picks up half / puts down one;
+// holding a button and moving across slots spreads the stack evenly (left) or one per slot (right);
+// double-click gathers every matching stack; shift-click sends a slot back. Escape, or clicking outside the
+// chest, puts the held stack back.
+
+let lastPointerType = 'mouse';
+const stackOf = (id) => shop.byId.get(id).stack;
+/** How many more of {@code id} fit in a chest slot. */
+const roomFor = (slot, id) => (!slot ? stackOf(id) : slot.id === id ? stackOf(id) - slot.amount : 0);
+
+function setCursor(stack) {
+  shop.cursor = stack && stack.amount > 0 ? stack : null;
+  if (shop.cursor) hideTooltip();
+  renderChest();
+}
+
+function renderCursor() {
+  const shown = shop.cursor && shop.cursor.amount - plannedTotal();
+  let node = $('shop-cursor');
+  if (!node) node = document.body.appendChild(el('div', { id: 'shop-cursor', class: 'slot shop-cursor', 'aria-hidden': 'true' }));
+  if (!shop.cursor || currentRoute().view !== 'shop') {
+    node.hidden = true;
+    return;
+  }
+  node.replaceChildren(shopIcon(shop.cursor.id), shown !== 1 && el('span', { class: 'slot-count' }, shown));
+  node.classList.toggle('spent', shown <= 0);
+  node.hidden = false;
+  moveCursor();
+}
+
+function moveCursor() {
+  const node = $('shop-cursor');
+  if (!node || node.hidden || !shop.pointer) return;
+  node.style.transform = `translate(${shop.pointer.x}px, ${shop.pointer.y}px)`;
+}
+
+/** Index of the chest slot under a point, or null. */
+function chestSlotAt(x, y) {
+  const node = document.elementFromPoint(x, y)?.closest('#shop-chest .chest-slot');
+  return node ? Number(node.dataset.index) : null;
+}
+
+/** While dragging across slots: how many each slot gets. */
+function dragPlan() {
+  const plan = new Map();
+  const d = shop.drag;
+  if (!d || !shop.cursor || d.slots.length < 2) return plan;
+  let left = shop.cursor.amount;
+  const each = d.button === 2 ? 1 : Math.floor(shop.cursor.amount / d.slots.length);
+  for (const i of d.slots) {
+    const add = Math.min(each, left, roomFor(shop.chest[i], shop.cursor.id));
+    if (add > 0) plan.set(i, add);
+    left -= add;
+  }
+  return plan;
+}
+
+const plannedTotal = () => [...dragPlan().values()].reduce((a, b) => a + b, 0);
+
+/** A single click on a chest slot while holding a stack. */
+function clickSlot(i, button) {
+  const slot = shop.chest[i];
+  const held = shop.cursor;
+  if (!held) return;
+  if (!slot || slot.id === held.id) {
+    const move = Math.min(button === 2 ? 1 : held.amount, roomFor(slot, held.id));
+    if (move <= 0) return;
+    shop.chest[i] = { id: held.id, amount: (slot ? slot.amount : 0) + move };
+    shop.cursor = held.amount - move > 0 ? { ...held, amount: held.amount - move } : null;
+  } else {
+    shop.chest[i] = held; // different items swap
+    shop.cursor = slot;
+  }
+}
+
+/** Double-click: pull every matching stack into the hand, up to a full stack. */
+function gather(id) {
+  let amount = shop.cursor ? shop.cursor.amount : 0;
+  shop.chest.forEach((slot, i) => {
+    if (!slot || slot.id !== id || amount >= stackOf(id)) return;
+    const take = Math.min(slot.amount, stackOf(id) - amount);
+    amount += take;
+    shop.chest[i] = slot.amount - take > 0 ? { ...slot, amount: slot.amount - take } : null;
+  });
+  shop.cursor = { id, amount };
+}
+
+function chestPointerDown(e, i) {
+  if (e.button > 2 || shop.busy) return;
+  e.preventDefault();
+  e.shopHandled = true; // the chest is redrawn below, so the document listener can't tell where this was
+  hideTooltip();
+  const slot = shop.chest[i];
+  const now = Date.now();
+  const recent = shop.lastPickup && shop.lastPickup.index === i && now - shop.lastPickup.time < 350;
+  shop.lastPickup = null;
+  if (e.button === 0 && e.shiftKey) {
+    shop.chest[i] = null; // back to the shop
+  } else if (shop.cursor && e.button === 0 && recent) {
+    gather(shop.cursor.id);
+  } else if (shop.cursor) {
+    shop.drag = { button: e.button, slots: [i], pointerId: e.pointerId };
+  } else if (slot) {
+    const take = e.button === 2 ? Math.ceil(slot.amount / 2) : slot.amount;
+    shop.cursor = { id: slot.id, amount: take };
+    shop.chest[i] = slot.amount - take > 0 ? { ...slot, amount: slot.amount - take } : null;
+    shop.lastPickup = { index: i, time: now };
+    shop.press = { from: 'chest', index: i };
+  }
+  renderChest();
+}
+
+document.addEventListener('pointermove', (e) => {
+  lastPointerType = e.pointerType;
+  shop.pointer = { x: e.clientX, y: e.clientY };
+  moveCursor();
+  const d = shop.drag;
+  if (!d || !shop.cursor) return;
+  const i = chestSlotAt(e.clientX, e.clientY);
+  // Like Minecraft, a drag can't cover more slots than there are items in the hand.
+  if (i !== null && !d.slots.includes(i) && d.slots.length < shop.cursor.amount && roomFor(shop.chest[i], shop.cursor.id) > 0) {
+    d.slots.push(i);
+    renderChest();
+  }
+});
+
+document.addEventListener('pointerdown', (e) => {
+  lastPointerType = e.pointerType;
+  shop.pointer = { x: e.clientX, y: e.clientY };
+  if (e.shopHandled || !shop.cursor || currentRoute().view !== 'shop') return;
+  // Clicking anywhere but the chest, the item list, the tabs, search or checkout puts the held stack back.
+  if (!e.target.closest('#shop-chest .chest-slot, #shop-grid .shop-item, .shop-tabs, #shop-search, .shop-checkout, .shop-info')) {
+    setCursor(null);
+  }
+});
+
+document.addEventListener('pointerup', (e) => {
+  if (!shop.data) return;
+  const d = shop.drag;
+  if (d) {
+    shop.drag = null;
+    if (d.slots.length === 1) {
+      clickSlot(d.slots[0], d.button);
+    } else {
+      const plan = (() => { shop.drag = d; const p = dragPlan(); shop.drag = null; return p; })();
+      let used = 0;
+      for (const [i, add] of plan) {
+        const slot = shop.chest[i];
+        shop.chest[i] = { id: shop.cursor.id, amount: (slot ? slot.amount : 0) + add };
+        used += add;
+      }
+      shop.cursor = shop.cursor.amount - used > 0 ? { ...shop.cursor, amount: shop.cursor.amount - used } : null;
+    }
+    renderChest();
+    return;
+  }
+  // Pressed on an item or a slot and let go over another slot: drop it there.
+  const press = shop.press;
+  shop.press = null;
+  if (press && shop.cursor && e.pointerType === 'mouse') {
+    const i = chestSlotAt(e.clientX, e.clientY);
+    if (i !== null && !(press.from === 'chest' && press.index === i)) {
+      clickSlot(i, 0);
+      shop.lastPickup = null;
+      renderChest();
+    }
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && shop.cursor && currentRoute().view === 'shop') setCursor(null);
+});
+window.addEventListener('hashchange', () => { if (shop.cursor) setCursor(null); });
+// Right-click is part of moving items, so no browser menu over the shop.
+document.addEventListener('contextmenu', (e) => {
+  if (e.target.closest('.shop-window') && !e.target.closest('input')) e.preventDefault();
+});
+
 function renderChest() {
+  const plan = dragPlan();
   $('shop-chest').replaceChildren(...shop.chest.map((slot, i) => {
-    const item = slot && shop.byId.get(slot.id);
-    const node = el('button', { class: `slot chest-slot ${slot ? '' : 'empty'}`, type: 'button',
-      'aria-label': slot ? `${slot.amount} × ${shopName(slot.id)}` : 'Empty slot' },
-    slot && shopIcon(slot.id), slot && slot.amount > 1 && el('span', { class: 'slot-count' }, slot.amount));
+    const added = plan.get(i) || 0;
+    const shown = added ? { id: shop.cursor.id, amount: (slot ? slot.amount : 0) + added } : slot;
+    const item = shown && shop.byId.get(shown.id);
+    const node = el('button', {
+      class: `slot chest-slot ${shown ? '' : 'empty'} ${shop.drag?.slots.includes(i) ? 'planned' : ''}`, type: 'button',
+      'data-index': i, 'aria-label': shown ? `${shown.amount} × ${shopName(shown.id)}` : 'Empty slot',
+    }, shown && shopIcon(shown.id), shown && shown.amount > 1 && el('span', { class: 'slot-count' }, shown.amount));
+    node.addEventListener('pointerdown', (e) => chestPointerDown(e, i));
     if (slot) {
-      const show = () => showShopTooltip(node, item);
+      const show = () => { if (!shop.cursor) showShopTooltip(node, item); };
       node.addEventListener('mouseenter', show);
       node.addEventListener('focus', show);
       node.addEventListener('mouseleave', hideTooltip);
       node.addEventListener('blur', hideTooltip);
-      node.addEventListener('click', (e) => {
-        if (e.shiftKey || slot.amount <= 1) shop.chest[i] = null;
-        else shop.chest[i] = { ...slot, amount: slot.amount - 1 };
-        hideTooltip();
-        renderChest();
-      });
+      // Scrolling over a slot adds or takes one, without picking it up.
       node.addEventListener('wheel', (e) => {
+        if (shop.cursor) return;
         e.preventDefault();
         const amount = Math.max(0, Math.min(item.stack, slot.amount + (e.deltaY < 0 ? 1 : -1)));
         shop.chest[i] = amount ? { ...slot, amount } : null;
         renderChest();
       }, { passive: false });
     }
-    node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('drop'); });
-    node.addEventListener('dragleave', () => node.classList.remove('drop'));
-    node.addEventListener('drop', (e) => {
-      e.preventDefault();
-      node.classList.remove('drop');
-      const dropped = shop.byId.get(e.dataTransfer.getData('text/plain'));
-      if (dropped && !dropped.disabled) addToChest(dropped, e.shiftKey ? dropped.stack : 1, i);
+    // Keyboard: Delete / Backspace empties the slot.
+    node.addEventListener('keydown', (e) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && shop.chest[i]) {
+        shop.chest[i] = null;
+        renderChest();
+      }
     });
     return node;
   }));
+  renderCursor();
   renderShopTotal();
 }
 
+/** The order as it would be checked out: the chest, plus whatever is in your hand (it goes in at checkout). */
 function shopTotal() {
-  const filled = shop.chest.filter(Boolean);
+  const filled = shop.chest.filter(Boolean).concat(shop.cursor && !shop.drag ? [shop.cursor] : []);
   if (!filled.length) return { cents: 0, credits: 0, items: 0 };
   const items = filled.reduce((sum, slot) => sum + shop.byId.get(slot.id).price * slot.amount, 0);
   const cents = items + shop.data.chestPrice;
@@ -1797,10 +2009,14 @@ function renderShopTotal() {
   const d = shop.data;
   const t = shopTotal();
   const b = d.buyer;
+  const held = shop.cursor && !shop.drag
+    ? el('div', { class: 'muted shop-holding' }, `In your hand: ${shop.cursor.amount} × ${shopName(shop.cursor.id)}`
+      + (lastPointerType === 'mouse' ? ' (Esc puts it back)' : ' (tap a slot to put it down)'))
+    : null;
   $('shop-total').replaceChildren(...(t.stacks
     ? [el('span', { class: 'muted' }, `${t.stacks} stack${t.stacks === 1 ? '' : 's'} ${fromCents(t.items)} + chest ${fromCents(d.chestPrice)} = `),
       el('strong', {}, credits(t.credits, d.currency))]
-    : [el('span', { class: 'muted' }, 'The chest is empty.')]));
+    : [el('span', { class: 'muted' }, 'The chest is empty.')]), ...[held].filter(Boolean));
   const buy = $('shop-buy');
   const reason = !d.open ? 'The shop is closed' : !b.linked ? 'Link your Minecraft account first'
     : !t.stacks ? 'Put something in the chest first' : t.credits > b.balance ? `You need ${credits(t.credits - b.balance, d.currency)} more`
@@ -1814,6 +2030,12 @@ function renderShopTotal() {
 $('shop-search').addEventListener('input', () => { renderShop(); });
 $('shop-clear').addEventListener('click', () => { shop.chest = shop.chest.map(() => null); renderChest(); });
 $('shop-buy').addEventListener('click', async () => {
+  // Like closing an inventory: whatever is in your hand goes into the chest.
+  if (shop.cursor) {
+    const held = shop.cursor;
+    shop.cursor = null;
+    addToChest(shop.byId.get(held.id), held.amount);
+  }
   const items = shop.chest.filter(Boolean).map((slot) => ({ id: slot.id, amount: slot.amount }));
   shop.busy = true;
   renderShopTotal();

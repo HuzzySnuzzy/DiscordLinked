@@ -80,8 +80,13 @@ credits** filter); interactions count as chat for `chat-log-retention-days`.
 - Items are laid out like the creative inventory (Building Blocks, Colored Blocks, Natural Blocks, Functional
   Blocks, Redstone, Tools & Utilities, Combat, Food & Drinks, Ingredients), with a search box. Hovering an item
   shows its price for one; holding **Shift** shows the price for a stack (64, or 16 for things that stack to 16).
-- Click an item to put one in the order chest below, shift-click for a stack, or drag it into a slot. Click a
-  slot to take one out, shift-click to empty it (or scroll on it). On phones, tap an item and use **+1** / **+64**.
+- It works like a Minecraft inventory: you hold a stack on the mouse. In the item list (like the creative tabs)
+  left-click picks one up (again for more), right-click a full stack, shift-click sends a stack straight to the
+  chest. In the order chest below, left-click picks up / puts down / merges / swaps, right-click picks up half
+  or puts down one, holding a button and dragging across slots spreads the stack evenly (right button: one per
+  slot), double-click gathers matching stacks, shift-click sends a slot back. Esc or clicking outside puts the
+  held stack back. You can also press on an item and let go over a slot. On phones: tap to pick up and tap a
+  slot to put down, or tap an item and use **+1** / **+64**.
 - **Check out** takes the credits and puts the order in the player's inventory as **one chest holding the
   items** (named "Shop order"). They pay for the chest too. They must be online on a server with
   DiscordLinkedFAD and have a free inventory slot; otherwise nothing is charged. Every order (and every refused
@@ -284,8 +289,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.13.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.13.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.13.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.13.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.13.1.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.13.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

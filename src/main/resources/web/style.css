@@ -916,3 +916,13 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .shop-tab { padding: 5px; }
   .shop-grid { max-height: 260px; }
 }
+.shop-window { user-select: none; -webkit-user-select: none; }
+#shop-chest { touch-action: none; }
+.chest-slot.planned { border-color: var(--accent); background: var(--glass-strong); }
+.shop-cursor {
+  position: fixed; left: 0; top: 0; z-index: 70; pointer-events: none; margin: calc(var(--slot, 46px) / -2) 0 0 calc(var(--slot, 46px) / -2);
+  --slot: 46px; background: none; border: none; box-shadow: none; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, .35));
+}
+.shop-cursor[hidden] { display: none; }
+.shop-cursor.spent { opacity: .35; }
+.shop-holding { flex-basis: 100%; font-size: 12px; margin-top: 2px; }
