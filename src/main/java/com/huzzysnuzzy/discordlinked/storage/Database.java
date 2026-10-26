@@ -489,6 +489,17 @@ public final class Database implements AutoCloseable {
         });
     }
 
+    public synchronized Map<UUID, LoginStreak> loginStreaks() throws SQLException {
+        Map<UUID, LoginStreak> streaks = new HashMap<>();
+        try (Statement st = connection.createStatement(); ResultSet rs = st.executeQuery("SELECT * FROM login_streaks")) {
+            while (rs.next()) {
+                streaks.put(UUID.fromString(rs.getString("minecraft_uuid")), new LoginStreak(rs.getInt("streak"),
+                        rs.getInt("best"), java.time.LocalDate.parse(rs.getString("last_day")), false));
+            }
+        }
+        return streaks;
+    }
+
     public synchronized Optional<LoginStreak> loginStreak(UUID uuid) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM login_streaks WHERE minecraft_uuid = ?")) {
             ps.setString(1, uuid.toString());

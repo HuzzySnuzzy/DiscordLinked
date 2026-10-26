@@ -981,3 +981,8 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .streak, .streak *, .streak::after { animation: none !important; }
 }
 #shop-gift { max-width: 220px; }
+.streak.mini { display: inline-flex; flex-wrap: nowrap; margin: 4px 0 0; padding: 2px 9px; border-radius: 999px; font-size: 12px; gap: 5px; }
+.streak.mini.t7 { font-size: 12px; padding: 2px 10px; border-radius: 999px; }
+.cell-status .streak.mini { display: flex; }
+@media (max-width: 760px) { .linked-table .cell-status .streak.mini { margin-left: auto; } }
+@media (max-width: 760px) { #view-players .linked-table .cell-linked::before { content: "Joined "; } }

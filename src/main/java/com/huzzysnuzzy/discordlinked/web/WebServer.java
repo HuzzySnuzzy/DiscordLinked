@@ -662,16 +662,19 @@ public final class WebServer {
         for (KnownPlayer player : plugin.database().knownPlayers()) {
             known.put(player.uuid(), player);
         }
+        Map<UUID, com.huzzysnuzzy.discordlinked.storage.LoginStreak> streaks = plugin.database().loginStreaks();
+        java.time.LocalDate today = java.time.LocalDate.now(ZoneId.systemDefault());
         DataArray result = DataArray.empty();
         for (LinkedAccount account : plugin.database().allLinked()) {
             KnownPlayer k = known.remove(account.uuid());
-            result.add(publicPlayerJson(account.uuid(), account.minecraftName(), account)
-                    .put("firstPlayed", k == null || k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli()));
+            result.add(withStreak(publicPlayerJson(account.uuid(), account.minecraftName(), account)
+                    .put("firstPlayed", k == null || k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli()),
+                    streaks.get(account.uuid()), today));
         }
         for (KnownPlayer k : known.values()) {
             // Built from the row itself rather than publicPlayerJson, which would look each one up again.
             Optional<Player> online = plugin.proxy().getPlayer(k.uuid());
-            result.add(DataObject.empty()
+            result.add(withStreak(DataObject.empty()
                     .put("uuid", k.uuid().toString())
                     .put("minecraftName", online.map(Player::getUsername).orElse(k.name()))
                     .put("linked", false)
@@ -679,9 +682,14 @@ public final class WebServer {
                     .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""))
                     .put("lastSeen", k.lastPlayed() == null ? null : k.lastPlayed().toEpochMilli())
                     .put("firstPlayed", k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli())
-                    .put("isAdmin", false));
+                    .put("isAdmin", false), streaks.get(k.uuid()), today));
         }
         return result;
+    }
+
+    private static DataObject withStreak(DataObject row, com.huzzysnuzzy.discordlinked.storage.LoginStreak streak,
+                                         java.time.LocalDate today) {
+        return row.put("streak", streak == null ? 0 : streak.currentOn(today)).put("bestStreak", streak == null ? 0 : streak.best());
     }
 
     /** The daily login streak for a profile: days in a row as of today, the best ever, and today's reward. */

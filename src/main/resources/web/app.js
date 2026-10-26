@@ -367,12 +367,14 @@ const SORTS = {
   'linked-new': (a, b) => b.linkedAt - a.linkedAt,
   'linked-old': (a, b) => a.linkedAt - b.linkedAt,
   'joined-new': (a, b) => (joinedAt(b) || 0) - (joinedAt(a) || 0),
+  streak: (a, b) => ((b.streak || 0) - (a.streak || 0)) || SORTS.seen(a, b),
   suspended: (a, b) => (!!b.suspension - !!a.suspension) || SORTS['name-asc'](a, b),
   admins: (a, b) => (b.isAdmin - a.isAdmin) || SORTS['name-asc'](a, b),
 };
 
 try {
-  const saved = localStorage.getItem('dl-sort');
+  // v2: the default became "Recently seen", so earlier saved choices start over once.
+  const saved = localStorage.getItem('dl-sort-v2');
   if (saved && SORTS[saved]) $('linked-sort').value = saved;
 } catch (e) { /* storage unavailable */ }
 
@@ -390,7 +392,7 @@ function renderLinked() {
   const rows = state.linked
     .filter((p) => !query || [p.minecraftName, p.uuid, p.discordName, p.discordId]
       .some((value) => value.toLowerCase().includes(query)))
-    .sort(SORTS[$('linked-sort').value] || SORTS['name-asc']);
+    .sort(SORTS[$('linked-sort').value] || SORTS.seen);
   $('linked-count').textContent = `(${state.linked.length})`;
   $('linked-body').replaceChildren(...rows.map(linkedRow));
   const empty = $('linked-empty');
@@ -423,7 +425,7 @@ function linkedRow(p) {
 
 $('linked-search').addEventListener('input', renderLinked);
 $('linked-sort').addEventListener('change', () => {
-  try { localStorage.setItem('dl-sort', $('linked-sort').value); } catch (e) { /* storage unavailable */ }
+  try { localStorage.setItem('dl-sort-v2', $('linked-sort').value); } catch (e) { /* storage unavailable */ }
   renderLinked();
 });
 
@@ -545,6 +547,14 @@ function streakBadge(streak) {
 }
 
 const streakCurrency = () => state.player?.community?.currency?.many || 'credits';
+
+/** A small streak badge for lists, with the same tiers as the profile badge. */
+function streakChip(days, best) {
+  if (!days) return null;
+  const [, tier, icon] = STREAK_TIERS.find(([from]) => days >= from);
+  return el('span', { class: `streak mini ${tier}`, title: `${days} day login streak${best > days ? ` (best ${best})` : ''}` },
+    el('span', { class: 'streak-icon', 'aria-hidden': 'true' }, icon), el('span', { class: 'streak-text' }, `${days.toLocaleString()} day streak`));
+}
 
 async function teleportTo(p, mode, button) {
   button.disabled = true;
@@ -2212,7 +2222,7 @@ function renderPlayers() {
   const shown = linkedOnly ? members.filter((p) => p.linked) : members;
   const rows = shown
     .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
-    .sort(SORTS[$('players-sort').value] || SORTS['name-asc']);
+    .sort(SORTS[$('players-sort').value] || SORTS.seen);
   $('players-count').textContent = `(${shown.length})`;
   // Long lists render in steps so a server with thousands of players stays responsive.
   const limit = state.playersLimit || 200;
@@ -2227,7 +2237,7 @@ function renderPlayers() {
           discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
           el('div', {}, discordName(p)))
         : el('span', { class: 'muted' }, 'Not linked')),
-      el('td', { class: 'cell-status' }, statusPills(p)),
+      el('td', { class: 'cell-status' }, statusPills(p), streakChip(p.streak, p.bestStreak)),
       el('td', { class: 'cell-linked nowrap muted', title: joined ? formatTime(joined) : '' },
         el('span', { class: 'when-long' }, joined ? shortDate(joined) : '—'),
         el('span', { class: 'when-short' }, joined ? shortDate(joined) : '—')));
