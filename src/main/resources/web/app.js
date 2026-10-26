@@ -364,6 +364,7 @@ const SORTS = {
   seen: (a, b) => (b.online - a.online) || ((b.lastSeen || 0) - (a.lastSeen || 0)),
   'linked-new': (a, b) => b.linkedAt - a.linkedAt,
   'linked-old': (a, b) => a.linkedAt - b.linkedAt,
+  'joined-new': (a, b) => (joinedAt(b) || 0) - (joinedAt(a) || 0),
   suspended: (a, b) => (!!b.suspension - !!a.suspension) || SORTS['name-asc'](a, b),
   admins: (a, b) => (b.isAdmin - a.isAdmin) || SORTS['name-asc'](a, b),
 };
@@ -545,6 +546,7 @@ function renderPlayer() {
       : el('p', { class: 'muted' }, 'This player has no linked Discord account.'),
     el('dl', { class: 'kv' },
       p.linked && [el('dt', {}, 'Linked'), el('dd', {}, formatTime(p.linkedAt))],
+      p.firstPlayed && [el('dt', {}, 'First joined'), el('dd', {}, formatTime(p.firstPlayed))],
       el('dt', {}, 'Last seen'),
       el('dd', {}, p.online ? 'Online now' : (p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never'))));
 
@@ -1613,7 +1615,8 @@ async function loadHome() {
     el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value), extra);
   $('home-stats').replaceChildren(
     stat('Online now', data.onlineCount),
-    stat('Members', data.linkedCount),
+    stat('Players', data.playerCount.toLocaleString()),
+    stat('Linked members', data.linkedCount),
     stat('Staff online', data.staffOnline),
     stat('Servers', data.servers.length,
       data.servers.length > 0 && el('div', { class: 'stat-sub' }, data.servers.map((s) => `${s.name} ${s.players}`).join(' · '))));
@@ -1640,28 +1643,45 @@ async function loadPlayers() {
 function renderPlayers() {
   const members = state.members || [];
   const query = $('players-search').value.trim().toLowerCase();
-  const rows = members
+  const linkedOnly = $('players-show').value === 'linked';
+  const shown = linkedOnly ? members.filter((p) => p.linked) : members;
+  const rows = shown
     .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
     .sort(SORTS[$('players-sort').value] || SORTS['name-asc']);
-  $('players-count').textContent = `(${members.length})`;
-  $('players-body').replaceChildren(...rows.map((p) => el('tr', {},
-    el('td', { class: 'cell-mc' }, el('div', { class: 'identity' },
-      el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
-      el('div', {}, playerName(p)))),
-    el('td', { class: 'cell-discord' }, el('div', { class: 'identity' },
-      discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
-      el('div', {}, discordName(p)))),
-    el('td', { class: 'cell-status' }, statusPills(p)),
-    el('td', { class: 'cell-linked nowrap muted', title: formatTime(p.linkedAt) },
-      el('span', { class: 'when-long' }, shortDate(p.linkedAt)),
-      el('span', { class: 'when-short' }, shortDate(p.linkedAt))))));
+  $('players-count').textContent = `(${shown.length})`;
+  // Long lists render in steps so a server with thousands of players stays responsive.
+  const limit = state.playersLimit || 200;
+  $('players-body').replaceChildren(...rows.slice(0, limit).map((p) => {
+    const joined = joinedAt(p);
+    return el('tr', {},
+      el('td', { class: 'cell-mc' }, el('div', { class: 'identity' },
+        el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
+        el('div', {}, playerName(p)))),
+      el('td', { class: 'cell-discord' }, p.linked
+        ? el('div', { class: 'identity' },
+          discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
+          el('div', {}, discordName(p)))
+        : el('span', { class: 'muted' }, 'Not linked')),
+      el('td', { class: 'cell-status' }, statusPills(p)),
+      el('td', { class: 'cell-linked nowrap muted', title: joined ? formatTime(joined) : '' },
+        el('span', { class: 'when-long' }, joined ? shortDate(joined) : '—'),
+        el('span', { class: 'when-short' }, joined ? shortDate(joined) : '—')));
+  }));
+  $('players-more').hidden = rows.length <= limit;
+  $('players-more').textContent = `Show more (${(rows.length - limit).toLocaleString()} left)`;
   const empty = $('players-empty');
-  empty.textContent = members.length ? 'No players match your filter.' : 'No members yet.';
+  empty.textContent = members.length ? 'No players match your filter.' : 'No players yet.';
   empty.hidden = rows.length > 0;
 }
 
-$('players-search').addEventListener('input', renderPlayers);
-$('players-sort').addEventListener('change', renderPlayers);
+/** When they joined the community: when they linked, or else when they first played. */
+const joinedAt = (p) => p.linkedAt || p.firstPlayed || null;
+
+$('players-show').addEventListener('change', () => { state.playersLimit = 200; renderPlayers(); });
+$('players-more').addEventListener('click', () => { state.playersLimit = (state.playersLimit || 200) + 400; renderPlayers(); });
+
+$('players-search').addEventListener('input', () => { state.playersLimit = 200; renderPlayers(); });
+$('players-sort').addEventListener('change', () => { state.playersLimit = 200; renderPlayers(); });
 
 /** The simple profile everyone can see: who they are, their Discord, and whether they're on. */
 function renderPublicPlayer() {
@@ -1690,6 +1710,7 @@ function renderPublicPlayer() {
     el('h2', {}, 'On the server'),
     el('dl', { class: 'kv' },
       el('dt', {}, 'Status'), el('dd', {}, p.online ? `Online${p.server ? ` on ${p.server}` : ''}` : 'Offline'),
+      p.firstPlayed && [el('dt', {}, 'First joined'), el('dd', {}, formatTime(p.firstPlayed))],
       !p.online && [el('dt', {}, 'Last seen'),
         el('dd', {}, p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never')]));
   $('view-player').replaceChildren(
@@ -1710,7 +1731,7 @@ function onPresence(change) {
 
 // ---- On duty / off duty ----
 
-const ADMIN_VIEWS = new Set(['linked', 'logs', 'moderate', 'settings', 'community']);
+const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community']);
 const MEMBER_VIEWS = new Set(['home', 'community', 'players']);
 const homeHash = () => (isStaff() ? '#/linked' : '#/home');
 
@@ -1766,6 +1787,7 @@ function onLiveLog(entry) {
   const route = currentRoute();
   if (route.view === 'logs') prependLog(entry);
   else if (route.view === 'linked' && STATUS_EVENTS.has(entry.type)) soon('linked', loadLinked);
+  else if (route.view === 'players' && STATUS_EVENTS.has(entry.type)) soon('players', loadPlayers);
   else if (route.view === 'moderate' && STATUS_EVENTS.has(entry.type)) soon('moderate', loadModerate);
   else if (route.view === 'community' && COMMUNITY_EVENTS.has(entry.type)) soon('community', loadCommunity);
   else if (route.view === 'player' && entry.uuid === route.uuid) {
@@ -1804,21 +1826,39 @@ function prependPlayerLog(entry) {
   body.prepend(row);
 }
 
-function connectLive() {
-  if (!window.EventSource) return;
+/**
+ * Live updates by long polling: each request waits on the server until something happens. (Server-Sent
+ * Events would be simpler, but Cloudflare quick tunnels, the default https address, can't carry them.)
+ */
+async function connectLive() {
   const indicator = $('live-indicator');
-  const events = new EventSource('/api/events');
-  events.addEventListener('open', () => {
-    indicator.classList.add('on');
-    indicator.title = 'Live: pages update as things happen';
-  });
-  events.addEventListener('error', () => {
-    indicator.classList.remove('on');
-    indicator.title = 'Reconnecting… pages still refresh every so often';
-  });
-  events.addEventListener('log', (e) => onLiveLog(JSON.parse(e.data)));
-  events.addEventListener('player', (e) => onLivePlayer(JSON.parse(e.data)));
-  events.addEventListener('presence', (e) => onPresence(JSON.parse(e.data)));
+  let since = null;
+  for (;;) {
+    try {
+      const res = await fetch(`/api/poll${since === null ? '' : `?since=${since}`}`, { credentials: 'same-origin' });
+      if (res.status === 401) {
+        location.href = '/';
+        return;
+      }
+      if (!res.ok) throw new Error(`poll failed (${res.status})`);
+      const data = await res.json();
+      indicator.classList.add('on');
+      indicator.title = 'Live: pages update as things happen';
+      // Missed some (the tab slept or the proxy restarted): reload what's on screen instead.
+      if (data.reset && since !== null) refreshCurrentView();
+      since = data.seq;
+      for (const event of data.events) {
+        if (event.type === 'log') onLiveLog(event.data);
+        else if (event.type === 'player') onLivePlayer(event);
+        else onPresence(event);
+      }
+      if (data.busy) await new Promise((resolve) => setTimeout(resolve, 5000));
+    } catch (e) {
+      indicator.classList.remove('on');
+      indicator.title = 'Reconnecting… pages still refresh every so often';
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
 }
 
 // ---- Motion: page entrances, liquid tab pills, ripples ----

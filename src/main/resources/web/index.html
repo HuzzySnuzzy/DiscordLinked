@@ -13,11 +13,11 @@
     <a class="brand" id="brand" href="#/"><img src="/favicon.svg" alt=""> <span class="brand-text">DiscordLinked</span></a>
     <nav class="tabs">
       <a href="#/linked" data-view="linked" data-mode="admin">Linked</a>
-      <a href="#/moderate" data-view="moderate" data-mode="admin">Moderate</a>
       <a href="#/home" data-view="home" data-mode="member">Home</a>
+      <a href="#/players" data-view="players">Players</a>
+      <a href="#/moderate" data-view="moderate" data-mode="admin">Moderate</a>
       <a href="#/community" data-view="community" id="community-tab" hidden>Community</a>
       <a href="#/logs" data-view="logs" data-mode="admin">Logs</a>
-      <a href="#/players" data-view="players" data-mode="member">Players</a>
     </nav>
     <div class="global-search">
       <input id="global-search" type="search" placeholder="Find any player…" autocomplete="off"
@@ -130,20 +130,25 @@
           <option value="name-desc">Name Z–A</option>
           <option value="online">Online first</option>
           <option value="seen">Recently seen</option>
-          <option value="linked-new">Newest members</option>
+          <option value="joined-new">Newest first</option>
           <option value="admins">Staff first</option>
+        </select>
+        <select id="players-show" aria-label="Which players">
+          <option value="all">Everyone who played</option>
+          <option value="linked">Linked members</option>
         </select>
         <input id="players-search" type="search" placeholder="Filter players…" aria-label="Filter players">
       </div>
       <div class="table-wrap">
         <table class="table linked-table">
           <thead>
-            <tr><th>Minecraft</th><th>Discord</th><th>Status</th><th>Member since</th></tr>
+            <tr><th>Minecraft</th><th>Discord</th><th>Status</th><th>Joined</th></tr>
           </thead>
           <tbody id="players-body"></tbody>
         </table>
-        <p id="players-empty" class="empty" hidden>No members yet.</p>
+        <p id="players-empty" class="empty" hidden>No players yet.</p>
       </div>
+      <div class="more"><button id="players-more" class="btn btn-ghost" type="button" hidden>Show more</button></div>
     </section>
 
     <section id="view-settings" hidden>

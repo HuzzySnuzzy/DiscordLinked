@@ -134,6 +134,31 @@ public final class Database implements AutoCloseable {
             }
             backfillIps();
         }
+        if (!tableExists("known_players")) {
+            // Added in 0.12.0: everyone who has played, also from the servers' own player data.
+            try (Statement st = connection.createStatement()) {
+                st.execute("""
+                        CREATE TABLE known_players (
+                            minecraft_uuid TEXT PRIMARY KEY,
+                            minecraft_name TEXT NOT NULL,
+                            first_played   INTEGER,
+                            last_played    INTEGER
+                        )""");
+                // Start with everyone who already joined through the proxy, and every linked player.
+                st.execute("""
+                        INSERT INTO known_players (minecraft_uuid, minecraft_name, first_played, last_played)
+                        SELECT minecraft_uuid,
+                               (SELECT a2.minecraft_name FROM audit_log a2 WHERE a2.minecraft_uuid = a.minecraft_uuid
+                                  AND a2.minecraft_name IS NOT NULL ORDER BY a2.id DESC LIMIT 1),
+                               MIN(timestamp), MAX(timestamp)
+                        FROM audit_log a
+                        WHERE minecraft_uuid IS NOT NULL AND event_type IN ('JOIN', 'LEAVE')
+                        GROUP BY minecraft_uuid""");
+                st.execute("""
+                        INSERT OR IGNORE INTO known_players (minecraft_uuid, minecraft_name, first_played, last_played)
+                        SELECT minecraft_uuid, minecraft_name, linked_at, last_seen FROM linked_accounts""");
+            }
+        }
         try (Statement st = connection.createStatement()) {
             // Added in 0.10.0: credits, interactions and advancements from DiscordLinkedFAD.
             st.execute("""
@@ -317,11 +342,87 @@ public final class Database implements AutoCloseable {
 
     // ---- Players (linked or not) ----
 
-    /** A linked player, or any player that appears in the audit log (using their most recent name). */
+    // ---- Known players (everyone who has played) ----
+
+    /**
+     * Adds or updates players: the earliest first-played and latest last-played time win, and the name is
+     * taken from whichever source saw them most recently.
+     */
+    public synchronized int upsertKnownPlayers(List<KnownPlayer> players) throws SQLException {
+        return transaction(() -> {
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    INSERT INTO known_players (minecraft_uuid, minecraft_name, first_played, last_played)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (minecraft_uuid) DO UPDATE SET
+                        minecraft_name = CASE WHEN COALESCE(excluded.last_played, 0) >= COALESCE(last_played, 0)
+                                              THEN excluded.minecraft_name ELSE minecraft_name END,
+                        first_played = CASE WHEN first_played IS NULL THEN excluded.first_played
+                                            WHEN excluded.first_played IS NULL THEN first_played
+                                            ELSE MIN(first_played, excluded.first_played) END,
+                        last_played = MAX(COALESCE(last_played, 0), COALESCE(excluded.last_played, 0))""")) {
+                for (KnownPlayer player : players) {
+                    ps.setString(1, player.uuid().toString());
+                    ps.setString(2, player.name());
+                    setNullableLong(ps, 3, player.firstPlayed() == null ? null : player.firstPlayed().toEpochMilli());
+                    setNullableLong(ps, 4, player.lastPlayed() == null ? null : player.lastPlayed().toEpochMilli());
+                    ps.addBatch();
+                }
+                return ps.executeBatch().length;
+            }
+        });
+    }
+
+    /** Records that a player is on right now. */
+    public synchronized void touchKnownPlayer(UUID uuid, String name) throws SQLException {
+        Instant now = Instant.now();
+        upsertKnownPlayers(List.of(new KnownPlayer(uuid, name, now, now)));
+    }
+
+    public synchronized List<KnownPlayer> knownPlayers() throws SQLException {
+        List<KnownPlayer> players = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM known_players ORDER BY minecraft_name COLLATE NOCASE")) {
+            while (rs.next()) {
+                players.add(readKnownPlayer(rs));
+            }
+        }
+        return players;
+    }
+
+    public synchronized int knownPlayerCount() throws SQLException {
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM (SELECT minecraft_uuid FROM known_players "
+                     + "UNION SELECT minecraft_uuid FROM linked_accounts)")) {
+            return rs.next() ? rs.getInt(1) : 0;
+        }
+    }
+
+    public synchronized Optional<KnownPlayer> knownPlayer(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM known_players WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(readKnownPlayer(rs)) : Optional.empty();
+            }
+        }
+    }
+
+    private static KnownPlayer readKnownPlayer(ResultSet rs) throws SQLException {
+        Long first = nullableLong(rs, "first_played");
+        Long last = nullableLong(rs, "last_played");
+        return new KnownPlayer(UUID.fromString(rs.getString("minecraft_uuid")), rs.getString("minecraft_name"),
+                first == null || first == 0 ? null : Instant.ofEpochMilli(first),
+                last == null || last == 0 ? null : Instant.ofEpochMilli(last));
+    }
+
+    /** A linked player, or any player that has played or appears in the audit log (using their most recent name). */
     public synchronized Optional<PlayerRef> findPlayer(UUID uuid) throws SQLException {
         Optional<LinkedAccount> linked = findByUuid(uuid);
         if (linked.isPresent()) {
             return linked.map(PlayerRef::of);
+        }
+        Optional<KnownPlayer> known = knownPlayer(uuid);
+        if (known.isPresent()) {
+            return Optional.of(new PlayerRef(uuid, known.get().name(), null));
         }
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT minecraft_name FROM audit_log WHERE minecraft_uuid = ? AND minecraft_name IS NOT NULL "
@@ -367,14 +468,30 @@ public final class Database implements AutoCloseable {
                 }
             }
         }
+        if (found.size() < limit) {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT minecraft_uuid, minecraft_name FROM known_players WHERE minecraft_name LIKE ? ESCAPE '\\' "
+                            + "OR minecraft_uuid = ? ORDER BY last_played DESC LIMIT ?")) {
+                ps.setString(1, like);
+                ps.setString(2, query.toLowerCase());
+                ps.setInt(3, limit);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next() && found.size() < limit) {
+                        UUID uuid = UUID.fromString(rs.getString("minecraft_uuid"));
+                        found.putIfAbsent(uuid, new PlayerRef(uuid, rs.getString("minecraft_name"), null));
+                    }
+                }
+            }
+        }
         return new ArrayList<>(found.values());
     }
 
     /** When an unlinked player last connected (or tried to), or null. Linked players use last_seen. */
     public synchronized Instant lastActivity(UUID uuid) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT MAX(timestamp) FROM audit_log WHERE minecraft_uuid = ? "
-                        + "AND event_type IN ('JOIN', 'LEAVE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED')")) {
+                "SELECT MAX(COALESCE((SELECT MAX(timestamp) FROM audit_log WHERE minecraft_uuid = ?1 "
+                        + "AND event_type IN ('JOIN', 'LEAVE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED')), 0), "
+                        + "COALESCE((SELECT last_played FROM known_players WHERE minecraft_uuid = ?1), 0))")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 long value = rs.next() ? rs.getLong(1) : 0;

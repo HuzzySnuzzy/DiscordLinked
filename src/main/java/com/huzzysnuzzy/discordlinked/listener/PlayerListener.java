@@ -135,6 +135,7 @@ public final class PlayerListener {
     private void updateLastSeen(Player player) {
         try {
             plugin.database().updateLastSeen(player.getUniqueId());
+            plugin.database().touchKnownPlayer(player.getUniqueId(), player.getUsername());
         } catch (SQLException e) {
             plugin.logger().warn("Could not update last seen for {}", player.getUsername(), e);
         }

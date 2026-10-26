@@ -18,6 +18,7 @@ import com.huzzysnuzzy.discordlinked.storage.CreditTransaction;
 import com.huzzysnuzzy.discordlinked.storage.EarnedAdvancement;
 import com.huzzysnuzzy.discordlinked.storage.InteractionRecord;
 import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
+import com.huzzysnuzzy.discordlinked.storage.KnownPlayer;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.PlayerIp;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
@@ -45,6 +46,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -52,14 +54,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The website. Members of the Discord server log in with Discord (if {@code web-member-access} is on) and
@@ -72,11 +72,11 @@ public final class WebServer {
     private static final int MAX_BODY_BYTES = 16 * 1024;
     private static final int MAX_REASON_LENGTH = 500;
     /** The only requests allowed while the admin is in a spy session. */
-    private static final Set<String> SPY_ALLOWED = Set.of("GET /api/me", "GET /api/spy", "GET /api/events",
+    private static final Set<String> SPY_ALLOWED = Set.of("GET /api/me", "GET /api/spy", "GET /api/poll",
             "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend");
     /** Everything the community view (non-admins and off-duty admins) may call. */
     private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
-            "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/events", "POST /api/duty");
+            "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
             EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
@@ -176,6 +176,7 @@ public final class WebServer {
         server.setExecutor(executor);
         server.createContext("/", this::handle);
         server.start();
+        plugin.audit().live().subscribe(liveListener);
 
         if (config.webTunnel()) {
             secureCookies = true;
@@ -235,6 +236,10 @@ public final class WebServer {
     }
 
     public void stop() {
+        plugin.audit().live().unsubscribe(liveListener);
+        synchronized (liveLock) {
+            liveLock.notifyAll();
+        }
         if (tunnel != null) {
             tunnel.stop();
         }
@@ -338,7 +343,7 @@ public final class WebServer {
             case "GET /api/player/snapshot" -> snapshotPreview(ex, query(ex));
             case "POST /api/player/snapshot/save" -> snapshotSave(ex, session);
             case "POST /api/player/snapshot/restore" -> snapshotRestore(ex, session);
-            case "GET /api/events" -> liveEvents(ex, session);
+            case "GET /api/poll" -> poll(ex, session);
             case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact" ->
                     settings(ex, method, path, session);
             case "GET /api/community" -> sendJson(ex, 200, community(query(ex), staff));
@@ -640,12 +645,37 @@ public final class WebServer {
 
     // ---- Community view ----
 
+    /** Everyone who has played: linked members, plus players known from joins and the servers' player data. */
     private DataArray memberList() throws SQLException {
+        Map<UUID, KnownPlayer> known = new HashMap<>();
+        for (KnownPlayer player : plugin.database().knownPlayers()) {
+            known.put(player.uuid(), player);
+        }
         DataArray result = DataArray.empty();
         for (LinkedAccount account : plugin.database().allLinked()) {
-            result.add(publicPlayerJson(account.uuid(), account.minecraftName(), account));
+            KnownPlayer k = known.remove(account.uuid());
+            result.add(publicPlayerJson(account.uuid(), account.minecraftName(), account)
+                    .put("firstPlayed", k == null || k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli()));
+        }
+        for (KnownPlayer k : known.values()) {
+            // Built from the row itself rather than publicPlayerJson, which would look each one up again.
+            Optional<Player> online = plugin.proxy().getPlayer(k.uuid());
+            result.add(DataObject.empty()
+                    .put("uuid", k.uuid().toString())
+                    .put("minecraftName", online.map(Player::getUsername).orElse(k.name()))
+                    .put("linked", false)
+                    .put("online", online.isPresent())
+                    .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""))
+                    .put("lastSeen", k.lastPlayed() == null ? null : k.lastPlayed().toEpochMilli())
+                    .put("firstPlayed", k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli())
+                    .put("isAdmin", false));
         }
         return result;
+    }
+
+    /** When the player first played, if known. */
+    private Long firstPlayed(UUID uuid) throws SQLException {
+        return plugin.database().knownPlayer(uuid).map(KnownPlayer::firstPlayed).map(Instant::toEpochMilli).orElse(null);
     }
 
     private void publicPlayerPage(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
@@ -661,7 +691,8 @@ public final class WebServer {
         community.remove("transactions");
         community.remove("afkSeconds");
         community.remove("optedOut");
-        sendJson(ex, 200, DataObject.empty().put("player", publicPlayerJson(uuid, ref.get().name(), linked))
+        sendJson(ex, 200, DataObject.empty()
+                .put("player", publicPlayerJson(uuid, ref.get().name(), linked).put("firstPlayed", firstPlayed(uuid)))
                 .put("community", community));
     }
 
@@ -703,6 +734,7 @@ public final class WebServer {
         }
         return DataObject.empty()
                 .put("linkedCount", linked.size())
+                .put("playerCount", plugin.database().knownPlayerCount())
                 .put("onlineCount", players.size())
                 .put("staffOnline", staffOnline)
                 .put("servers", serverCounts)
@@ -720,7 +752,7 @@ public final class WebServer {
         }
         LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);
         DataObject player = playerJson(uuid, ref.get().name(), linked,
-                plugin.database().activeSuspension(uuid).orElse(null));
+                plugin.database().activeSuspension(uuid).orElse(null)).put("firstPlayed", firstPlayed(uuid));
 
         DataArray suspensions = DataArray.empty();
         for (Suspension s : plugin.database().suspensions(uuid)) {
@@ -922,81 +954,110 @@ public final class WebServer {
                 .put("filters", filters);
     }
 
-    // ---- Live updates (Server-Sent Events) ----
+    // ---- Live updates (long polling) ----
+    //
+    // Each open page asks "anything new since #n?" and the request waits until something happens (or 25s
+    // pass). Plain requests like this work through Cloudflare quick tunnels, which can't carry Server-Sent
+    // Events, and through any other proxy.
 
-    private static final int MAX_LIVE_STREAMS = 32;
-    private final Set<LiveStream> liveStreams = ConcurrentHashMap.newKeySet();
+    private static final int LIVE_BUFFER = 1000;
+    private static final long POLL_WAIT_MILLIS = 25_000;
+    /** Beyond this many waiting pages, polls answer straight away (the page asks again a few seconds later). */
+    private static final int MAX_WAITING_POLLS = 150;
 
-    /**
-     * One open page. Events are queued here and written by that page's request thread. The admin view gets
-     * the full logs; the community view only hears that a player came, went or (un)linked.
-     */
-    private static final class LiveStream implements LiveEvents.Listener {
-        final BlockingQueue<String> queue = new LinkedBlockingQueue<>(1000);
-        final Sessions.Session session;
+    /** A log entry, or another change to a player ({@code kind}, e.g. "snapshot"). */
+    private record LiveEvent(long seq, AuditEntry entry, String kind, UUID player) {
+    }
 
-        LiveStream(Sessions.Session session) {
-            this.session = session;
-        }
-
+    private final Object liveLock = new Object();
+    private final ArrayDeque<LiveEvent> liveBuffer = new ArrayDeque<>();
+    private long liveSeq;
+    private final AtomicInteger waitingPolls = new AtomicInteger();
+    private final LiveEvents.Listener liveListener = new LiveEvents.Listener() {
         @Override
         public void onLog(AuditEntry entry) {
-            if (session.staff()) {
-                queue.offer("event: log\ndata: " + logJson(entry) + "\n\n");
-            } else if (PRESENCE_EVENTS.contains(entry.eventType())) {
-                DataObject data = DataObject.empty().put("community", true);
-                if (entry.uuid() != null) {
-                    data.put("uuid", entry.uuid().toString());
-                }
-                queue.offer("event: presence\ndata: " + data + "\n\n");
-            }
+            addLiveEvent(entry, null, entry.uuid());
         }
 
         @Override
         public void onPlayerChange(String kind, UUID player) {
-            if (session.staff()) {
-                queue.offer("event: player\ndata: " + DataObject.empty().put("kind", kind).put("uuid", player.toString()) + "\n\n");
+            addLiveEvent(null, kind, player);
+        }
+    };
+
+    private void addLiveEvent(AuditEntry entry, String kind, UUID player) {
+        synchronized (liveLock) {
+            liveBuffer.addLast(new LiveEvent(++liveSeq, entry, kind, player));
+            while (liveBuffer.size() > LIVE_BUFFER) {
+                liveBuffer.removeFirst();
             }
+            liveLock.notifyAll();
         }
     }
 
-    private void liveEvents(HttpExchange ex, Sessions.Session session) throws IOException {
-        if (liveStreams.size() >= MAX_LIVE_STREAMS) {
-            sendJson(ex, 503, error("Too many open pages"));
-            return;
-        }
-        ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
-        ex.getResponseHeaders().set("X-Accel-Buffering", "no");
-        ex.sendResponseHeaders(200, 0);
-        LiveStream stream = new LiveStream(session);
-        liveStreams.add(stream);
-        plugin.audit().live().subscribe(stream);
-        var out = ex.getResponseBody();
+    /**
+     * {@code GET /api/poll?since=n}: the events after #n, waiting for one if there are none yet. Without
+     * {@code since} (a page that just opened) it only returns the current number. {@code reset} means events
+     * were missed (the page was asleep, or the proxy restarted), so the page should reload what it shows.
+     */
+    private void poll(HttpExchange ex, Sessions.Session session) throws IOException {
+        String sinceParam = query(ex).get("since");
+        long since = sinceParam == null ? -1 : parseLong(sinceParam);
+        List<LiveEvent> events = new ArrayList<>();
+        long seq;
+        boolean reset;
+        boolean mayWait = waitingPolls.incrementAndGet() <= MAX_WAITING_POLLS;
         try {
-            out.write("retry: 3000\n\n".getBytes(StandardCharsets.UTF_8));
-            out.flush();
-            while (!Thread.currentThread().isInterrupted()) {
-                // A comment every 20s keeps proxies (and the Cloudflare tunnel) from closing the stream.
-                String message = stream.queue.poll(20, TimeUnit.SECONDS);
-                if (sessions.get(session.token) == null) {
-                    break;
+            synchronized (liveLock) {
+                long deadline = System.currentTimeMillis() + POLL_WAIT_MILLIS;
+                while (mayWait && since >= 0 && since == liveSeq && sessions.get(session.token) != null) {
+                    long left = deadline - System.currentTimeMillis();
+                    if (left <= 0) {
+                        break;
+                    }
+                    liveLock.wait(left);
                 }
-                StringBuilder batch = new StringBuilder(message == null ? ": ping\n\n" : message);
-                String more;
-                while ((more = stream.queue.poll()) != null) {
-                    batch.append(more);
+                seq = liveSeq;
+                long oldest = liveBuffer.isEmpty() ? liveSeq + 1 : liveBuffer.peekFirst().seq();
+                reset = since >= 0 && (since > liveSeq || since + 1 < oldest);
+                if (since >= 0 && !reset) {
+                    for (LiveEvent event : liveBuffer) {
+                        if (event.seq() > since) {
+                            events.add(event);
+                        }
+                    }
                 }
-                out.write(batch.toString().getBytes(StandardCharsets.UTF_8));
-                out.flush();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (IOException e) {
-            // the page was closed
+            return;
         } finally {
-            plugin.audit().live().unsubscribe(stream);
-            liveStreams.remove(stream);
+            waitingPolls.decrementAndGet();
         }
+        if (sessions.get(session.token) == null) {
+            sendJson(ex, 401, error("Not logged in"));
+            return;
+        }
+        // Filtered when sent, so going on or off duty applies straight away.
+        boolean staff = session.staff();
+        DataArray out = DataArray.empty();
+        for (LiveEvent event : events) {
+            if (staff) {
+                out.add(event.entry() != null
+                        ? DataObject.empty().put("type", "log").put("data", logJson(event.entry()))
+                        : DataObject.empty().put("type", "player").put("kind", event.kind())
+                                .put("uuid", event.player().toString()));
+            } else if (event.entry() != null && PRESENCE_EVENTS.contains(event.entry().eventType())) {
+                // The community view only hears that a player came, went, (un)linked or did something public.
+                DataObject presence = DataObject.empty().put("type", "presence");
+                if (event.player() != null) {
+                    presence.put("uuid", event.player().toString());
+                }
+                out.add(presence);
+            }
+        }
+        // busy: too many pages are waiting already, so this one didn't wait and should ask again later.
+        sendJson(ex, 200, DataObject.empty().put("seq", seq).put("reset", reset).put("busy", !mayWait).put("events", out));
     }
 
     // ---- Settings (one Discord user only) ----

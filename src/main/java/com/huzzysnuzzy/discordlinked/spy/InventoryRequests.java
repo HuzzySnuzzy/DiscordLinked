@@ -4,6 +4,7 @@ import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.TimeFormat;
 import com.huzzysnuzzy.discordlinked.storage.InventorySnapshotRecord;
+import com.huzzysnuzzy.discordlinked.storage.KnownPlayer;
 import com.huzzysnuzzy.discordlinked.storage.PendingRestore;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
@@ -19,13 +20,17 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Talks to the DiscordLinkedSpy plugin on the backend servers about inventories: live views, snapshots
@@ -40,6 +45,10 @@ public final class InventoryRequests {
     private static final int MAX_BLOB_BYTES = 1 << 20;
     /** Proxy-to-server plugin messages are limited to 32767 bytes, so restores go in chunks. */
     private static final int RESTORE_CHUNK_BYTES = 30_000;
+    /** How often each server is asked for everyone in its player data, and how soon to ask again if it didn't answer. */
+    private static final Duration IMPORT_EVERY = Duration.ofHours(12);
+    private static final Duration IMPORT_RETRY = Duration.ofMinutes(10);
+    private static final int MAX_PLAYERS_PER_MESSAGE = 5_000;
 
     private record Pending(UUID player, CompletableFuture<String> result) {
     }
@@ -47,6 +56,11 @@ public final class InventoryRequests {
     private final DiscordLinked plugin;
     private final Map<String, Pending> liveRequests = new ConcurrentHashMap<>();
     private final Map<String, Pending> restores = new ConcurrentHashMap<>();
+    private final Map<String, Instant> importsAsked = new ConcurrentHashMap<>();
+    private final Map<String, Instant> importsDone = new ConcurrentHashMap<>();
+    /** Open player-data imports: request id -> server name, and how many players arrived so far. */
+    private final Map<String, String> importRequests = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> importCounts = new ConcurrentHashMap<>();
 
     public InventoryRequests(DiscordLinked plugin) {
         this.plugin = plugin;
@@ -150,6 +164,7 @@ public final class InventoryRequests {
                     }
                 }
                 case "SNAP" -> receiveSnapshot(connection, in);
+                case "PLAYERS" -> receivePlayers(connection, in);
                 default -> { }
             }
         } catch (IOException | IllegalArgumentException e) {
@@ -189,11 +204,85 @@ public final class InventoryRequests {
         }).schedule();
     }
 
-    /** Applies a restore that was queued while the player was offline. */
+    /** Applies a restore that was queued while the player was offline, and imports the server's players now and then. */
     @Subscribe
     public void onServerConnected(ServerConnectedEvent event) {
         Player player = event.getPlayer();
-        plugin.proxy().getScheduler().buildTask(plugin, () -> applyPending(player)).delay(3, TimeUnit.SECONDS).schedule();
+        plugin.proxy().getScheduler().buildTask(plugin, () -> {
+            applyPending(player);
+            requestPlayers(player);
+        }).delay(3, TimeUnit.SECONDS).schedule();
+    }
+
+    // ---- Importing everyone who has played on a server ----
+
+    /**
+     * Asks the player's server (through their connection) for everyone in its player data, so the website
+     * also knows players from before DiscordLinked was installed. Servers without DiscordLinkedSpy, or with
+     * an older one, just don't answer.
+     */
+    private void requestPlayers(Player player) {
+        Optional<ServerConnection> connection = player.getCurrentServer();
+        if (connection.isEmpty()) {
+            return;
+        }
+        String server = connection.get().getServerInfo().getName();
+        Instant now = Instant.now();
+        Instant done = importsDone.get(server);
+        Instant asked = importsAsked.get(server);
+        if (done != null && done.plus(IMPORT_EVERY).isAfter(now) || asked != null && asked.plus(IMPORT_RETRY).isAfter(now)) {
+            return;
+        }
+        importsAsked.put(server, now);
+        String id = UUID.randomUUID().toString();
+        importRequests.put(id, server);
+        importCounts.put(id, new AtomicInteger());
+        send(connection.get(), out -> {
+            out.writeUTF("PLAYERS");
+            out.writeUTF(id);
+        });
+    }
+
+    private void receivePlayers(ServerConnection connection, DataInputStream in) throws IOException {
+        String id = in.readUTF();
+        int part = in.readInt();
+        int parts = in.readInt();
+        int count = in.readInt();
+        String server = connection.getServerInfo().getName();
+        // Only answers to our own requests, from the server we asked.
+        if (!server.equals(importRequests.get(id)) || count < 0 || count > MAX_PLAYERS_PER_MESSAGE) {
+            return;
+        }
+        List<KnownPlayer> players = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            UUID uuid = UUID.fromString(in.readUTF());
+            String name = in.readUTF();
+            long first = in.readLong();
+            long last = in.readLong();
+            if (!name.isBlank() && name.length() <= 32) {
+                players.add(new KnownPlayer(uuid, name, first > 0 ? Instant.ofEpochMilli(first) : null,
+                        last > 0 ? Instant.ofEpochMilli(last) : null));
+            }
+        }
+        AtomicInteger total = importCounts.get(id);
+        int sum = total == null ? players.size() : total.addAndGet(players.size());
+        boolean last = part >= parts - 1;
+        if (last) {
+            importRequests.remove(id);
+            importCounts.remove(id);
+            importsDone.put(server, Instant.now());
+        }
+        plugin.proxy().getScheduler().buildTask(plugin, () -> {
+            try {
+                plugin.database().upsertKnownPlayers(players);
+            } catch (SQLException e) {
+                plugin.logger().error("Could not store players imported from {}", server, e);
+                return;
+            }
+            if (last) {
+                plugin.logger().info("Imported {} players from {}'s player data.", sum, server);
+            }
+        }).schedule();
     }
 
     private void applyPending(Player player) {

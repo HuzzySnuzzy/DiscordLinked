@@ -2,6 +2,7 @@ package com.huzzysnuzzy.discordlinked.spy;
 
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -17,6 +18,8 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +35,7 @@ final class InventoryBridge implements Listener {
     private final SnapshotOutbox outbox;
     /** Restores arrive in chunks because proxy-to-server messages are limited to about 32 KB. */
     private final Map<String, byte[][]> restoreParts = new ConcurrentHashMap<>();
+    private static final int PLAYERS_PER_MESSAGE = 500;
 
     InventoryBridge(DiscordLinkedSpy plugin, SnapshotOutbox outbox) {
         this.plugin = plugin;
@@ -50,6 +54,7 @@ final class InventoryBridge implements Listener {
                     carrier.getScheduler().run(plugin, task -> snapshot(carrier, "MANUAL", by), null);
                 }
                 case "RESTORE" -> receiveRestorePart(carrier, in);
+                case "PLAYERS" -> sendPlayers(carrier, in.readUTF());
                 default -> { }
             }
         } catch (IOException e) {
@@ -67,6 +72,43 @@ final class InventoryBridge implements Listener {
                 writeBytes(out, json);
             });
         }, null);
+    }
+
+    /**
+     * Everyone in this server's player data (name, first and last time played), so the proxy's website also
+     * knows players from before DiscordLinked was installed. Read off the main thread, sent in batches.
+     */
+    @SuppressWarnings("deprecation") // getLastPlayed: the newer getLastSeen isn't in older Paper versions
+    private void sendPlayers(Player carrier, String requestId) {
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            List<OfflinePlayer> players = new ArrayList<>();
+            for (OfflinePlayer player : Bukkit.getOfflinePlayers()) {
+                if (player.getName() != null) {
+                    players.add(player);
+                }
+            }
+            int parts = Math.max(1, (players.size() + PLAYERS_PER_MESSAGE - 1) / PLAYERS_PER_MESSAGE);
+            for (int part = 0; part < parts; part++) {
+                List<OfflinePlayer> batch = players.subList(part * PLAYERS_PER_MESSAGE,
+                        Math.min(players.size(), (part + 1) * PLAYERS_PER_MESSAGE));
+                int index = part;
+                byte[] message = encode(out -> {
+                    out.writeUTF("PLAYERS");
+                    out.writeUTF(requestId);
+                    out.writeInt(index);
+                    out.writeInt(parts);
+                    out.writeInt(batch.size());
+                    for (OfflinePlayer player : batch) {
+                        out.writeUTF(player.getUniqueId().toString());
+                        out.writeUTF(player.getName());
+                        out.writeLong(player.getFirstPlayed());
+                        out.writeLong(player.getLastPlayed());
+                    }
+                });
+                carrier.getScheduler().run(plugin,
+                        t -> carrier.sendPluginMessage(plugin, DiscordLinkedSpy.INVENTORY_CHANNEL, message), null);
+            }
+        });
     }
 
     private void receiveRestorePart(Player player, DataInputStream in) throws IOException {
@@ -178,11 +220,15 @@ final class InventoryBridge implements Listener {
     }
 
     private void send(Player carrier, Body body) {
+        carrier.sendPluginMessage(plugin, DiscordLinkedSpy.INVENTORY_CHANNEL, encode(body));
+    }
+
+    private static byte[] encode(Body body) {
         try {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(bytes);
             body.write(out);
-            carrier.sendPluginMessage(plugin, DiscordLinkedSpy.INVENTORY_CHANNEL, bytes.toByteArray());
+            return bytes.toByteArray();
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }

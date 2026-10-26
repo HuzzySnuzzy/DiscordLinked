@@ -125,8 +125,13 @@ while they're logged in.
 - **Retention**: `chat-log-retention-days` (default 90) and `log-retention-days` (default forever) delete
   old logs, and `inventory-snapshot-retention-days` old snapshots. Cleanup runs hourly.
 - **Live updates**: every page updates as things happen (new log rows appear instantly; the Linked,
-  Moderate and player pages refresh when someone joins, leaves, is suspended, and so on). The "Live" dot in
-  the top bar shows the connection.
+  Players, Home, Moderate, Community and player pages refresh when someone joins, leaves, is suspended, and
+  so on). The "Live" dot in the top bar shows the connection. Pages ask the server for news with long
+  polling, which works through the automatic https address (Cloudflare quick tunnels can't carry
+  Server-Sent Events) and any other proxy.
+- **Players**: everyone who has played, linked or not, also from before DiscordLinked was installed:
+  DiscordLinkedSpy sends each server's player data (names, first and last time played) to the proxy when
+  someone joins that server, at most every 12 hours. Filter to linked members only, sort, search.
 - **Logs**: every event, newest first, filterable and searchable, with **Download CSV** and
   **Export to Google Sheets** buttons (also on each player page for just that player).
 
@@ -166,7 +171,8 @@ itself can't teleport players, change game modes or see inventories:
 2. `DiscordLinked-x.y.z.jar` goes in Velocity's `plugins/` folder as before.
 3. `DiscordLinkedSpy-x.y.z.jar` goes in the `plugins/` folder of **every Paper, Purpur or Folia server**
    behind the proxy (1.20.4 or newer). It has no config. On Folia it schedules everything on each player's
-   own region thread, so the admin and the player can be in different regions.
+   own region thread, so the admin and the player can be in different regions. It also tells the proxy
+   who has ever played on that server, for the website's Players list.
 4. `DiscordLinkedFAD-x.y.z.jar` (optional) goes next to it for interactions and credits; see
    [Community](#community-interactions--credits-discordlinkedfad).
 
@@ -257,8 +263,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.11.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.11.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.11.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.12.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.12.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.12.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup
