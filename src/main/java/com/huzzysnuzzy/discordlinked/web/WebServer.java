@@ -61,6 +61,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -183,6 +184,12 @@ public final class WebServer {
         server.createContext("/", this::handle);
         server.start();
         plugin.audit().live().subscribe(liveListener);
+        webSweeper = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "DiscordLinked-WebPresence");
+            thread.setDaemon(true);
+            return thread;
+        });
+        webSweeper.scheduleAtFixedRate(this::sweepOnWebsite, 10, 10, TimeUnit.SECONDS);
 
         if (config.webTunnel()) {
             secureCookies = true;
@@ -243,6 +250,9 @@ public final class WebServer {
 
     public void stop() {
         plugin.audit().live().unsubscribe(liveListener);
+        if (webSweeper != null) {
+            webSweeper.shutdownNow();
+        }
         synchronized (liveLock) {
             liveLock.notifyAll();
         }
@@ -308,6 +318,7 @@ public final class WebServer {
             sendJson(ex, 401, error("Not logged in"));
             return;
         }
+        markOnWebsite(session.user.id());
         if (method.equals("POST")) {
             String csrf = ex.getRequestHeaders().getFirst("X-CSRF-Token");
             if (csrf == null || !csrf.equals(session.csrfToken)) {
@@ -551,6 +562,10 @@ public final class WebServer {
     }
 
     private void logout(HttpExchange ex) throws IOException {
+        Sessions.Session session = sessions.get(cookies(ex).get(SESSION_COOKIE));
+        if (session != null && webActive.remove(session.user.id()) != null) {
+            webPresenceChanged(session.user.id());
+        }
         sessions.invalidate(cookies(ex).get(SESSION_COOKIE));
         ex.getResponseHeaders().add("Set-Cookie", cookie(SESSION_COOKIE, "", 0));
         redirect(ex, "/");
@@ -608,7 +623,8 @@ public final class WebServer {
                             ? DiscordOAuth.avatarUrl(linked.discordId(), null) : linked.discordAvatar())
                     .put("linkedAt", linked.linkedAt().toEpochMilli())
                     .put("lastSeen", linked.lastSeen() == null ? null : linked.lastSeen().toEpochMilli())
-                    .put("isAdmin", member != null && member.admin());
+                    .put("isAdmin", member != null && member.admin())
+                    .put("onWebsite", onWebsite(linked.discordId()));
         } else {
             Instant lastActivity = plugin.database().lastActivity(uuid);
             row.put("lastSeen", lastActivity == null ? null : lastActivity.toEpochMilli())
@@ -1118,6 +1134,45 @@ public final class WebServer {
                 .put("filters", filters);
     }
 
+    // ---- Who has the website open ----
+    //
+    // An open page always has a live-update request waiting (or asks again within seconds), so anyone with a
+    // request in the last WEB_ACTIVE has the website open. Changes are pushed like any other live update.
+
+    private static final Duration WEB_ACTIVE = Duration.ofSeconds(45);
+    private final Map<Long, Instant> webActive = new java.util.concurrent.ConcurrentHashMap<>();
+    private ScheduledExecutorService webSweeper;
+
+    private void markOnWebsite(long discordId) {
+        if (webActive.put(discordId, Instant.now()) == null) {
+            webPresenceChanged(discordId);
+        }
+    }
+
+    /** Whether this Discord user has the website open right now. */
+    public boolean onWebsite(long discordId) {
+        Instant last = webActive.get(discordId);
+        return last != null && last.isAfter(Instant.now().minus(WEB_ACTIVE));
+    }
+
+    private void sweepOnWebsite() {
+        Instant cutoff = Instant.now().minus(WEB_ACTIVE);
+        for (Map.Entry<Long, Instant> entry : webActive.entrySet()) {
+            if (entry.getValue().isBefore(cutoff) && webActive.remove(entry.getKey(), entry.getValue())) {
+                webPresenceChanged(entry.getKey());
+            }
+        }
+    }
+
+    /** Tells open pages that this person opened or left the website (as a change to their Minecraft player). */
+    private void webPresenceChanged(long discordId) {
+        try {
+            plugin.database().findByDiscordId(discordId).ifPresent(account -> addLiveEvent(null, "web", account.uuid()));
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not look up a website visitor", e);
+        }
+    }
+
     // ---- Live updates (long polling) ----
     //
     // Each open page asks "anything new since #n?" and the request waits until something happens (or 25s
@@ -1211,7 +1266,8 @@ public final class WebServer {
                         ? DataObject.empty().put("type", "log").put("data", logJson(event.entry()))
                         : DataObject.empty().put("type", "player").put("kind", event.kind())
                                 .put("uuid", event.player().toString()));
-            } else if (event.entry() != null && PRESENCE_EVENTS.contains(event.entry().eventType())) {
+            } else if (event.entry() != null && PRESENCE_EVENTS.contains(event.entry().eventType())
+                    || "web".equals(event.kind())) {
                 // The community view only hears that a player came, went, (un)linked or did something public.
                 DataObject presence = DataObject.empty().put("type", "presence");
                 if (event.player() != null) {

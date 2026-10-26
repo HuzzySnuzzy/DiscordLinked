@@ -170,6 +170,8 @@ while they're logged in.
   DiscordLinkedSpy sends each server's player data (names, first and last time played) to the proxy when
   someone joins that server, at most every 12 hours. Filter to linked members only, sort (recently seen first
   by default, or by longest login streak), search. Each player's login streak shows next to their status.
+- **On the website**: next to Online/Offline, players who have this website open right now get an
+  "On the website" status (lists and player pages, updated live; it clears about 45 seconds after they close it).
 - **Teleports**: on a player page, **Teleport to them** puts your own Minecraft character where they are (or,
   if they're offline, where they logged out) and **Teleport to their bed** at their bed or respawn anchor,
   moving you to their server first if needed. Needs DiscordLinkedSpy 0.14+ on the servers; logout spots are
@@ -305,8 +307,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.14.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.14.1.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.14.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.14.2.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.14.2.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.14.2.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

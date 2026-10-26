@@ -986,3 +986,4 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .cell-status .streak.mini { display: flex; }
 @media (max-width: 760px) { .linked-table .cell-status .streak.mini { margin-left: auto; } }
 @media (max-width: 760px) { #view-players .linked-table .cell-linked::before { content: "Joined "; } }
+.pill.web { color: var(--accent); }

@@ -182,6 +182,7 @@ function statusPills(p) {
     const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never joined';
     pills.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}` : null }, seen));
   }
+  if (p.onWebsite) pills.push(el('span', { class: 'pill web', title: 'Has this website open right now' }, 'On the website'));
   return pills;
 }
 
@@ -2379,6 +2380,13 @@ function onLiveLog(entry) {
 
 function onLivePlayer(change) {
   const route = currentRoute();
+  // Someone opened or left the website: lists and their page show it.
+  if (change.kind === 'web') {
+    if (route.view === 'linked') soon('linked', loadLinked);
+    else if (route.view === 'moderate') soon('moderate', loadModerate);
+    else onPresence(change);
+    return;
+  }
   if (route.view === 'player' && change.uuid === route.uuid && change.kind === 'snapshot'
       && state.inventory?.mode === 'snapshots') {
     soon('snapshots', () => loadSnapshots());
