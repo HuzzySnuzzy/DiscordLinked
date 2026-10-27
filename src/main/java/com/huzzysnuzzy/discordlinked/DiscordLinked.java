@@ -45,7 +45,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.16.1";
+    public static final String VERSION = "0.17.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -285,6 +285,9 @@ public final class DiscordLinked {
                 ips = database.deleteIpsBefore(before);
                 logs += database.deleteCreditTransactionsBefore(before);
             }
+            if (c.messageLogRetentionDays() > 0) {
+                chat += database.deleteDiscordMessagesBefore(now.minus(Duration.ofDays(c.messageLogRetentionDays())));
+            }
             if (c.snapshotRetentionDays() > 0) {
                 snapshots = database.deleteSnapshotsBefore(now.minus(Duration.ofDays(c.snapshotRetentionDays())));
             }
@@ -292,7 +295,7 @@ public final class DiscordLinked {
             logger.error("Cleanup of old logs and snapshots failed", e);
             return "cleanup failed: " + e.getMessage();
         }
-        String summary = "deleted " + chat + " old chat/command/interaction logs, " + logs + " other log entries, " + ips
+        String summary = "deleted " + chat + " old chat/command/interaction logs and Discord messages, " + logs + " other log entries, " + ips
                 + " old IP records and " + snapshots + " old snapshots";
         if (chat + logs + ips + snapshots > 0) {
             logger.info("Cleanup: {}", summary);

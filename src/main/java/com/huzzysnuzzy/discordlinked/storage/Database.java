@@ -269,6 +269,26 @@ public final class Database implements AutoCloseable {
                         value TEXT NOT NULL
                     )""");
         }
+        try (Statement st = connection.createStatement()) {
+            // Added in 0.17.0: the Discord message log (settings owner only).
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS discord_messages (
+                        message_id  INTEGER PRIMARY KEY,
+                        channel_id  INTEGER NOT NULL,
+                        author_id   INTEGER NOT NULL,
+                        author_name TEXT NOT NULL,
+                        author_avatar TEXT,
+                        bot         INTEGER NOT NULL,
+                        content     TEXT NOT NULL,
+                        attachments TEXT,
+                        created_at  INTEGER NOT NULL,
+                        edited_at   INTEGER,
+                        original    TEXT,
+                        deleted_at  INTEGER
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_discord_messages_channel ON discord_messages (channel_id, created_at)");
+        }
+        addColumnIfMissing("discord_messages", "channel_name", "TEXT");
     }
 
     private boolean tableExists(String table) throws SQLException {
@@ -1487,6 +1507,127 @@ public final class Database implements AutoCloseable {
             }
         }
         return deleted;
+    }
+
+    // ---- Discord message log ----
+
+    /** {@code channelName} is kept so the log still has a name for channels that were deleted. */
+    public synchronized void addDiscordMessage(DiscordMessage m, String channelName) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR IGNORE INTO discord_messages (message_id, channel_id, author_id, author_name, author_avatar, bot, "
+                        + "content, attachments, created_at, channel_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, m.id());
+            ps.setLong(2, m.channelId());
+            ps.setLong(3, m.authorId());
+            ps.setString(4, m.authorName());
+            ps.setString(5, m.authorAvatar());
+            ps.setInt(6, m.bot() ? 1 : 0);
+            ps.setString(7, m.content());
+            ps.setString(8, m.attachments());
+            ps.setLong(9, m.createdAt());
+            ps.setString(10, channelName);
+            ps.executeUpdate();
+        }
+    }
+
+    /** An edit: the new text replaces the old, and the first version is kept as {@code original}. */
+    public synchronized void editDiscordMessage(long id, String content, long editedAt) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE discord_messages SET original = COALESCE(original, content), content = ?, edited_at = ? "
+                        + "WHERE message_id = ? AND content <> ?")) {
+            ps.setString(1, content);
+            ps.setLong(2, editedAt);
+            ps.setLong(3, id);
+            ps.setString(4, content);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Deleted messages stay in the log, marked as deleted. */
+    public synchronized void deleteDiscordMessages(Collection<Long> ids, long deletedAt) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE discord_messages SET deleted_at = ? WHERE message_id = ? AND deleted_at IS NULL")) {
+            for (long id : ids) {
+                ps.setLong(1, deletedAt);
+                ps.setLong(2, id);
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /** The name each logged channel had at its latest saved message. */
+    public synchronized Map<Long, String> discordChannelNames() throws SQLException {
+        Map<Long, String> names = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT channel_id, channel_name, MAX(created_at) FROM discord_messages "
+                     + "WHERE channel_name IS NOT NULL GROUP BY channel_id")) {
+            while (rs.next()) {
+                names.put(rs.getLong(1), rs.getString(2));
+            }
+        }
+        return names;
+    }
+
+    /** Messages per channel and the latest one's time: channel id -> {count, latest}. */
+    public synchronized Map<Long, long[]> discordMessageCounts() throws SQLException {
+        Map<Long, long[]> counts = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT channel_id, COUNT(*), MAX(created_at) FROM discord_messages GROUP BY channel_id")) {
+            while (rs.next()) {
+                counts.put(rs.getLong(1), new long[]{rs.getLong(2), rs.getLong(3)});
+            }
+        }
+        return counts;
+    }
+
+    /** How many messages a channel has per day (local "yyyy-MM-dd"), for picking a week. */
+    public synchronized Map<String, Long> discordMessageDays(long channelId) throws SQLException {
+        Map<String, Long> days = new java.util.TreeMap<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS day, COUNT(*) "
+                        + "FROM discord_messages WHERE channel_id = ? GROUP BY day")) {
+            ps.setLong(1, channelId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    days.put(rs.getString(1), rs.getLong(2));
+                }
+            }
+        }
+        return days;
+    }
+
+    /** A channel's messages between two times, oldest first, at most {@code limit}. */
+    public synchronized List<DiscordMessage> discordMessages(long channelId, Instant from, Instant to, int limit)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT * FROM discord_messages WHERE channel_id = ? AND created_at >= ? AND created_at < ? "
+                        + "ORDER BY created_at, message_id LIMIT ?")) {
+            ps.setLong(1, channelId);
+            ps.setLong(2, from.toEpochMilli());
+            ps.setLong(3, to.toEpochMilli());
+            ps.setInt(4, limit);
+            List<DiscordMessage> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long edited = rs.getLong("edited_at");
+                    boolean wasEdited = !rs.wasNull();
+                    long deleted = rs.getLong("deleted_at");
+                    boolean wasDeleted = !rs.wasNull();
+                    list.add(new DiscordMessage(rs.getLong("message_id"), rs.getLong("channel_id"), rs.getLong("author_id"),
+                            rs.getString("author_name"), rs.getString("author_avatar"), rs.getInt("bot") != 0,
+                            rs.getString("content"), rs.getString("attachments"), rs.getLong("created_at"),
+                            wasEdited ? edited : null, rs.getString("original"), wasDeleted ? deleted : null));
+                }
+            }
+            return list;
+        }
+    }
+
+    public synchronized int deleteDiscordMessagesBefore(Instant before) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM discord_messages WHERE created_at < ?")) {
+            ps.setLong(1, before.toEpochMilli());
+            return ps.executeUpdate();
+        }
     }
 
     // ---- Market: microcredits from selling items ----

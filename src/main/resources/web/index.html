@@ -157,12 +157,29 @@
     </section>
 
     <section id="view-settings" hidden>
-      <div class="toolbar"><h1>Settings</h1><span class="muted" id="settings-owner-note"></span></div>
+      <div class="toolbar"><h1>Settings</h1><span class="muted" id="settings-owner-note"></span>
+        <a class="btn btn-ghost btn-small" href="#/messages">Discord message log</a></div>
       <div id="settings-body"></div>
       <div id="settings-bar" class="settings-bar card" hidden>
         <span id="settings-bar-text"></span>
         <button type="button" class="btn btn-ghost btn-small" id="settings-discard">Discard</button>
         <button type="button" class="btn btn-small" id="settings-save">Save changes</button>
+      </div>
+    </section>
+
+    <section id="view-messages" hidden>
+      <a class="back" href="#/settings">← Settings</a>
+      <div class="toolbar">
+        <h1>Discord message log</h1>
+        <span class="muted">Only you (the settings owner) can see this page.</span>
+      </div>
+      <div id="messages-notice"></div>
+      <div class="msglog">
+        <div class="card panel msglog-channels">
+          <input id="msglog-filter" type="search" placeholder="Find a channel…" aria-label="Find a channel">
+          <div id="msglog-channels"></div>
+        </div>
+        <div class="card panel msglog-view" id="msglog-view"></div>
       </div>
     </section>
 

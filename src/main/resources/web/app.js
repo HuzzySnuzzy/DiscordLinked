@@ -2312,6 +2312,166 @@ function shopItemDialog(item) {
 }
 $('shop-item-cancel').addEventListener('click', () => $('shop-item-dialog').close());
 
+// ---- Discord message log (settings owner only) ----
+
+const msglog = { data: null, channel: null, week: null, page: null, search: '' };
+
+async function loadMessageLog() {
+  try {
+    msglog.data = await api('/api/settings/messages');
+  } catch (e) {
+    $('messages-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    return;
+  }
+  const d = msglog.data;
+  const notices = [];
+  if (!d.botReady) notices.push(el('p', { class: 'card panel muted' }, 'The Discord bot isn\'t connected, so the channel list is empty. Saved messages can still be read.'));
+  if (d.channels.some((c) => c.logged) && !d.messageContent) {
+    notices.push(el('div', { class: 'card panel shop-closed' }, 'Messages are being saved without their text: turn on ',
+      el('b', {}, 'Message Content Intent'), ' at discord.com/developers/applications → your app → Bot, then restart the proxy.'));
+  }
+  notices.push(el('p', { class: 'muted msglog-help' }, 'Switch a channel on to start saving its messages (new ones only; Discord '
+    + 'doesn\'t hand out old history). Edits keep the first version and deleted messages stay, marked as deleted. ',
+    d.retentionDays ? `Messages are kept for ${d.retentionDays} days` : 'Messages are kept forever', ' (',
+    el('a', { href: '#/settings' }, 'change it in Settings'), '). Let your members know this server logs messages.'));
+  $('messages-notice').replaceChildren(...notices);
+  if (!msglog.channel || !d.channels.some((c) => c.id === msglog.channel)) {
+    msglog.channel = (d.channels.find((c) => c.logged) || d.channels.find((c) => c.count > 0))?.id || null;
+    msglog.week = null;
+  }
+  renderMessageChannels();
+  loadMessageWeek();
+}
+
+function renderMessageChannels() {
+  const q = $('msglog-filter').value.trim().toLowerCase();
+  const groups = new Map();
+  for (const c of msglog.data.channels) {
+    if (q && !c.name.toLowerCase().includes(q)) continue;
+    const key = c.category || 'No category';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  const rows = [];
+  for (const [category, channels] of groups) {
+    rows.push(el('div', { class: 'msglog-category' }, category));
+    for (const c of channels) {
+      const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `Log #${c.name}` });
+      box.checked = c.logged;
+      box.disabled = !c.readable && !c.logged;
+      box.addEventListener('change', async () => {
+        box.disabled = true;
+        try {
+          const result = await api('/api/settings/messages/channel', { id: c.id, logging: box.checked });
+          toast(box.checked ? `Now logging #${c.name}` : `Stopped logging #${c.name}; what was saved stays`);
+          if (result.needRestart) toast('Restart the proxy (with Message Content Intent on) to start saving messages.');
+          if (box.checked) msglog.channel = c.id;
+          await loadMessageLog();
+        } catch (err) {
+          box.checked = !box.checked;
+          box.disabled = false;
+          toast(err.message);
+        }
+      });
+      rows.push(el('div', { class: `msglog-channel ${c.id === msglog.channel ? 'active' : ''} ${c.readable ? '' : 'unreadable'}` },
+        el('button', { type: 'button', class: 'msglog-channel-name', onclick: () => { msglog.channel = c.id; msglog.week = null; renderMessageChannels(); loadMessageWeek(); },
+          title: c.readable ? '' : 'The bot can\'t see this channel' },
+        el('span', { class: 'hash' }, c.type === 'voice' ? '🔊' : c.type === 'gone' ? '✕' : '#'), el('span', { class: 'name' }, c.name),
+        c.count > 0 && el('span', { class: 'muted msglog-count' }, c.count.toLocaleString())),
+        el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }))));
+    }
+  }
+  $('msglog-channels').replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted' }, 'No channels.')]));
+}
+$('msglog-filter').addEventListener('input', () => { if (msglog.data) renderMessageChannels(); });
+
+async function loadMessageWeek() {
+  const view = $('msglog-view');
+  if (!msglog.channel) {
+    view.replaceChildren(el('p', { class: 'muted' }, 'Switch on a channel on the left to start logging it.'));
+    return;
+  }
+  try {
+    msglog.page = await api(`/api/settings/messages/week?channel=${msglog.channel}${msglog.week ? `&week=${msglog.week}` : ''}`);
+  } catch (e) {
+    view.replaceChildren(el('p', { class: 'muted' }, e.message));
+    return;
+  }
+  msglog.week = msglog.page.week;
+  renderMessageWeek();
+}
+
+const weekLabel = (start) => {
+  const from = new Date(`${start}T00:00:00`);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 6);
+  const f = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+  return `${f.format(from)} – ${f.format(to)}, ${to.getFullYear()}`;
+};
+const shiftWeek = (start, days) => {
+  const d = new Date(`${start}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+function renderMessageWeek() {
+  const p = msglog.page;
+  const channel = msglog.data.channels.find((c) => c.id === p.channel);
+  const go = (week) => { msglog.week = week; loadMessageWeek(); };
+  const select = el('select', { 'aria-label': 'Week' });
+  const weeks = p.weeks.some((w) => w.start === p.week) ? p.weeks : [{ start: p.week, count: 0 }, ...p.weeks];
+  for (const w of weeks) select.append(el('option', { value: w.start }, `${weekLabel(w.start)} (${w.count.toLocaleString()})`));
+  select.value = p.week;
+  select.addEventListener('change', () => go(select.value));
+  const search = el('input', { type: 'search', placeholder: 'Search this week…', 'aria-label': 'Search this week', value: msglog.search });
+  const list = el('div', { class: 'msglog-messages' });
+  const fill = () => {
+    msglog.search = search.value;
+    const q = search.value.trim().toLowerCase();
+    const shown = p.messages.filter((m) => !q || m.content.toLowerCase().includes(q) || m.author.toLowerCase().includes(q)
+      || (m.original || '').toLowerCase().includes(q));
+    const nodes = [];
+    let day = '';
+    for (const m of shown) {
+      const d = new Date(m.time).toDateString();
+      if (d !== day) {
+        day = d;
+        nodes.push(el('div', { class: 'msglog-day' }, new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(m.time))));
+      }
+      nodes.push(el('div', { class: `msglog-msg ${m.deletedAt ? 'deleted' : ''}` },
+        el('a', { href: discordHref(m.authorId), target: '_blank', rel: 'noopener' },
+          el('img', { class: 'head', src: m.avatar || '', alt: '', loading: 'lazy' })),
+        el('div', { class: 'msglog-body' },
+          el('div', { class: 'msglog-meta' },
+            el('a', { class: 'name', href: discordHref(m.authorId), target: '_blank', rel: 'noopener' }, m.author),
+            m.bot && el('span', { class: 'badge info' }, 'Bot'),
+            el('span', { class: 'muted', title: formatTime(m.time) }, new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(m.time))),
+            m.editedAt && el('span', { class: 'badge', title: `Edited ${formatTime(m.editedAt)}` }, 'Edited'),
+            m.deletedAt && el('span', { class: 'badge bad', title: `Deleted ${formatTime(m.deletedAt)}` }, 'Deleted')),
+          m.content && el('div', { class: 'msglog-text' }, m.content),
+          !m.content && !m.attachments.length && el('div', { class: 'msglog-text muted' }, '(no text)'),
+          m.original && el('div', { class: 'msglog-original' }, el('span', { class: 'muted' }, 'Before the edit: '), m.original),
+          m.attachments.length > 0 && el('div', { class: 'msglog-files' }, m.attachments.map((url) => el('a', { href: url, target: '_blank', rel: 'noopener' },
+            `📎 ${decodeURIComponent(url.split('?')[0].split('/').pop())}`))))));
+    }
+    list.replaceChildren(...(nodes.length ? nodes : [el('p', { class: 'muted' }, q ? 'Nothing matches.' : 'No messages this week.')]));
+  };
+  search.addEventListener('input', fill);
+  fill();
+  $('msglog-view').replaceChildren(...[
+    el('div', { class: 'msglog-head' },
+      el('h2', {}, channel ? `#${channel.name}` : 'Channel'),
+      el('div', { class: 'msglog-weeknav' },
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': 'Previous week', onclick: () => go(shiftWeek(p.week, -7)) }, '‹'),
+        select,
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': 'Next week', onclick: () => go(shiftWeek(p.week, 7)) }, '›')),
+      search),
+    p.truncated && el('p', { class: 'muted' }, `Showing the first ${p.limit.toLocaleString()} messages of this week.`),
+    el('p', { class: 'muted msglog-summary' }, `${p.messages.length.toLocaleString()} messages · `
+      + `${new Set(p.messages.map((m) => m.authorId)).size} people · ${p.messages.filter((m) => m.deletedAt).length} deleted`),
+    list].filter(Boolean));
+}
+
 // ---- Market: selling items in game for microcredits ----
 
 /** Sell prices are kept in thousandths of a microcredit: "1,234 µc", or "0.3 µc" for fractions. */
@@ -2606,7 +2766,7 @@ function onPresence(change) {
 
 // ---- On duty / off duty ----
 
-const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community', 'shop', 'market']);
+const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community', 'shop', 'market', 'messages']);
 const MEMBER_VIEWS = new Set(['home', 'community', 'players', 'shop', 'market']);
 const homeHash = () => (isStaff() ? '#/linked' : '#/home');
 
@@ -2827,6 +2987,7 @@ function currentRoute() {
   if (match) return { view: 'player', uuid: match[1].toLowerCase(), inventory: !!match[2] && isStaff() };
   const view = location.hash.replace(/^#\//, '');
   // Each view only exists in its own mode; anything else goes to that mode's home page.
+  if ((view === 'settings' || view === 'messages') && !state.me.isOwner) return { view: isStaff() ? 'linked' : 'home' };
   if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view };
   return { view: isStaff() ? 'linked' : 'home' };
 }
@@ -2842,14 +3003,16 @@ function refreshCurrentView() {
   else if (route.view === 'community') loadCommunity();
   else if (route.view === 'shop') loadShop();
   else if (route.view === 'market') loadMarket();
+  else if (route.view === 'messages') loadMessageLog();
 }
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players', 'shop', 'market']) {
+  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players', 'shop', 'market', 'messages']) {
     $(`view-${name}`).hidden = name !== route.view;
   }
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
+  $('settings-link').classList.toggle('active', route.view === 'settings' || route.view === 'messages');
   // On phones the tab row scrolls; keep the current tab in sight.
   const tabs = document.querySelector('.tabs');
   const active = tabs.querySelector('a.active');

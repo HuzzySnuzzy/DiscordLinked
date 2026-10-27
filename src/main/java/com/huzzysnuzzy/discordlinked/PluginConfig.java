@@ -69,7 +69,9 @@ public record PluginConfig(
         int sellPriceDropAfter,
         int sellPriceRecoveryHours,
         boolean marketWeeklyPost,
-        java.util.List<Long> commandChannelIds
+        java.util.List<Long> commandChannelIds,
+        java.util.List<Long> messageLogChannelIds,
+        int messageLogRetentionDays
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -136,7 +138,9 @@ public record PluginConfig(
                 Math.max(1, Integer.parseInt(props.getProperty("sell-price-drop-after").trim())),
                 Math.max(1, Integer.parseInt(props.getProperty("sell-price-recovery-hours").trim())),
                 parseBoolean(props, "market-weekly-post"),
-                parseIds(props, "command-channel-ids")
+                parseIds(props, "command-channel-ids"),
+                parseIds(props, "message-log-channel-ids"),
+                Integer.parseInt(props.getProperty("message-log-retention-days").trim())
         );
     }
 
