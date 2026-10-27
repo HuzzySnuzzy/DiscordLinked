@@ -68,7 +68,8 @@ public record PluginConfig(
         boolean sellPriceDrop,
         int sellPriceDropAfter,
         int sellPriceRecoveryHours,
-        boolean marketWeeklyPost
+        boolean marketWeeklyPost,
+        java.util.List<Long> commandChannelIds
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -134,13 +135,25 @@ public record PluginConfig(
                 parseBoolean(props, "sell-price-drop"),
                 Math.max(1, Integer.parseInt(props.getProperty("sell-price-drop-after").trim())),
                 Math.max(1, Integer.parseInt(props.getProperty("sell-price-recovery-hours").trim())),
-                parseBoolean(props, "market-weekly-post")
+                parseBoolean(props, "market-weekly-post"),
+                parseIds(props, "command-channel-ids")
         );
     }
 
     private static long parseId(Properties props, String key) {
         String value = props.getProperty(key, "").trim();
         return value.isEmpty() ? 0L : Long.parseLong(value);
+    }
+
+    /** "123, 456" -> [123, 456]; anything that isn't an ID is skipped. */
+    private static java.util.List<Long> parseIds(Properties props, String key) {
+        java.util.List<Long> ids = new java.util.ArrayList<>();
+        for (String part : props.getProperty(key, "").split("[,\\s]+")) {
+            if (part.matches("\\d{15,21}")) {
+                ids.add(Long.parseLong(part));
+            }
+        }
+        return java.util.List.copyOf(ids);
     }
 
     private static String nonBlank(Properties props, String key, String fallback) {
@@ -196,6 +209,14 @@ public record PluginConfig(
     /** Selling items for microcredits: needs the community features on too. */
     public boolean marketOpen() {
         return fadEnabled && marketEnabled;
+    }
+
+    /** Where slash commands may be used: command-channel-ids, else the chat channel; empty = anywhere. */
+    public java.util.List<Long> commandChannels() {
+        if (!commandChannelIds.isEmpty()) {
+            return commandChannelIds;
+        }
+        return chatChannelId != 0L ? java.util.List.of(chatChannelId) : java.util.List.of();
     }
 
     public boolean chatBridgeEnabled() {

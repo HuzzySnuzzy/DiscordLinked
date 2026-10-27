@@ -114,7 +114,7 @@ the Discord join message shows it: ":green_circle: **Huzzeh** joined the server 
 
 **Market: selling for microcredits.** Players sell items in game for **microcredits**, a second currency with
 its own leaderboard, made for people building farms and factories. Needs DiscordLinked and DiscordLinkedFAD
-0.16.0 or newer.
+0.16.1 or newer.
 - `/sell` opens a double chest: put items in and close it (or click **Sell now**) to sell them. The bottom row
   shows what it's all worth as you go; **Cancel** gives everything back. Leaving the game, dying or teleporting
   with it open gives everything back too, so nothing is sold by surprise.
@@ -334,6 +334,11 @@ Discord:
 | `/interactions enabled:<True/False>` | everyone | Let others pick you for interactions, or not |
 | `/mct [player]` | everyone | Microcredit leaderboard (with selling on) |
 
+Slash commands only work in the **command channels** (`command-channel-ids`, Settings → Discord → Command
+channels, several separated by commas). Empty = the chat bridge channel; if there's no chat channel either,
+anywhere. Threads count as their channel, and admins (the admin role or Timeout Members permission) can use
+commands anywhere. Elsewhere the bot answers, only to that person, which channels to use.
+
 Admin command visibility can be changed in Server Settings → Integrations → your bot.
 
 In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`.
@@ -353,8 +358,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.16.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.16.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.16.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.16.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.16.1.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.16.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

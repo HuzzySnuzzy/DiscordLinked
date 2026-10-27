@@ -1685,7 +1685,8 @@ function settingInput(field) {
   const input = el('input', {
     type: field.type === 'number' ? 'number' : 'text', 'aria-label': field.label, value: current,
     min: field.type === 'number' ? field.min : null, max: field.type === 'number' ? field.max : null,
-    placeholder: field.type === 'discord_id' ? 'Empty' : null, inputmode: field.type === 'discord_id' ? 'numeric' : null,
+    placeholder: field.type === 'discord_id' ? 'Empty' : field.type === 'discord_ids' ? 'Empty = chat channel' : null,
+    inputmode: field.type === 'discord_id' ? 'numeric' : null,
     spellcheck: 'false',
   });
   input.addEventListener('input', () => onChange(input.value.trim()));

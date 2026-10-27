@@ -156,6 +156,14 @@ public final class DiscordBot extends ListenerAdapter {
         if (event.getGuild() == null || event.getGuild().getIdLong() != plugin.config().guildId()) {
             return;
         }
+        if (!commandAllowedHere(event)) {
+            String channels = plugin.config().commandChannels().stream().map(id -> "<#" + id + ">")
+                    .collect(java.util.stream.Collectors.joining(", "));
+            // Channel mentions, so not escaped like player-supplied values.
+            event.reply(truncate(plugin.messages().discord("discord.command.wrong-channel", "channels", channels)))
+                    .setEphemeral(true).queue();
+            return;
+        }
         try {
             switch (event.getName()) {
                 case "link" -> handleLink(event);
@@ -473,6 +481,20 @@ public final class DiscordBot extends ListenerAdapter {
                 plugin.logger().warn("Could not store Discord profile for {}", userId, e);
             }
         }
+    }
+
+    /** Whether a slash command may be used where it was: a command channel (or a thread in one), or by an admin. */
+    private boolean commandAllowedHere(SlashCommandInteractionEvent event) {
+        List<Long> allowed = plugin.config().commandChannels();
+        if (allowed.isEmpty() || allowed.contains(event.getChannel().getIdLong())) {
+            return true;
+        }
+        if (event.getChannel() instanceof net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel thread
+                && allowed.contains(thread.getParentChannel().getIdLong())) {
+            return true;
+        }
+        Member member = event.getMember();
+        return member != null && (isAdmin(member) || member.hasPermission(Permission.MODERATE_MEMBERS));
     }
 
     private boolean isAdmin(Member member) {

@@ -16,7 +16,7 @@ import java.util.Properties;
  */
 public final class SettingsEditor {
 
-    public enum Type { BOOLEAN, NUMBER, DISCORD_ID, TEXT, URL, CHOICE, NAME }
+    public enum Type { BOOLEAN, NUMBER, DISCORD_ID, DISCORD_IDS, TEXT, URL, CHOICE, NAME }
 
     /** {@code restart}: the new value only takes effect after the proxy restarts. */
     public record Field(String key, String group, String label, String help, Type type, boolean restart,
@@ -50,6 +50,10 @@ public final class SettingsEditor {
                     "Members with this role get the admin view of the website.", false),
             id("log-channel-id", "Discord", "Log channel",
                     "Where links, suspensions, kicks, restores and joins/leaves are posted. Empty = off.", false),
+            new Field("command-channel-ids", "Discord", "Command channels",
+                    "Channel IDs where slash commands work, separated by commas. Empty = the chat channel (or "
+                            + "anywhere if there's none). Admins can use them anywhere.", Type.DISCORD_IDS, false, 0, 0,
+                    List.of()),
             bool("dm-players", "Discord", "Message players on Discord",
                     "DM players when they're suspended, kicked, unsuspended or unlinked by staff.", false),
 
@@ -271,6 +275,21 @@ public final class SettingsEditor {
                 if (!value.isEmpty() && !value.matches("\\d{15,21}")) {
                     throw new IllegalArgumentException(label + ": must be a Discord ID (digits only) or empty");
                 }
+            }
+            case DISCORD_IDS -> {
+                List<String> ids = new java.util.ArrayList<>();
+                for (String part : value.split("[,\\s]+")) {
+                    if (part.isEmpty()) {
+                        continue;
+                    }
+                    if (!part.matches("\\d{15,21}")) {
+                        throw new IllegalArgumentException(label + ": must be Discord channel IDs (digits), separated by commas");
+                    }
+                    if (!ids.contains(part)) {
+                        ids.add(part);
+                    }
+                }
+                return String.join(",", ids);
             }
             case URL -> {
                 if (!value.isEmpty() && !value.matches("https?://[^\\s]+")) {
