@@ -70,7 +70,7 @@ public record PluginConfig(
         int sellPriceRecoveryHours,
         boolean marketWeeklyPost,
         java.util.List<Long> commandChannelIds,
-        java.util.List<Long> messageLogChannelIds,
+        boolean messageLogEnabled,
         int messageLogRetentionDays
 ) {
 
@@ -139,7 +139,7 @@ public record PluginConfig(
                 Math.max(1, Integer.parseInt(props.getProperty("sell-price-recovery-hours").trim())),
                 parseBoolean(props, "market-weekly-post"),
                 parseIds(props, "command-channel-ids"),
-                parseIds(props, "message-log-channel-ids"),
+                parseBoolean(props, "message-log-enabled"),
                 Integer.parseInt(props.getProperty("message-log-retention-days").trim())
         );
     }

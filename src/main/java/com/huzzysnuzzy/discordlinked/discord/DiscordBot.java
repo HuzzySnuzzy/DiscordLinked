@@ -93,7 +93,7 @@ public final class DiscordBot extends ListenerAdapter {
         }
         EnumSet<GatewayIntent> intents = GatewayIntent.getIntents(GatewayIntent.DEFAULT);
         if (plugin.config().chatBridgeEnabled() && plugin.config().discordToMinecraft()
-                || !plugin.config().messageLogChannelIds().isEmpty()) {
+                || plugin.config().messageLogEnabled()) {
             // Privileged: must also be switched on in the Developer Portal.
             intents.add(GatewayIntent.MESSAGE_CONTENT);
         }
@@ -114,7 +114,7 @@ public final class DiscordBot extends ListenerAdapter {
             plugin.logger().error("Discord refused the login: discord-to-minecraft=true and the Discord message log "
                     + "need \"Message Content Intent\". Turn it on at https://discord.com/developers/applications -> "
                     + "your app -> Bot -> Privileged Gateway Intents, then restart the proxy. Or set "
-                    + "discord-to-minecraft=false and empty message-log-channel-ids.");
+                    + "discord-to-minecraft=false and message-log-enabled=false.");
         } else if (event.getCloseCode() == CloseCode.AUTHENTICATION_FAILED) {
             plugin.logger().error("Discord refused the bot token. Check bot-token in config.properties.");
         }

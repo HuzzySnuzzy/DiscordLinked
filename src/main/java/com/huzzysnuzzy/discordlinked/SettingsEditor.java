@@ -67,6 +67,9 @@ public final class SettingsEditor {
             bool("log-commands", "Logging & data", "Log commands", "Store commands players run in the logs.", false),
             number("chat-log-retention-days", "Logging & data", "Keep chat & command logs for",
                     "Days. Older chat, command and interaction entries are deleted. 0 = forever.", 0, 3650),
+            bool("message-log-enabled", "Logging & data", "Discord message log",
+                    "Save the messages of every channel the bot can see, for Settings -> Discord message log (only you "
+                            + "can read it). Needs Message Content Intent.", true),
             number("message-log-retention-days", "Logging & data", "Discord message log goes back",
                     "Days. Older logged Discord messages are deleted. 0 = forever.", 0, 100_000),
             number("log-retention-days", "Logging & data", "Keep other logs for",
@@ -207,13 +210,6 @@ public final class SettingsEditor {
             changes.put("web-domain-prefix", prefix);
         }
         ConfigFiles.update(plugin.dataDirectory(), "config.properties", changes);
-        plugin.reloadConfig();
-    }
-
-    /** Saves which Discord channels the message log covers. */
-    public void setMessageLogChannels(java.util.Collection<Long> channels) throws IOException {
-        ConfigFiles.update(plugin.dataDirectory(), "config.properties", Map.of("message-log-channel-ids",
-                channels.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","))));
         plugin.reloadConfig();
     }
 

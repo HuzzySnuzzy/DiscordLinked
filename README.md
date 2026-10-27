@@ -291,16 +291,19 @@ automatic trycloudflare address, because Discord only sends people back to addre
 
 ### Discord message log (settings owner only)
 
-Settings → **Discord message log** lists the Discord server's text channels. Switch a channel on and the bot
-saves every new message posted there (Discord doesn't give bots old history). Pick a channel to read it like in
-Discord: newest at the bottom, **Load older messages** at the top, and a search box that searches the whole
-channel. Edited messages keep their first version, and deleted messages stay in the log, marked as deleted. Only
-the settings owner can open the page, and turning channels on or off is in the Logs (Settings changes).
+A read-only log of every Discord channel the bot can see. Turn it on with **Discord message log** in
+Settings → Logging & data (or the button on its page, `message-log-enabled`) and restart the proxy. From then on
+the bot saves every new message (Discord doesn't give bots old history). It only listens: it never posts,
+reacts or leaves anything in those channels. Channels the bot can't see aren't logged, so leave it out of
+channels you don't want logged.
 
-- Needs **Message Content Intent** (Developer Portal → your app → Bot → Privileged Gateway Intents) and a proxy
-  restart after the first channel is switched on, or messages are saved without their text.
-- The log goes back `message-log-retention-days` (default 7; older messages are deleted, 0 = forever). The chosen channels are stored
-  in `message-log-channel-ids`.
+Settings → **Discord message log** lists the channels. Pick one to read it like in Discord: newest at the
+bottom, **Load older messages** at the top, and a search box for the whole channel. Edited messages keep their
+first version, and deleted messages stay, marked as deleted. Only the settings owner can open the page.
+
+- Needs **Message Content Intent** (Developer Portal → your app → Bot → Privileged Gateway Intents), or the bot
+  can't log in with the log turned on.
+- The log goes back `message-log-retention-days` (default 7; older messages are deleted, 0 = forever).
 - Attachments are saved as links; Discord's attachment links stop working after a while.
 - Tell your members the server logs messages (e.g. in the rules channel).
 
@@ -373,8 +376,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.17.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.17.1.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.17.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.17.2.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.17.2.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.17.2.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

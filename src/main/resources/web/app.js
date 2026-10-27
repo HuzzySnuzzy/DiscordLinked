@@ -2325,18 +2325,40 @@ async function loadMessageLog() {
   }
   const d = msglog.data;
   const notices = [];
-  if (!d.botReady) notices.push(el('p', { class: 'card panel muted' }, 'The Discord bot isn\'t connected, so the channel list is empty. Saved messages can still be read.'));
-  if (d.channels.some((c) => c.logged) && !d.messageContent) {
-    notices.push(el('div', { class: 'card panel shop-closed' }, 'Messages are being saved without their text: turn on ',
-      el('b', {}, 'Message Content Intent'), ' at discord.com/developers/applications → your app → Bot, then restart the proxy.'));
+  const toggle = async (button, on) => {
+    button.disabled = true;
+    try {
+      await api('/api/settings', { changes: { 'message-log-enabled': String(on) } });
+      toast(on ? 'Saved. Restart the proxy to start logging.' : 'Logging is off after the next proxy restart. What was saved stays.');
+      await loadMessageLog();
+    } catch (err) {
+      toast(err.message);
+      button.disabled = false;
+    }
+  };
+  if (!d.enabled) {
+    const on = el('button', { class: 'btn btn-small', type: 'button' }, 'Turn logging on');
+    on.addEventListener('click', () => toggle(on, true));
+    notices.push(el('div', { class: 'card panel msglog-state' },
+      el('span', {}, el('b', {}, 'Logging is off. '), 'Turn it on to save the messages of every channel the bot can see.'), on));
+  } else {
+    const off = el('button', { class: 'btn btn-ghost btn-small', type: 'button' }, 'Turn off');
+    off.addEventListener('click', () => toggle(off, false));
+    notices.push(el('div', { class: 'card panel msglog-state' },
+      el('span', {}, el('span', { class: 'pill online' }, 'Logging'), ' every channel the bot can see.'), off));
+    if (!d.messageContent) {
+      notices.push(el('div', { class: 'card panel shop-closed' }, 'Not saving yet: turn on ', el('b', {}, 'Message Content Intent'),
+        ' at discord.com/developers/applications → your app → Bot, then restart the proxy.'));
+    }
   }
-  notices.push(el('p', { class: 'muted msglog-help' }, 'Switch a channel on to start saving its messages (new ones only; Discord '
-    + 'doesn\'t hand out old history). Edits keep the first version and deleted messages stay, marked as deleted. ',
+  if (!d.botReady) notices.push(el('p', { class: 'card panel muted' }, 'The Discord bot isn\'t connected, so only channels with saved messages are listed.'));
+  notices.push(el('p', { class: 'muted msglog-help' }, 'The bot only reads: it never posts, reacts or leaves anything in these channels. '
+    + 'New messages only (Discord doesn\'t hand out old history). Edits keep the first version and deleted messages stay, marked as deleted. ',
     d.retentionDays ? `The log goes back ${d.retentionDays} days` : 'The log keeps everything', ' (',
-    el('a', { href: '#/settings' }, 'change it in Settings'), '). Let your members know this server logs messages.'));
+    el('a', { href: '#/settings' }, 'change it in Settings'), '). Channels the bot can\'t see aren\'t logged.'));
   $('messages-notice').replaceChildren(...notices);
   if (!msglog.channel || !d.channels.some((c) => c.id === msglog.channel)) {
-    msglog.channel = (d.channels.find((c) => c.logged) || d.channels.find((c) => c.count > 0))?.id || null;
+    msglog.channel = (d.channels.find((c) => c.count > 0) || d.channels[0])?.id || null;
   }
   renderMessageChannels();
   loadMessageFeed();
@@ -2355,29 +2377,11 @@ function renderMessageChannels() {
   for (const [category, channels] of groups) {
     rows.push(el('div', { class: 'msglog-category' }, category));
     for (const c of channels) {
-      const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `Log #${c.name}` });
-      box.checked = c.logged;
-      box.disabled = !c.readable && !c.logged;
-      box.addEventListener('change', async () => {
-        box.disabled = true;
-        try {
-          const result = await api('/api/settings/messages/channel', { id: c.id, logging: box.checked });
-          toast(box.checked ? `Now logging #${c.name}` : `Stopped logging #${c.name}; what was saved stays`);
-          if (result.needRestart) toast('Restart the proxy (with Message Content Intent on) to start saving messages.');
-          if (box.checked) msglog.channel = c.id;
-          await loadMessageLog();
-        } catch (err) {
-          box.checked = !box.checked;
-          box.disabled = false;
-          toast(err.message);
-        }
-      });
       rows.push(el('div', { class: `msglog-channel ${c.id === msglog.channel ? 'active' : ''} ${c.readable ? '' : 'unreadable'}` },
         el('button', { type: 'button', class: 'msglog-channel-name', onclick: () => { msglog.channel = c.id; msglog.search = ''; $('msglog-view').replaceChildren(); renderMessageChannels(); loadMessageFeed(); },
-          title: c.readable ? '' : 'The bot can\'t see this channel' },
+          title: c.type === 'gone' ? 'No longer in the server (or the bot can\'t see it any more)' : '' },
         el('span', { class: 'hash' }, c.type === 'voice' ? '🔊' : c.type === 'gone' ? '✕' : '#'), el('span', { class: 'name' }, c.name),
-        c.count > 0 && el('span', { class: 'muted msglog-count' }, c.count.toLocaleString())),
-        el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }))));
+        c.count > 0 && el('span', { class: 'muted msglog-count' }, c.count.toLocaleString()))));
     }
   }
   $('msglog-channels').replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted' }, 'No channels.')]));
@@ -2388,7 +2392,7 @@ $('msglog-filter').addEventListener('input', () => { if (msglog.data) renderMess
 async function loadMessageFeed(older = false) {
   const view = $('msglog-view');
   if (!msglog.channel) {
-    view.replaceChildren(el('p', { class: 'muted' }, 'Switch on a channel on the left to start logging it.'));
+    view.replaceChildren(el('p', { class: 'muted' }, 'No channels yet.'));
     return;
   }
   const channel = msglog.channel;
@@ -2468,8 +2472,8 @@ function renderMessageFeed(scroll) {
           `📎 ${decodeURIComponent(url.split('?')[0].split('/').pop())}`))))));
   }
   if (!msglog.messages.length) {
-    nodes.push(el('p', { class: 'muted' }, q ? 'Nothing matches.' : channel?.logged ? 'Nothing saved yet. New messages show up here.'
-      : 'Nothing saved. Switch the channel on to start logging it.'));
+    nodes.push(el('p', { class: 'muted' }, q ? 'Nothing matches.' : msglog.data.enabled ? 'Nothing saved yet. New messages show up here.'
+      : 'Nothing saved. Turn logging on to start.'));
   }
   list.replaceChildren(...nodes);
   // Start at the newest message; after loading older ones, stay where you were.

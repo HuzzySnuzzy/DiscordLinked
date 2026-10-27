@@ -534,7 +534,7 @@ public final class WebServer {
             case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact",
                  "GET /api/settings/domain", "POST /api/settings/domain/connect", "POST /api/settings/domain/disconnect",
                  "POST /api/settings/domain/login-link", "GET /api/settings/messages",
-                 "POST /api/settings/messages/channel", "GET /api/settings/messages/feed" ->
+                 "GET /api/settings/messages/feed" ->
                     settings(ex, method, path, session);
             case "GET /api/community" -> sendJson(ex, 200, community(query(ex), staff));
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
@@ -1298,51 +1298,16 @@ public final class WebServer {
                 list.add(DataObject.empty().put("id", Long.toString(entry.getKey()))
                         .put("name", names.getOrDefault(entry.getKey(), "unknown channel"))
                         .put("category", channels == null ? "Saved" : "No longer in the server").put("type", "gone").put("readable", false)
-                        .put("logged", c.messageLogChannelIds().contains(entry.getKey()))
+                        .put("logged", false)
                         .put("count", entry.getValue()[0]).put("latest", entry.getValue()[1]));
             }
         }
         return DataObject.empty()
+                .put("enabled", c.messageLogEnabled())
                 .put("botReady", channels != null)
                 .put("messageContent", plugin.bot().hasMessageContent())
                 .put("retentionDays", c.messageLogRetentionDays())
                 .put("channels", list);
-    }
-
-    /** Turns logging of one channel on or off. */
-    private void messageLogChannel(HttpExchange ex, SettingsEditor editor, String actor) throws IOException {
-        DataObject body = readJson(ex);
-        if (body == null) {
-            return;
-        }
-        long id;
-        try {
-            id = Long.parseLong(body.getString("id", ""));
-        } catch (NumberFormatException e) {
-            sendJson(ex, 400, error("Unknown channel"));
-            return;
-        }
-        boolean logging = body.getBoolean("logging", false);
-        List<MessageLog.Channel> channels = plugin.bot().messageLogChannels();
-        Optional<MessageLog.Channel> channel = channels == null ? Optional.empty()
-                : channels.stream().filter(ch -> ch.id() == id).findFirst();
-        if (logging && channel.isEmpty()) {
-            sendJson(ex, 400, error("That channel isn't in the Discord server."));
-            return;
-        }
-        java.util.LinkedHashSet<Long> logged = new java.util.LinkedHashSet<>(plugin.config().messageLogChannelIds());
-        boolean wasEmpty = logged.isEmpty();
-        if (logging) {
-            logged.add(id);
-        } else {
-            logged.remove(id);
-        }
-        editor.setMessageLogChannels(logged);
-        String name = channel.map(ch -> "#" + ch.name()).orElse(Long.toString(id));
-        plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE,
-                "Discord message log: " + (logging ? "now logging " : "stopped logging ") + name, actor);
-        sendJson(ex, 200, DataObject.empty().put("ok", true)
-                .put("needRestart", logging && wasEmpty && !plugin.bot().hasMessageContent()));
     }
 
     /**
@@ -1678,7 +1643,6 @@ public final class WebServer {
         switch (path) {
             case "/api/settings/domain" -> sendJson(ex, 200, domainJson());
             case "/api/settings/messages" -> sendJson(ex, 200, messageLogJson());
-            case "/api/settings/messages/channel" -> messageLogChannel(ex, editor, actor);
             case "/api/settings/messages/feed" -> messageLogFeed(ex, query(ex));
             case "/api/settings/domain/connect" -> domainConnect(ex, session);
             case "/api/settings/domain/disconnect" -> domainDisconnect(ex, session);

@@ -1107,3 +1107,4 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .domain-step p { margin: 0; }
 .domain-login { margin: 6px 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--glass-soft); border: 1px solid var(--glass-border); }
 .domain-login p { margin: 4px 0; }
+.msglog-state { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }

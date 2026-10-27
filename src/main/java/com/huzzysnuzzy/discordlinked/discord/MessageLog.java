@@ -22,8 +22,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Saves the messages of the Discord channels picked on the website (message-log-channel-ids), for the settings
- * owner's eyes only. Edits keep the first version; deleted messages stay, marked as deleted.
+ * Saves the messages of every Discord channel the bot can see (message-log-enabled), for the settings owner's eyes
+ * only. It only listens: nothing is ever posted, reacted or otherwise left behind in the channels. Edits keep the
+ * first version; deleted messages stay, marked as deleted.
  */
 public final class MessageLog extends ListenerAdapter {
 
@@ -39,7 +40,7 @@ public final class MessageLog extends ListenerAdapter {
 
     private boolean logged(GuildMessageChannel channel) {
         return channel.getGuild().getIdLong() == plugin.config().guildId()
-                && plugin.config().messageLogChannelIds().contains(channel.getIdLong());
+                && plugin.config().messageLogEnabled();
     }
 
     @Override
@@ -127,19 +128,21 @@ public final class MessageLog extends ListenerAdapter {
         return message.getAttachments().stream().map(Message.Attachment::getUrl).collect(Collectors.joining("\n"));
     }
 
-    /** Every text channel in the Discord server, in Discord's order, and whether the bot can read it. */
+    /** The text channels the bot can see, in Discord's order. */
     public List<Channel> channels(Guild guild) {
         List<Channel> list = new ArrayList<>();
-        List<Long> logged = plugin.config().messageLogChannelIds();
+        boolean logging = plugin.config().messageLogEnabled();
         for (GuildChannel channel : guild.getChannels()) {
             if (!(channel instanceof GuildMessageChannel)) {
                 continue;
             }
             String category = channel instanceof ICategorizableChannel c && c.getParentCategory() != null
                     ? c.getParentCategory().getName() : "";
-            boolean readable = guild.getSelfMember().hasPermission(channel, Permission.VIEW_CHANNEL);
+            if (!guild.getSelfMember().hasPermission(channel, Permission.VIEW_CHANNEL)) {
+                continue;
+            }
             list.add(new Channel(channel.getIdLong(), channel.getName(), category,
-                    channel.getType().name().toLowerCase(), readable, logged.contains(channel.getIdLong())));
+                    channel.getType().name().toLowerCase(), true, logging));
         }
         return list;
     }
