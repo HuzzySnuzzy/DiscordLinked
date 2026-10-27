@@ -1011,7 +1011,10 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .msglog-channel .switch { transform: scale(.8); flex: none; }
 .msglog-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .msglog-head h2 { margin: 0 auto 0 0; }
-.msglog-weeknav { display: flex; align-items: center; gap: 6px; }
+.msglog-head input[type=search] { flex: 1 1 200px; max-width: 320px; }
+.msglog-messages { max-height: calc(100vh - 260px); min-height: 300px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+.msglog-older { display: block; margin: 4px auto 8px; }
+.msglog-start { text-align: center; font-size: 13px; margin: 4px 0 8px; }
 .msglog-summary { font-size: 13px; margin: 8px 0 4px; }
 .msglog-day { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
 .msglog-day::after { content: ""; flex: 1; height: 1px; background: var(--glass-line); }
@@ -1029,9 +1032,8 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 @media (max-width: 860px) {
   .msglog { grid-template-columns: 1fr; }
   .msglog-channels { position: static; max-height: 320px; }
-  .msglog-head input[type=search] { width: 100%; }
-  .msglog-weeknav { flex: 1; }
-  .msglog-weeknav select { flex: 1; min-width: 0; }
+  .msglog-head input[type=search] { max-width: none; }
+  .msglog-messages { max-height: 70vh; }
 }
 
 /* ---- Login streak badge: the longer the streak, the wilder it gets ---- */

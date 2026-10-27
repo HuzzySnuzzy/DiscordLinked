@@ -292,14 +292,14 @@ automatic trycloudflare address, because Discord only sends people back to addre
 ### Discord message log (settings owner only)
 
 Settings → **Discord message log** lists the Discord server's text channels. Switch a channel on and the bot
-saves every new message posted there (Discord doesn't give bots old history). Pick a channel and a week to read
-them back, Monday to Sunday, with a search box. Edited messages keep their first version, and deleted messages
-stay in the log, marked as deleted. Only the settings owner can open the page, and turning channels on or off is
-in the Logs (Settings changes).
+saves every new message posted there (Discord doesn't give bots old history). Pick a channel to read it like in
+Discord: newest at the bottom, **Load older messages** at the top, and a search box that searches the whole
+channel. Edited messages keep their first version, and deleted messages stay in the log, marked as deleted. Only
+the settings owner can open the page, and turning channels on or off is in the Logs (Settings changes).
 
 - Needs **Message Content Intent** (Developer Portal → your app → Bot → Privileged Gateway Intents) and a proxy
   restart after the first channel is switched on, or messages are saved without their text.
-- Messages are kept for `message-log-retention-days` (default 90, 0 = forever). The chosen channels are stored
+- The log goes back `message-log-retention-days` (default 7; older messages are deleted, 0 = forever). The chosen channels are stored
   in `message-log-channel-ids`.
 - Attachments are saved as links; Discord's attachment links stop working after a while.
 - Tell your members the server logs messages (e.g. in the rules channel).
@@ -373,8 +373,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.17.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.17.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.17.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.17.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.17.1.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.17.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

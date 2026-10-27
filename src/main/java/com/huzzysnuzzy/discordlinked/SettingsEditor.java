@@ -67,8 +67,8 @@ public final class SettingsEditor {
             bool("log-commands", "Logging & data", "Log commands", "Store commands players run in the logs.", false),
             number("chat-log-retention-days", "Logging & data", "Keep chat & command logs for",
                     "Days. Older chat, command and interaction entries are deleted. 0 = forever.", 0, 3650),
-            number("message-log-retention-days", "Logging & data", "Keep logged Discord messages for",
-                    "Days, for the Discord message log. 0 = forever.", 0, 100_000),
+            number("message-log-retention-days", "Logging & data", "Discord message log goes back",
+                    "Days. Older logged Discord messages are deleted. 0 = forever.", 0, 100_000),
             number("log-retention-days", "Logging & data", "Keep other logs for",
                     "Days. Joins, IPs, admin actions and everything else. 0 = forever.", 0, 3650),
 

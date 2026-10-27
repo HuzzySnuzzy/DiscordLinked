@@ -2314,7 +2314,7 @@ $('shop-item-cancel').addEventListener('click', () => $('shop-item-dialog').clos
 
 // ---- Discord message log (settings owner only) ----
 
-const msglog = { data: null, channel: null, week: null, page: null, search: '' };
+const msglog = { data: null, channel: null, messages: [], more: false, search: '', searchTimer: 0 };
 
 async function loadMessageLog() {
   try {
@@ -2332,15 +2332,14 @@ async function loadMessageLog() {
   }
   notices.push(el('p', { class: 'muted msglog-help' }, 'Switch a channel on to start saving its messages (new ones only; Discord '
     + 'doesn\'t hand out old history). Edits keep the first version and deleted messages stay, marked as deleted. ',
-    d.retentionDays ? `Messages are kept for ${d.retentionDays} days` : 'Messages are kept forever', ' (',
+    d.retentionDays ? `The log goes back ${d.retentionDays} days` : 'The log keeps everything', ' (',
     el('a', { href: '#/settings' }, 'change it in Settings'), '). Let your members know this server logs messages.'));
   $('messages-notice').replaceChildren(...notices);
   if (!msglog.channel || !d.channels.some((c) => c.id === msglog.channel)) {
     msglog.channel = (d.channels.find((c) => c.logged) || d.channels.find((c) => c.count > 0))?.id || null;
-    msglog.week = null;
   }
   renderMessageChannels();
-  loadMessageWeek();
+  loadMessageFeed();
 }
 
 function renderMessageChannels() {
@@ -2374,7 +2373,7 @@ function renderMessageChannels() {
         }
       });
       rows.push(el('div', { class: `msglog-channel ${c.id === msglog.channel ? 'active' : ''} ${c.readable ? '' : 'unreadable'}` },
-        el('button', { type: 'button', class: 'msglog-channel-name', onclick: () => { msglog.channel = c.id; msglog.week = null; renderMessageChannels(); loadMessageWeek(); },
+        el('button', { type: 'button', class: 'msglog-channel-name', onclick: () => { msglog.channel = c.id; msglog.search = ''; $('msglog-view').replaceChildren(); renderMessageChannels(); loadMessageFeed(); },
           title: c.readable ? '' : 'The bot can\'t see this channel' },
         el('span', { class: 'hash' }, c.type === 'voice' ? '🔊' : c.type === 'gone' ? '✕' : '#'), el('span', { class: 'name' }, c.name),
         c.count > 0 && el('span', { class: 'muted msglog-count' }, c.count.toLocaleString())),
@@ -2385,91 +2384,96 @@ function renderMessageChannels() {
 }
 $('msglog-filter').addEventListener('input', () => { if (msglog.data) renderMessageChannels(); });
 
-async function loadMessageWeek() {
+/** The selected channel as one feed, oldest at the top, like Discord; older messages load on demand. */
+async function loadMessageFeed(older = false) {
   const view = $('msglog-view');
   if (!msglog.channel) {
     view.replaceChildren(el('p', { class: 'muted' }, 'Switch on a channel on the left to start logging it.'));
     return;
   }
+  const channel = msglog.channel;
+  const q = msglog.search.trim();
+  const before = older && msglog.messages.length ? `&before=${msglog.messages[0].id}` : '';
+  let page;
   try {
-    msglog.page = await api(`/api/settings/messages/week?channel=${msglog.channel}${msglog.week ? `&week=${msglog.week}` : ''}`);
+    page = await api(`/api/settings/messages/feed?channel=${channel}${before}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
   } catch (e) {
     view.replaceChildren(el('p', { class: 'muted' }, e.message));
     return;
   }
-  msglog.week = msglog.page.week;
-  renderMessageWeek();
+  if (channel !== msglog.channel || q !== msglog.search.trim()) return; // switched away meanwhile
+  const batch = page.messages.reverse();
+  msglog.messages = older ? [...batch, ...msglog.messages] : batch;
+  msglog.more = page.more;
+  renderMessageFeed(older ? 'keep' : 'bottom');
 }
 
-const weekLabel = (start) => {
-  const from = new Date(`${start}T00:00:00`);
-  const to = new Date(from);
-  to.setDate(to.getDate() + 6);
-  const f = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-  return `${f.format(from)} – ${f.format(to)}, ${to.getFullYear()}`;
-};
-const shiftWeek = (start, days) => {
-  const d = new Date(`${start}T12:00:00`);
-  d.setDate(d.getDate() + days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-function renderMessageWeek() {
-  const p = msglog.page;
-  const channel = msglog.data.channels.find((c) => c.id === p.channel);
-  const go = (week) => { msglog.week = week; loadMessageWeek(); };
-  const select = el('select', { 'aria-label': 'Week' });
-  const weeks = p.weeks.some((w) => w.start === p.week) ? p.weeks : [{ start: p.week, count: 0 }, ...p.weeks];
-  for (const w of weeks) select.append(el('option', { value: w.start }, `${weekLabel(w.start)} (${w.count.toLocaleString()})`));
-  select.value = p.week;
-  select.addEventListener('change', () => go(select.value));
-  const search = el('input', { type: 'search', placeholder: 'Search this week…', 'aria-label': 'Search this week', value: msglog.search });
-  const list = el('div', { class: 'msglog-messages' });
-  const fill = () => {
-    msglog.search = search.value;
-    const q = search.value.trim().toLowerCase();
-    const shown = p.messages.filter((m) => !q || m.content.toLowerCase().includes(q) || m.author.toLowerCase().includes(q)
-      || (m.original || '').toLowerCase().includes(q));
-    const nodes = [];
-    let day = '';
-    for (const m of shown) {
-      const d = new Date(m.time).toDateString();
-      if (d !== day) {
-        day = d;
-        nodes.push(el('div', { class: 'msglog-day' }, new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(m.time))));
-      }
-      nodes.push(el('div', { class: `msglog-msg ${m.deletedAt ? 'deleted' : ''}` },
-        el('a', { href: discordHref(m.authorId), target: '_blank', rel: 'noopener' },
-          el('img', { class: 'head', src: m.avatar || '', alt: '', loading: 'lazy' })),
-        el('div', { class: 'msglog-body' },
-          el('div', { class: 'msglog-meta' },
-            el('a', { class: 'name', href: discordHref(m.authorId), target: '_blank', rel: 'noopener' }, m.author),
-            m.bot && el('span', { class: 'badge info' }, 'Bot'),
-            el('span', { class: 'muted', title: formatTime(m.time) }, new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(m.time))),
-            m.editedAt && el('span', { class: 'badge', title: `Edited ${formatTime(m.editedAt)}` }, 'Edited'),
-            m.deletedAt && el('span', { class: 'badge bad', title: `Deleted ${formatTime(m.deletedAt)}` }, 'Deleted')),
-          m.content && el('div', { class: 'msglog-text' }, m.content),
-          !m.content && !m.attachments.length && el('div', { class: 'msglog-text muted' }, '(no text)'),
-          m.original && el('div', { class: 'msglog-original' }, el('span', { class: 'muted' }, 'Before the edit: '), m.original),
-          m.attachments.length > 0 && el('div', { class: 'msglog-files' }, m.attachments.map((url) => el('a', { href: url, target: '_blank', rel: 'noopener' },
-            `📎 ${decodeURIComponent(url.split('?')[0].split('/').pop())}`))))));
+function renderMessageFeed(scroll) {
+  const channel = msglog.data.channels.find((c) => c.id === msglog.channel);
+  let list = $('msglog-feed');
+  if (!list) {
+    const search = el('input', { id: 'msglog-search', type: 'search', placeholder: 'Search this channel…', 'aria-label': 'Search this channel' });
+    search.value = msglog.search;
+    search.addEventListener('input', () => {
+      msglog.search = search.value;
+      clearTimeout(msglog.searchTimer);
+      msglog.searchTimer = setTimeout(() => loadMessageFeed(), 300);
+    });
+    list = el('div', { id: 'msglog-feed', class: 'msglog-messages' });
+    $('msglog-view').replaceChildren(
+      el('div', { class: 'msglog-head' },
+        el('h2', { id: 'msglog-title' }),
+        search,
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => loadMessageFeed() }, 'Refresh')),
+      el('p', { class: 'muted msglog-summary', id: 'msglog-summary' }),
+      list);
+  }
+  $('msglog-title').textContent = channel ? `#${channel.name}` : 'Channel';
+  const q = msglog.search.trim();
+  $('msglog-summary').textContent = q
+    ? `${msglog.messages.length.toLocaleString()}${msglog.more ? '+' : ''} messages match`
+    : `${(channel?.count || 0).toLocaleString()} messages saved`
+      + (msglog.data.retentionDays ? ` · goes back ${msglog.data.retentionDays} days` : '');
+  const oldHeight = list.scrollHeight;
+  const oldTop = list.scrollTop;
+  const nodes = [];
+  if (msglog.more) {
+    nodes.push(el('button', { class: 'btn btn-ghost btn-small msglog-older', type: 'button',
+      onclick: (e) => { e.currentTarget.disabled = true; loadMessageFeed(true); } }, 'Load older messages'));
+  } else if (msglog.messages.length) {
+    nodes.push(el('p', { class: 'muted msglog-start' }, q ? 'That\'s every match.'
+      : 'This is as far back as the log goes.'));
+  }
+  let day = '';
+  for (const m of msglog.messages) {
+    const d = new Date(m.time).toDateString();
+    if (d !== day) {
+      day = d;
+      nodes.push(el('div', { class: 'msglog-day' }, new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(m.time))));
     }
-    list.replaceChildren(...(nodes.length ? nodes : [el('p', { class: 'muted' }, q ? 'Nothing matches.' : 'No messages this week.')]));
-  };
-  search.addEventListener('input', fill);
-  fill();
-  $('msglog-view').replaceChildren(...[
-    el('div', { class: 'msglog-head' },
-      el('h2', {}, channel ? `#${channel.name}` : 'Channel'),
-      el('div', { class: 'msglog-weeknav' },
-        el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': 'Previous week', onclick: () => go(shiftWeek(p.week, -7)) }, '‹'),
-        select,
-        el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': 'Next week', onclick: () => go(shiftWeek(p.week, 7)) }, '›')),
-      search),
-    p.truncated && el('p', { class: 'muted' }, `Showing the first ${p.limit.toLocaleString()} messages of this week.`),
-    el('p', { class: 'muted msglog-summary' }, `${p.messages.length.toLocaleString()} messages · `
-      + `${new Set(p.messages.map((m) => m.authorId)).size} people · ${p.messages.filter((m) => m.deletedAt).length} deleted`),
-    list].filter(Boolean));
+    nodes.push(el('div', { class: `msglog-msg ${m.deletedAt ? 'deleted' : ''}` },
+      el('a', { href: discordHref(m.authorId), target: '_blank', rel: 'noopener' },
+        el('img', { class: 'head', src: m.avatar || '', alt: '', loading: 'lazy' })),
+      el('div', { class: 'msglog-body' },
+        el('div', { class: 'msglog-meta' },
+          el('a', { class: 'name', href: discordHref(m.authorId), target: '_blank', rel: 'noopener' }, m.author),
+          m.bot && el('span', { class: 'badge info' }, 'Bot'),
+          el('span', { class: 'muted', title: formatTime(m.time) }, new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(m.time))),
+          m.editedAt && el('span', { class: 'badge', title: `Edited ${formatTime(m.editedAt)}` }, 'Edited'),
+          m.deletedAt && el('span', { class: 'badge bad', title: `Deleted ${formatTime(m.deletedAt)}` }, 'Deleted')),
+        m.content && el('div', { class: 'msglog-text' }, m.content),
+        !m.content && !m.attachments.length && el('div', { class: 'msglog-text muted' }, '(no text)'),
+        m.original && el('div', { class: 'msglog-original' }, el('span', { class: 'muted' }, 'Before the edit: '), m.original),
+        m.attachments.length > 0 && el('div', { class: 'msglog-files' }, m.attachments.map((url) => el('a', { href: url, target: '_blank', rel: 'noopener' },
+          `📎 ${decodeURIComponent(url.split('?')[0].split('/').pop())}`))))));
+  }
+  if (!msglog.messages.length) {
+    nodes.push(el('p', { class: 'muted' }, q ? 'Nothing matches.' : channel?.logged ? 'Nothing saved yet. New messages show up here.'
+      : 'Nothing saved. Switch the channel on to start logging it.'));
+  }
+  list.replaceChildren(...nodes);
+  // Start at the newest message; after loading older ones, stay where you were.
+  list.scrollTop = scroll === 'keep' ? oldTop + (list.scrollHeight - oldHeight) : list.scrollHeight;
 }
 
 // ---- Market: selling items in game for microcredits ----

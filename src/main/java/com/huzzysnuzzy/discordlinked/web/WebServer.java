@@ -534,7 +534,7 @@ public final class WebServer {
             case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact",
                  "GET /api/settings/domain", "POST /api/settings/domain/connect", "POST /api/settings/domain/disconnect",
                  "POST /api/settings/domain/login-link", "GET /api/settings/messages",
-                 "POST /api/settings/messages/channel", "GET /api/settings/messages/week" ->
+                 "POST /api/settings/messages/channel", "GET /api/settings/messages/feed" ->
                     settings(ex, method, path, session);
             case "GET /api/community" -> sendJson(ex, 200, community(query(ex), staff));
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
@@ -1273,7 +1273,7 @@ public final class WebServer {
 
     // ---- Discord message log (settings owner only, see settings()) ----
 
-    private static final int MESSAGE_LOG_WEEK_LIMIT = 5_000;
+    private static final int MESSAGE_LOG_PAGE = 150;
 
     /** The Discord server's text channels, which ones are logged, and how much is saved for each. */
     private DataObject messageLogJson() throws SQLException {
@@ -1345,34 +1345,25 @@ public final class WebServer {
                 .put("needRestart", logging && wasEmpty && !plugin.bot().hasMessageContent()));
     }
 
-    /** One week (Monday to Sunday, server time) of a channel's saved messages, and which weeks have any. */
-    private void messageLogWeek(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+    /**
+     * A page of a channel's saved messages, newest first: the latest ones, or those before {@code before} when
+     * scrolling back, or everything matching {@code q} in the whole channel.
+     */
+    private void messageLogFeed(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
         long channel;
+        Long before;
         try {
             channel = Long.parseLong(query.getOrDefault("channel", ""));
+            before = query.containsKey("before") ? Long.valueOf(query.get("before")) : null;
         } catch (NumberFormatException e) {
             sendJson(ex, 400, error("Unknown channel"));
             return;
         }
-        ZoneId zone = ZoneId.systemDefault();
-        java.util.TreeMap<java.time.LocalDate, Long> weeks = new java.util.TreeMap<>(java.util.Comparator.reverseOrder());
-        plugin.database().discordMessageDays(channel).forEach((day, count) -> weeks.merge(
-                java.time.LocalDate.parse(day).with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY)),
-                count, Long::sum));
-        java.time.LocalDate week;
-        try {
-            week = query.containsKey("week") ? java.time.LocalDate.parse(query.get("week"))
-                    .with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
-                    : weeks.isEmpty() ? java.time.LocalDate.now(zone).with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
-                    : weeks.firstKey();
-        } catch (java.time.format.DateTimeParseException e) {
-            sendJson(ex, 400, error("Bad week"));
-            return;
-        }
-        List<DiscordMessage> found = plugin.database().discordMessages(channel, week.atStartOfDay(zone).toInstant(),
-                week.plusWeeks(1).atStartOfDay(zone).toInstant(), MESSAGE_LOG_WEEK_LIMIT + 1);
+        String search = query.getOrDefault("q", "").trim();
+        List<DiscordMessage> found = plugin.database().discordMessages(channel, before, search.isEmpty() ? null : search,
+                MESSAGE_LOG_PAGE + 1);
         DataArray messages = DataArray.empty();
-        for (DiscordMessage m : found.subList(0, Math.min(found.size(), MESSAGE_LOG_WEEK_LIMIT))) {
+        for (DiscordMessage m : found.subList(0, Math.min(found.size(), MESSAGE_LOG_PAGE))) {
             messages.add(DataObject.empty().put("id", Long.toString(m.id())).put("authorId", Long.toString(m.authorId()))
                     .put("author", m.authorName()).put("avatar", m.authorAvatar()).put("bot", m.bot())
                     .put("content", m.content())
@@ -1381,11 +1372,8 @@ public final class WebServer {
                     .put("time", m.createdAt()).put("editedAt", m.editedAt()).put("original", m.original())
                     .put("deletedAt", m.deletedAt()));
         }
-        DataArray weekList = DataArray.empty();
-        weeks.forEach((start, count) -> weekList.add(DataObject.empty().put("start", start.toString()).put("count", count)));
-        sendJson(ex, 200, DataObject.empty().put("channel", Long.toString(channel)).put("week", week.toString())
-                .put("weeks", weekList).put("messages", messages)
-                .put("truncated", found.size() > MESSAGE_LOG_WEEK_LIMIT).put("limit", MESSAGE_LOG_WEEK_LIMIT));
+        sendJson(ex, 200, DataObject.empty().put("channel", Long.toString(channel)).put("messages", messages)
+                .put("more", found.size() > MESSAGE_LOG_PAGE));
     }
 
     // ---- Market ----
@@ -1691,7 +1679,7 @@ public final class WebServer {
             case "/api/settings/domain" -> sendJson(ex, 200, domainJson());
             case "/api/settings/messages" -> sendJson(ex, 200, messageLogJson());
             case "/api/settings/messages/channel" -> messageLogChannel(ex, editor, actor);
-            case "/api/settings/messages/week" -> messageLogWeek(ex, query(ex));
+            case "/api/settings/messages/feed" -> messageLogFeed(ex, query(ex));
             case "/api/settings/domain/connect" -> domainConnect(ex, session);
             case "/api/settings/domain/disconnect" -> domainDisconnect(ex, session);
             case "/api/settings/domain/login-link" -> {

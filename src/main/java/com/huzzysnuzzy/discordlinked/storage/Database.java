@@ -1580,32 +1580,33 @@ public final class Database implements AutoCloseable {
         return counts;
     }
 
-    /** How many messages a channel has per day (local "yyyy-MM-dd"), for picking a week. */
-    public synchronized Map<String, Long> discordMessageDays(long channelId) throws SQLException {
-        Map<String, Long> days = new java.util.TreeMap<>();
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS day, COUNT(*) "
-                        + "FROM discord_messages WHERE channel_id = ? GROUP BY day")) {
-            ps.setLong(1, channelId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    days.put(rs.getString(1), rs.getLong(2));
-                }
-            }
-        }
-        return days;
-    }
-
-    /** A channel's messages between two times, oldest first, at most {@code limit}. */
-    public synchronized List<DiscordMessage> discordMessages(long channelId, Instant from, Instant to, int limit)
+    /**
+     * A channel's messages, newest first: the {@code limit} before message {@code before} (null = the newest), and
+     * only those containing {@code search} (in the text, the author's name or an edit's first version) if given.
+     */
+    public synchronized List<DiscordMessage> discordMessages(long channelId, Long before, String search, int limit)
             throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT * FROM discord_messages WHERE channel_id = ? AND created_at >= ? AND created_at < ? "
-                        + "ORDER BY created_at, message_id LIMIT ?")) {
-            ps.setLong(1, channelId);
-            ps.setLong(2, from.toEpochMilli());
-            ps.setLong(3, to.toEpochMilli());
-            ps.setInt(4, limit);
+        StringBuilder sql = new StringBuilder("SELECT * FROM discord_messages WHERE channel_id = ?");
+        if (before != null) {
+            sql.append(" AND message_id < ?");
+        }
+        if (search != null) {
+            sql.append(" AND (content LIKE ? ESCAPE '\\' OR author_name LIKE ? ESCAPE '\\' OR original LIKE ? ESCAPE '\\')");
+        }
+        sql.append(" ORDER BY message_id DESC LIMIT ?");
+        try (PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            int i = 1;
+            ps.setLong(i++, channelId);
+            if (before != null) {
+                ps.setLong(i++, before);
+            }
+            if (search != null) {
+                String like = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+                ps.setString(i++, like);
+                ps.setString(i++, like);
+                ps.setString(i++, like);
+            }
+            ps.setInt(i, limit);
             List<DiscordMessage> list = new ArrayList<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
