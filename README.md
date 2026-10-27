@@ -114,7 +114,7 @@ the Discord join message shows it: ":green_circle: **Huzzeh** joined the server 
 
 **Market: selling for microcredits.** Players sell items in game for **microcredits**, a second currency with
 its own leaderboard, made for people building farms and factories. Needs DiscordLinked and DiscordLinkedFAD
-0.16.1 or newer.
+0.16.0 or newer.
 - `/sell` opens a double chest: put items in and close it (or click **Sell now**) to sell them. The bottom row
   shows what it's all worth as you go; **Cancel** gives everything back. Leaving the game, dying or teleporting
   with it open gives everything back too, so nothing is sold by surprise.
