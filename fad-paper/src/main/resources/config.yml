@@ -1,7 +1,7 @@
-# DiscordLinkedFAD: interaction commands, credits and selling items for DiscordLinked.
+# DiscordLinkedFAD: interaction commands, credits, selling items and cosmetics for DiscordLinked.
 #
-# Needs DiscordLinked 0.10.0 or newer on the Velocity proxy (0.16.0 or newer for selling). The proxy keeps everyone's credits, shows
-# interactions on every server and in Discord, and puts it all on the admin website.
+# Needs DiscordLinked 0.10.0 or newer on the Velocity proxy (0.16.0 or newer for selling, 0.18.0 for cosmetics). The
+# proxy keeps everyone's credits, shows interactions on every server and in Discord, and puts it all on the website.
 #
 # Credits themselves (their name, how many players get for playing and for advancements) are set on the
 # proxy: plugins/discordlinked/config.properties, or the website's Settings page. The credit messages
@@ -69,6 +69,19 @@ exchange-command:
   name: exchange
   aliases: []
 
+# Cosmetics players buy on the website (Shop -> Cosmetics) and switch on or off on their profile there.
+cosmetics:
+  # Prefixes. With LuckPerms they're added as a temporary LuckPerms prefix (never saved) with this priority, so
+  # chat and tab plugins that show LuckPerms prefixes show them. LuckPerms shows the highest priority prefix:
+  # set this above your rank prefixes to replace them, or below to only show it for players without one.
+  # Without LuckPerms the prefix goes in front of the player's name in chat and the tab list.
+  prefix-priority: 150
+  # Add a space after the prefix.
+  prefix-space: true
+  # Trails: how often (in ticks, 20 = a second) and how many particles appear behind walking players.
+  trail-interval-ticks: 3
+  trail-particles: 2
+
 messages:
   # <command> = the command as typed
   usage-target: "<red>Usage: /<command> <player></red>"
@@ -113,6 +126,9 @@ messages:
   worth: "<white><item></white><gray>: <gold><each></gold> each, <gold><stack></gold> per <size></gray>"
   # <amount> = how many they hold, <total>
   worth-holding: "<gray>Your <amount> sell for <gold><total></gold>.</gray>"
+  # KeepInventory (bought on the website): after a death, and when its owner tries to hurt another player.
+  keepinv-kept: "<gray>KeepInventory kept your items and XP.</gray>"
+  keepinv-no-pvp: "<red>You have KeepInventory on, so you can't hurt other players.</red> <gray>Switch it off on the website.</gray>"
   # When lots of it was sold lately and prices drop. <percent> of the normal price
   worth-dropped: "<yellow>Lots of this was sold lately, so it sells for <percent>% of its normal price.</yellow>"
 

@@ -118,6 +118,8 @@ public final class AuditLog {
         public static final String SALE = "SALE";
         /** Microcredits exchanged for credits. */
         public static final String EXCHANGE = "EXCHANGE";
+        /** A cosmetic bought, given, taken away or refunded; KeepInventory switched on or off. */
+        public static final String COSMETIC = "COSMETIC";
 
         private EventTypes() {
         }

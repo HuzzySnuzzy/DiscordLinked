@@ -45,6 +45,7 @@ public final class Community {
     private final FadDiscord discord;
     private final Shop shop;
     private final Market market;
+    private final Cosmetics cosmetics;
     /** Players their server reported as AFK. Cleared when they switch server or leave. */
     private final Set<UUID> afk = ConcurrentHashMap.newKeySet();
     /** Servers running DiscordLinkedFAD: name -> version. */
@@ -57,6 +58,7 @@ public final class Community {
         this.discord = new FadDiscord(plugin, this);
         this.shop = new Shop(plugin, this);
         this.market = new Market(plugin, this);
+        this.cosmetics = new Cosmetics(plugin, this);
     }
 
     public void start() {
@@ -65,6 +67,7 @@ public final class Community {
         plugin.proxy().getScheduler().buildTask(plugin, this::tickPlaytime)
                 .delay(TICK_SECONDS, TimeUnit.SECONDS).repeat(TICK_SECONDS, TimeUnit.SECONDS).schedule();
         market.start();
+        cosmetics.start();
     }
 
     public FadActions actions() {
@@ -85,6 +88,10 @@ public final class Community {
 
     public Market market() {
         return market;
+    }
+
+    public Cosmetics cosmetics() {
+        return cosmetics;
     }
 
     /** Servers that have said hello since the proxy started, with their DiscordLinkedFAD version. */

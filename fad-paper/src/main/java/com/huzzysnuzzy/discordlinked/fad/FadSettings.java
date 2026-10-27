@@ -51,6 +51,10 @@ final class FadSettings {
     final CommandName worthCommand;
     final CommandName microTopCommand;
     final CommandName exchangeCommand;
+    final int prefixPriority;
+    final boolean prefixSpace;
+    final int trailIntervalTicks;
+    final int trailParticles;
     /** By command name, in config order. */
     final Map<String, Action> actions;
     private final YamlConfiguration user;
@@ -72,6 +76,10 @@ final class FadSettings {
         worthCommand = commandName("worth-command", logger);
         microTopCommand = commandName("microcredit-top-command", logger);
         exchangeCommand = commandName("exchange-command", logger);
+        prefixPriority = integer("cosmetics.prefix-priority");
+        prefixSpace = bool("cosmetics.prefix-space");
+        trailIntervalTicks = Math.max(1, integer("cosmetics.trail-interval-ticks"));
+        trailParticles = Math.max(1, Math.min(10, integer("cosmetics.trail-particles")));
         ConfigurationSection section = user.isConfigurationSection("actions")
                 ? user.getConfigurationSection("actions") : bundled.getConfigurationSection("actions");
         actions = Collections.unmodifiableMap(readActions(section, logger));

@@ -13,6 +13,8 @@ repositories {
 dependencies {
     // Folia uses Paper's API. Built against 1.21.4 so it runs on Folia/Paper 1.21.4 and everything newer.
     compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
+    // Optional: bought prefixes become LuckPerms prefixes when it's installed.
+    compileOnly("net.luckperms:api:5.4")
 }
 
 java {

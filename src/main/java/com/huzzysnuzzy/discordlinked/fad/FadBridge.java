@@ -59,6 +59,7 @@ final class FadBridge {
                         try {
                             community.hello(server, version, json);
                             send(connection, out -> out.writeUTF("HELLO_OK"));
+                            community.cosmetics().serverReady(server);
                         } catch (IllegalArgumentException e) {
                             plugin.logger().warn("DiscordLinkedFAD on {} sent an unreadable interactions list: {}",
                                     server, e.getMessage());
@@ -166,6 +167,7 @@ final class FadBridge {
                     .ifPresent(connection -> send(connection, out -> out.writeUTF("SYNC"))))
                     .delay(2, TimeUnit.SECONDS).schedule();
         }
+        community.cosmetics().joined(player, server);
     }
 
     @Subscribe
@@ -195,6 +197,20 @@ final class FadBridge {
                 out.writeInt(line.amount());
             }
             out.writeUTF(title);
+        });
+    }
+
+    /**
+     * What a player has in use: their prefix (with &amp; colour codes), trail particle and from when KeepInventory
+     * works (epoch millis, 0 = off). Empty strings switch a prefix or trail off.
+     */
+    void cosmetics(ServerConnection connection, UUID player, String prefix, String trail, long keepInventoryFrom) {
+        send(connection, out -> {
+            out.writeUTF("COSMETICS");
+            out.writeUTF(player.toString());
+            out.writeUTF(prefix);
+            out.writeUTF(trail);
+            out.writeLong(keepInventoryFrom);
         });
     }
 

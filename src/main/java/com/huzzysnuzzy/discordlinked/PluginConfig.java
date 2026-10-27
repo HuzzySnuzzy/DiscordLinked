@@ -71,6 +71,8 @@ public record PluginConfig(
         boolean marketWeeklyPost,
         java.util.List<Long> commandChannelIds,
         boolean messageLogEnabled,
+        boolean cosmeticsEnabled,
+        int keepInventoryDelayMinutes,
         int messageLogRetentionDays
 ) {
 
@@ -140,6 +142,8 @@ public record PluginConfig(
                 parseBoolean(props, "market-weekly-post"),
                 parseIds(props, "command-channel-ids"),
                 parseBoolean(props, "message-log-enabled"),
+                parseBoolean(props, "cosmetics-enabled"),
+                Math.max(0, Integer.parseInt(props.getProperty("keep-inventory-delay-minutes").trim())),
                 Integer.parseInt(props.getProperty("message-log-retention-days").trim())
         );
     }

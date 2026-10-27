@@ -124,6 +124,12 @@ public final class SettingsEditor {
                     "Every price times this: 100 = the built-in prices, 50 = half, 200 = double. "
                             + "Single items are changed on the Shop page.", 1, 100_000),
 
+            bool("cosmetics-enabled", "Shop", "Cosmetics shop open",
+                    "Players can buy prefixes, trails, profile cards and KeepInventory. Off: nothing can be bought, "
+                            + "but what players have keeps working. The items are made on the Shop page.", false),
+            number("keep-inventory-delay-minutes", "Shop", "KeepInventory starts after (minutes)",
+                    "So it can't be switched on in the middle of a fight. 0 = right away.", 0, 1440),
+
             bool("market-enabled", "Market", "Selling open",
                     "Players can sell items in game (/sell, /sellhand) for microcredits.", false),
             number("sell-price-percent", "Market", "Sell price (% of the Shop price)",

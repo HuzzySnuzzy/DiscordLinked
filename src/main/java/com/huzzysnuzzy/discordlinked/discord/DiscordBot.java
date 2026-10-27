@@ -42,8 +42,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,17 +61,12 @@ public final class DiscordBot extends ListenerAdapter {
     private final Map<Long, CachedMember> memberCache = new ConcurrentHashMap<>();
     /** What was last sent to Discord as the command list, so unchanged lists aren't sent again. */
     private volatile String registeredCommands;
+    private final MessageLog messageLog;
     private static final Duration MEMBER_CACHE_TIME = Duration.ofMinutes(10);
 
     public DiscordBot(DiscordLinked plugin) {
         this.plugin = plugin;
         this.messageLog = new MessageLog(plugin);
-    }
-
-    private final MessageLog messageLog;
-
-    public MessageLog messageLog() {
-        return messageLog;
     }
 
     /** The Discord server's text channels for the message log, or null while the bot isn't connected. */
@@ -431,14 +426,6 @@ public final class DiscordBot extends ListenerAdapter {
     /** The application's ID, which is also its OAuth2 client ID. */
     public String applicationId() {
         return jda.getSelfUser().getApplicationId();
-    }
-
-    /**
-     * Whether the user is in the guild and has the admin role. Blocks on a REST call,
-     * so never call this from a JDA thread.
-     */
-    public boolean hasAdminRole(long userId) {
-        return plugin.config().adminRoleId() != 0L && checkMember(userId).admin();
     }
 
     /**

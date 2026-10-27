@@ -11,14 +11,12 @@
   <div class="liquid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
   <header class="topbar" id="topbar">
     <a class="brand" id="brand" href="#/"><img src="/favicon.svg" alt=""> <span class="brand-text">DiscordLinked</span></a>
-    <nav class="tabs">
-      <a href="#/linked" data-view="linked" data-mode="admin">Linked</a>
+    <nav class="tabs" id="main-tabs" aria-label="Pages">
       <a href="#/home" data-view="home" data-mode="member">Home</a>
       <a href="#/players" data-view="players">Players</a>
       <a href="#/moderate" data-view="moderate" data-mode="admin">Moderate</a>
       <a href="#/community" data-view="community" id="community-tab" hidden>Community</a>
       <a href="#/shop" data-view="shop" id="shop-tab" hidden>Shop</a>
-      <a href="#/market" data-view="market" id="market-tab" hidden>Market</a>
       <a href="#/logs" data-view="logs" data-mode="admin">Logs</a>
     </nav>
     <div class="global-search">
@@ -35,43 +33,12 @@
       <a href="#/settings" id="settings-link" class="icon-btn" title="Settings" aria-label="Settings" hidden>
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.4 7.4 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
       </a>
-      <img id="me-avatar" class="avatar" alt="">
-      <span id="me-name"></span>
+      <a id="me-link" class="me-link" title="Your profile"><img id="me-avatar" class="avatar" alt=""><span id="me-name"></span></a>
       <a href="/logout" class="btn btn-ghost btn-small">Log out</a>
     </div>
   </header>
 
   <main class="content">
-    <section id="view-linked" hidden>
-      <div class="toolbar">
-        <h1>Linked players <span id="linked-count" class="count"></span></h1>
-        <div class="legend">
-          <span><i class="dot dot-admin"></i> Admin</span>
-          <span><i class="dot dot-suspended"></i> Suspended</span>
-        </div>
-        <select id="linked-sort" aria-label="Sort players">
-          <option value="name-asc">Name A–Z</option>
-          <option value="name-desc">Name Z–A</option>
-          <option value="online">Online first</option>
-          <option value="seen" selected>Recently seen</option>
-          <option value="linked-new">Newest links</option>
-          <option value="linked-old">Oldest links</option>
-          <option value="suspended">Suspended first</option>
-          <option value="admins">Admins first</option>
-        </select>
-        <input id="linked-search" type="search" placeholder="Filter this list…" aria-label="Filter linked players">
-      </div>
-      <div class="table-wrap">
-        <table class="table linked-table">
-          <thead>
-            <tr><th>Minecraft</th><th>Discord</th><th>Status</th><th>Linked</th><th class="actions-col">Actions</th></tr>
-          </thead>
-          <tbody id="linked-body"></tbody>
-        </table>
-        <p id="linked-empty" class="empty" hidden>No linked players yet.</p>
-      </div>
-    </section>
-
     <section id="view-logs" hidden>
       <div class="toolbar">
         <h1>Logs</h1>
@@ -94,6 +61,7 @@
           <option value="community">Interactions, advancements &amp; credits</option>
           <option value="shop">Shop orders</option>
           <option value="market">Sales &amp; exchanges</option>
+          <option value="cosmetics">Cosmetics</option>
         </select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
         <button id="logs-csv" class="btn btn-ghost btn-small" type="button">Download CSV</button>
@@ -128,31 +96,13 @@
     <section id="view-players" hidden>
       <div class="toolbar">
         <h1>Players <span id="players-count" class="count"></span></h1>
-        <div class="legend"><span><i class="dot dot-admin"></i> Staff</span></div>
-        <select id="players-sort" aria-label="Sort players">
-          <option value="name-asc">Name A–Z</option>
-          <option value="name-desc">Name Z–A</option>
-          <option value="online">Online first</option>
-          <option value="seen" selected>Recently seen</option>
-          <option value="joined-new">Newest first</option>
-          <option value="streak">Longest streak</option>
-          <option value="admins">Staff first</option>
-        </select>
-        <select id="players-show" aria-label="Which players">
-          <option value="all">Everyone who played</option>
-          <option value="linked">Linked members</option>
-        </select>
+        <div class="legend" id="players-legend"></div>
+        <select id="players-show" aria-label="Which players"></select>
+        <select id="players-sort" aria-label="Sort players"></select>
         <input id="players-search" type="search" placeholder="Filter players…" aria-label="Filter players">
       </div>
-      <div class="table-wrap">
-        <table class="table linked-table">
-          <thead>
-            <tr><th>Minecraft</th><th>Discord</th><th>Status</th><th>Joined</th></tr>
-          </thead>
-          <tbody id="players-body"></tbody>
-        </table>
-        <p id="players-empty" class="empty" hidden>No players yet.</p>
-      </div>
+      <div id="players-list" class="plist card" role="list"></div>
+      <p id="players-empty" class="empty card" hidden>No players yet.</p>
       <div class="more"><button id="players-more" class="btn btn-ghost" type="button" hidden>Show more</button></div>
     </section>
 
@@ -186,64 +136,78 @@
     <section id="view-community" hidden>
       <div class="toolbar">
         <h1>Community</h1>
-        <span id="community-earning" class="muted"></span>
+        <nav class="tabs subtabs" id="community-subtabs" aria-label="Community pages">
+          <a href="#/community" data-sub="">Leaderboards</a>
+          <a href="#/community/interactions" data-sub="interactions">Interactions</a>
+        </nav>
       </div>
-      <div id="community-body"></div>
+      <div id="community-notice"></div>
+      <div id="community-leaderboards">
+        <div id="community-stats" class="stats-strip"></div>
+        <div id="community-boards" class="board-chips" role="tablist" aria-label="Leaderboards"></div>
+        <div id="community-board" class="card panel board"></div>
+      </div>
+      <div id="community-interactions" hidden></div>
     </section>
 
     <section id="view-shop" hidden>
       <div class="toolbar">
         <h1>Shop</h1>
+        <nav class="tabs subtabs" id="shop-subtabs" aria-label="Shop pages">
+          <a href="#/shop" data-sub="">Items</a>
+          <a href="#/shop/cosmetics" data-sub="cosmetics">Cosmetics</a>
+          <a href="#/shop/sell" data-sub="sell">Sell &amp; exchange</a>
+        </nav>
         <span id="shop-balance" class="shop-balance"></span>
-        <input id="shop-search" type="search" placeholder="Search items…" aria-label="Search items">
       </div>
-      <div id="shop-notice"></div>
-      <div class="card shop-window">
-        <div id="shop-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
-        <div id="shop-grid" class="shop-grid" role="list"></div>
-        <div id="shop-info" class="shop-info" aria-live="polite"></div>
-        <div class="shop-chest-head">
-          <h2>Your order</h2>
-          <span class="muted" id="shop-hint">Works like Minecraft: left-click an item to pick one up (again for more),
-            right-click for a stack, shift-click to send a stack to the chest. In the chest, left-click picks up or puts
-            down, right-click splits a stack or puts down one, drag across slots to spread it, double-click to gather,
-            shift-click to send a slot back. Esc puts back what you hold.</span>
-        </div>
-        <div id="shop-chest" class="shop-chest" aria-label="Order chest"></div>
-        <div class="shop-checkout">
-          <div id="shop-total" class="shop-total"></div>
-          <select id="shop-gift" aria-label="Who the chest is for"><option value="">For me</option></select>
-          <button id="shop-clear" class="btn btn-ghost btn-small" type="button">Empty chest</button>
-          <button id="shop-buy" class="btn" type="button">Check out</button>
-        </div>
-      </div>
-    </section>
 
-    <section id="view-market" hidden>
-      <div class="toolbar">
-        <h1>Market</h1>
-        <span id="market-balance" class="shop-balance"></span>
+      <div id="shop-items">
+        <div id="shop-notice"></div>
+        <div class="card shop-window">
+          <div class="shop-window-head">
+            <div id="shop-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
+            <input id="shop-search" type="search" placeholder="Search items…" aria-label="Search items">
+          </div>
+          <div id="shop-grid" class="shop-grid" role="list"></div>
+          <div id="shop-info" class="shop-info" aria-live="polite"></div>
+          <div class="shop-chest-head">
+            <h2>Your order</h2>
+            <span class="muted" id="shop-hint">Works like Minecraft: left-click an item to pick one up (again for more),
+              right-click for a stack, shift-click to send a stack to the chest. In the chest, left-click picks up or puts
+              down, right-click splits a stack or puts down one, drag across slots to spread it, double-click to gather,
+              shift-click to send a slot back. Esc puts back what you hold.</span>
+          </div>
+          <div id="shop-chest" class="shop-chest" aria-label="Order chest"></div>
+          <div class="shop-checkout">
+            <div id="shop-total" class="shop-total"></div>
+            <select id="shop-gift" aria-label="Who the chest is for"><option value="">For me</option></select>
+            <button id="shop-clear" class="btn btn-ghost btn-small" type="button">Empty chest</button>
+            <button id="shop-buy" class="btn" type="button">Check out</button>
+          </div>
+        </div>
       </div>
-      <div id="market-notice"></div>
-      <div class="grid market-top">
-        <div class="card panel" id="market-leaders"></div>
-        <div class="market-side">
+
+      <div id="shop-cosmetics" hidden></div>
+
+      <div id="shop-sell" hidden>
+        <div id="market-notice"></div>
+        <div class="grid">
           <div class="card panel" id="market-exchange"></div>
           <div class="card panel" id="market-how"></div>
         </div>
-      </div>
-      <div class="card panel market-prices">
-        <div class="market-prices-head">
-          <h2>Sell prices</h2>
-          <select id="market-sort" aria-label="Sort sell prices">
-            <option value="shop">Shop order</option>
-            <option value="value">Most valuable</option>
-            <option value="name">A–Z</option>
-          </select>
-          <input id="market-search" type="search" placeholder="Search items…" aria-label="Search sell prices">
+        <div class="card panel market-prices">
+          <div class="market-prices-head">
+            <h2>Sell prices</h2>
+            <select id="market-sort" aria-label="Sort sell prices">
+              <option value="shop">Shop order</option>
+              <option value="value">Most valuable</option>
+              <option value="name">A–Z</option>
+            </select>
+            <input id="market-search" type="search" placeholder="Search items…" aria-label="Search sell prices">
+          </div>
+          <div id="market-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
+          <div id="market-list" class="market-list"></div>
         </div>
-        <div id="market-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
-        <div id="market-list" class="market-list"></div>
       </div>
     </section>
 
@@ -301,6 +265,38 @@
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" id="shop-item-cancel">Cancel</button>
         <button type="submit" class="btn" id="shop-item-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form id="confirm-form">
+      <h2 id="confirm-title"></h2>
+      <div id="confirm-text" class="muted"></div>
+      <p id="confirm-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" id="confirm-cancel">Cancel</button>
+        <button type="submit" class="btn" id="confirm-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="cosmetic-dialog" class="wide">
+    <form id="cosmetic-form">
+      <h2 id="cosmetic-title"></h2>
+      <label class="reason">Name <input type="text" id="cosmetic-name" maxlength="32" required></label>
+      <div id="cosmetic-value"></div>
+      <div class="duration">
+        <label>Price (credits) <input type="number" id="cosmetic-price" min="0" max="1000000000" step="1" required></label>
+      </div>
+      <label class="check-row"><input type="checkbox" id="cosmetic-for-sale"> For sale in the shop</label>
+      <p class="muted" id="cosmetic-note"></p>
+      <p id="cosmetic-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-danger btn-small" id="cosmetic-delete">Delete</button>
+        <span class="grow"></span>
+        <button type="button" class="btn btn-ghost" id="cosmetic-cancel">Cancel</button>
+        <button type="submit" class="btn" id="cosmetic-save">Save</button>
       </div>
     </form>
   </dialog>

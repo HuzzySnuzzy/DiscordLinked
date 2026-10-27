@@ -69,10 +69,11 @@ website's Settings page (e.g. Pawbuck / Pawbucks). Players earn them for:
 `/credits`, `/credits <player>` and `/credits top` in game; `/credits [player]` and `/leaderboard` in
 Discord. Admins can give or take credits on a player's page (with a reason; it's logged).
 
-**On the website.** A **Community** tab (for everyone, also in the community view) with totals, the leaderboard (by credits, earnings, active
-playtime, advancements or interactions), recent interactions and every interaction with how often it's
-used. Each player page shows their balance, playtime, advancements and favourite interactions; admins also see AFK
-time and the credit history. Interactions, advancements and credit changes are in the Logs (**Interactions, advancements &
+**On the website.** The **Community** tab (for everyone) has two parts. **Leaderboards**: totals and the top
+100 by credits, microcredits, credits earned, active playtime, login streak, advancements, or interactions given
+or received, with a podium for the top three and your own place even when you're further down. **Interactions**:
+recent ones and every interaction command with how often it's used. Each player page shows their balance,
+playtime, advancements and favourite interactions; admins also see AFK time and the credit history. Interactions, advancements and credit changes are in the Logs (**Interactions, advancements &
 credits** filter); interactions count as chat for `chat-log-retention-days`.
 
 **Daily login rewards and streaks.** The first join of each day (server time) pays `daily-reward-base`
@@ -124,8 +125,8 @@ its own leaderboard, made for people building farms and factories. Needs Discord
   selling back never pays). Only plain items sell: anything enchanted, renamed, damaged, filled or with potion
   effects is given back.
 - **1,000 microcredits = 1 credit** (`microcredits-per-credit`). Sell prices follow the rate, so changing it
-  doesn't change what an item is worth in credits. `/exchange <amount|all>` in game, or the Market page, turns
-  microcredits into credits. It only goes that way.
+  doesn't change what an item is worth in credits. `/exchange <amount|all>` in game, or Shop → **Sell &
+  exchange** on the website, turns microcredits into credits. It only goes that way.
 - `/mct` (`/microcredittop`) and `/mct` in Discord show the leaderboard. It ranks by what players hold right now
   (`microcredits-leaderboard=balance`, so exchanging costs rank) or by everything ever sold (`earned`).
 - Optional **dropping prices** (`sell-price-drop`, off by default): the more of one item everyone sells, the less
@@ -133,12 +134,42 @@ its own leaderboard, made for people building farms and factories. Needs Discord
   recovers halfway every `sell-price-recovery-hours` (default 24). A sale pays the average price over the
   amount, so splitting a sale up doesn't pay more.
 - Every Monday, last week's top sellers are posted to the interactions channel (`market-weekly-post`).
-- The website's **Market** page has the leaderboard (with a podium for the top three), exchanging, and every
-  item's sell price. Player pages show their microcredits and rank; staff also see the sale history. The
-  settings owner can turn selling off for single items or give them their own sell percentage in the Shop's
-  **Edit items**. Sales and exchanges are in the Logs (**Sales & exchanges** filter).
+- On the website, Shop → **Sell & exchange** has exchanging and every item's sell price, and the leaderboard is
+  under Community → Leaderboards → Microcredits. Player pages show their microcredits and rank; staff also see
+  the sale history. The settings owner can turn selling off for single items or give them their own sell
+  percentage in the Shop's **Edit items**. Sales and exchanges are in the Logs (**Sales & exchanges** filter).
 - If another plugin (like EssentialsX) already has `/sell` or `/worth`, rename DiscordLinkedFAD's commands in
   its config.yml, or use `/discordlinkedfad:sell`.
+
+**Cosmetics.** Shop → **Cosmetics** on the website sells things that aren't items, for credits only. They're
+bought once and kept; players switch them on and off under **Your unlocks** on their own profile (click your
+name in the top bar). One of each kind is on at a time, and a new purchase is switched on straight away. Needs
+DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers.
+
+- **Prefixes** in front of the player's name in chat and the tab list, with `&` colour codes (`&b[Builder]`,
+  `&6&l[Tycoon]`, hex as `&#ff88cc`). With **LuckPerms** on a server they're LuckPerms prefixes, so every chat
+  and tab plugin that shows LuckPerms prefixes shows them. They're temporary (never saved in LuckPerms) and get
+  priority `cosmetics.prefix-priority` (DiscordLinkedFAD's config.yml, default 150). LuckPerms shows the
+  highest-priority prefix: put it above your rank prefixes to replace them while it's on, or below them to only
+  show it for players without one (or set up LuckPerms' prefix stacking to show both). Without LuckPerms the
+  prefix goes in front of the player's display name.
+- **Trails**: particles behind the player while they walk (hearts, flames, music notes, cherry petals, snow,
+  …). Nothing shows while they're in spectator mode, invisible or vanished. `cosmetics.trail-interval-ticks` and
+  `cosmetics.trail-particles` set how often and how many.
+- **Profile cards**: a picture behind the player's name in the Players list, fading out to the right, and at
+  the top of their profile. The settings owner makes them: Shop → Cosmetics → **Edit** → **New profile card**,
+  drop in a PNG, JPEG or GIF (up to 8 MB) and set a price. Pictures are re-saved (only the pixels are kept) and
+  shrunk to at most 1600×900; they're stored in `plugins/discordlinked/cards/` and only shown to logged-in
+  visitors.
+- **KeepInventory** (Quality of life): players keep their items and XP when they die, but can't hurt other
+  players while it's on (hits, arrows, tridents, their pets, fire, harmful potions). It starts working
+  `keep-inventory-delay-minutes` after it's switched on (default 5), so it can't be switched on in the middle
+  of a fight.
+- The shop starts with a few prefixes, eight trails and KeepInventory. In **Edit** the settings owner changes
+  names, prefix texts, trail particles and prices, takes things off sale (owners keep them) or deletes them
+  (everyone who paid gets their credits back). A player's profile has **Give for free** and **Take away** for
+  admins. Purchases are in the credit history and everything is in the Logs (**Cosmetics** filter).
+- `cosmetics-enabled=false` stops new purchases; what players already have keeps working.
 
 ## Website
 
@@ -147,19 +178,23 @@ while they're logged in.
 
 - **Everyone in your Discord server** (`web-member-access=true`, the default) gets the community view:
   **Home** (who's online and on which server, member and staff counts, newest members, recently online),
-  the **Community** page (leaderboard and interactions, when DiscordLinkedFAD's features are on), a
-  **Players** list and simple profiles (Minecraft and Discord identity, member since, online or last seen,
-  credits, playtime and advancements). Nothing administrative: no IPs, notes, suspensions, inventories,
+  **Players** (the list and simple profiles: Minecraft and Discord identity, member since, online or last seen,
+  credits, playtime and advancements), **Community** (leaderboards and interactions) and the **Shop** (items,
+  cosmetics, and selling & exchanging), the last two when DiscordLinkedFAD's features are on. Nothing administrative: no IPs, notes, suspensions, inventories,
   logs, AFK time or credit history. The server enforces this, not just the page.
 - **Admins** (`admin-role-id`) get the admin view below. The **On duty** switch in the top bar (on by
   default) flips them to the community view and back; switching is logged.
 - IP addresses are blurred for admins until you hover (or tap) them, so they don't show on a shared or
   streamed screen.
 
-- **Linked**: every linked player with their Minecraft head, Discord avatar, names, UUID/ID and status
-  (online with server, or offline with when they were last seen, e.g. "Offline · 3 days ago").
-  Sort by name, online, recently seen, link date, suspended or admins. Names are **gold** for admins
-  (their Discord account has `admin-role-id`) and **dark red** for suspended players.
+- **Players**: everyone who has played, linked or not, also from before DiscordLinked was installed
+  (DiscordLinkedSpy sends each server's player data, names and first and last time played, to the proxy when
+  someone joins that server, at most every 12 hours). Each row has the Minecraft head, Discord avatar, names,
+  UUID/ID, status (online with server, or offline with when they were last seen, e.g. "Offline · 3 days
+  ago"), login streak and the action buttons. Show everyone, online, linked, not linked, staff or suspended
+  players; sort by recently seen, online, name, join date, longest streak, admins or suspended; filter by name
+  or ID. Names are **gold** for admins (their Discord account has `admin-role-id`) and **dark red** for
+  suspended players.
 - **Find any player**: the search box in the top bar finds everyone who has ever connected, linked or not,
   by Minecraft name, UUID, Discord name or Discord ID.
 - **Player page** (click any name): profile with a NameMC link, Discord details, current suspension,
@@ -189,15 +224,10 @@ while they're logged in.
   Only the Discord server's owner can see Settings, unless `web-owner-id` names someone else.
 - **Retention**: `chat-log-retention-days` (default 90) and `log-retention-days` (default forever) delete
   old logs, and `inventory-snapshot-retention-days` old snapshots. Cleanup runs hourly.
-- **Live updates**: every page updates as things happen (new log rows appear instantly; the Linked,
-  Players, Home, Moderate, Community and player pages refresh when someone joins, leaves, is suspended, and
-  so on). The "Live" dot in the top bar shows the connection. Pages ask the server for news with long
+- **Live updates**: every page updates as things happen (new log rows appear instantly; the Players, Home,
+  Moderate, Community, Shop and player pages refresh when someone joins, leaves, is suspended, and so on). The "Live" dot in the top bar shows the connection. Pages ask the server for news with long
   polling, which works through the automatic https address (Cloudflare quick tunnels can't carry
   Server-Sent Events) and any other proxy.
-- **Players**: everyone who has played, linked or not, also from before DiscordLinked was installed:
-  DiscordLinkedSpy sends each server's player data (names, first and last time played) to the proxy when
-  someone joins that server, at most every 12 hours. Filter to linked members only, sort (recently seen first
-  by default, or by longest login streak), search. Each player's login streak shows next to their status.
 - **On the website**: next to Online/Offline, players who have this website open right now get an
   "On the website" status (lists and player pages, updated live; it clears about 45 seconds after they close it).
 - **Your own address**: Settings → **Your own address** puts the website on your own domain, e.g.
@@ -376,8 +406,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.17.2.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.17.2.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.17.2.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.18.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.18.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.18.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

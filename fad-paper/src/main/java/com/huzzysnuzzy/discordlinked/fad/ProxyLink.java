@@ -283,6 +283,15 @@ final class ProxyLink implements PluginMessageListener {
                         }, null);
                     }
                 }
+                // What a player bought on the website and uses: prefix, trail, KeepInventory.
+                case "COSMETICS" -> {
+                    UUID uuid = UUID.fromString(in.readUTF());
+                    Cosmetics.State state = new Cosmetics.State(in.readUTF(), in.readUTF(), in.readLong());
+                    Player player = Bukkit.getPlayer(uuid);
+                    if (player != null) {
+                        player.getScheduler().run(plugin, task -> plugin.cosmetics().apply(player, state), null);
+                    }
+                }
                 // Someone on Discord picked this player: play the effects where they are.
                 case "FX" -> {
                     Action action = plugin.settings().actions.get(in.readUTF());

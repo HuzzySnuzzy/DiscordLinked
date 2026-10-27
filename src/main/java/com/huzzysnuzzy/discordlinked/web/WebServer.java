@@ -5,36 +5,40 @@ import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.LiveEvents;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
 import com.huzzysnuzzy.discordlinked.SettingsEditor;
-import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
-import com.huzzysnuzzy.discordlinked.storage.InventorySnapshotRecord;
-import com.huzzysnuzzy.discordlinked.storage.PendingRestore;
 import com.huzzysnuzzy.discordlinked.TimeFormat;
-import com.huzzysnuzzy.discordlinked.spy.SpyManager;
-import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
 import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
-import com.huzzysnuzzy.discordlinked.fad.FadActions;
-import com.huzzysnuzzy.discordlinked.storage.CreditAccount;
-import com.huzzysnuzzy.discordlinked.storage.DiscordMessage;
-import com.huzzysnuzzy.discordlinked.storage.CreditTransaction;
-import com.huzzysnuzzy.discordlinked.storage.EarnedAdvancement;
-import com.huzzysnuzzy.discordlinked.storage.InteractionRecord;
-import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
 import com.huzzysnuzzy.discordlinked.discord.MessageLog;
+import com.huzzysnuzzy.discordlinked.fad.CardImages;
+import com.huzzysnuzzy.discordlinked.fad.Cosmetics;
+import com.huzzysnuzzy.discordlinked.fad.FadActions;
 import com.huzzysnuzzy.discordlinked.fad.Market;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
+import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
+import com.huzzysnuzzy.discordlinked.spy.SpyManager;
+import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
+import com.huzzysnuzzy.discordlinked.storage.Cosmetic;
+import com.huzzysnuzzy.discordlinked.storage.CreditAccount;
+import com.huzzysnuzzy.discordlinked.storage.CreditTransaction;
+import com.huzzysnuzzy.discordlinked.storage.DiscordMessage;
+import com.huzzysnuzzy.discordlinked.storage.EarnedAdvancement;
+import com.huzzysnuzzy.discordlinked.storage.InteractionRecord;
+import com.huzzysnuzzy.discordlinked.storage.InventorySnapshotRecord;
 import com.huzzysnuzzy.discordlinked.storage.KnownPlayer;
-import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
+import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
+import com.huzzysnuzzy.discordlinked.storage.OwnedCosmetic;
+import com.huzzysnuzzy.discordlinked.storage.PendingRestore;
 import com.huzzysnuzzy.discordlinked.storage.PlayerIp;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
 import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
+import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.velocitypowered.api.proxy.Player;
+import net.dv8tion.jda.api.exceptions.ParsingException;
 import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
-import net.dv8tion.jda.api.exceptions.ParsingException;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -61,10 +65,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
@@ -84,15 +88,17 @@ public final class WebServer {
     /** Everything the community view (non-admins and off-duty admins) may call. */
     private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
             "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty",
-            "GET /api/shop", "POST /api/shop/checkout", "GET /api/market", "POST /api/market/exchange");
+            "GET /api/shop", "POST /api/shop/checkout", "GET /api/market", "POST /api/market/exchange",
+            "GET /api/leaderboard", "GET /api/cosmetics", "POST /api/cosmetics/buy", "POST /api/cosmetics/equip");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
             EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
             EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST, EventTypes.SHOP_PURCHASE, EventTypes.SALE,
-            EventTypes.EXCHANGE);
+            EventTypes.EXCHANGE, EventTypes.COSMETIC);
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final long MAX_CREDIT_ADJUSTMENT = 1_000_000_000L;
     private static final int MAX_EXPORT_ROWS = 50_000;
+    private static final int LEADERBOARD_SIZE = 100;
     private static final DateTimeFormatter EXPORT_TIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(ZoneId.systemDefault());
     private static final DateTimeFormatter FILE_TIME =
@@ -126,9 +132,10 @@ public final class WebServer {
             Map.entry("deaths", Set.of(EventTypes.DEATH)),
             Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)),
             Map.entry("community", Set.of(EventTypes.INTERACTION, EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST,
-                    EventTypes.SHOP_PURCHASE, EventTypes.SALE, EventTypes.EXCHANGE)),
-            Map.entry("shop", Set.of(EventTypes.SHOP_PURCHASE)),
-            Map.entry("market", Set.of(EventTypes.SALE, EventTypes.EXCHANGE)));
+                    EventTypes.SHOP_PURCHASE, EventTypes.SALE, EventTypes.EXCHANGE, EventTypes.COSMETIC)),
+            Map.entry("shop", Set.of(EventTypes.SHOP_PURCHASE, EventTypes.COSMETIC)),
+            Map.entry("market", Set.of(EventTypes.SALE, EventTypes.EXCHANGE)),
+            Map.entry("cosmetics", Set.of(EventTypes.COSMETIC)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -389,11 +396,6 @@ public final class WebServer {
         sendJson(ex, 200, domainJson());
     }
 
-    /** The address admins open, or null while the HTTPS tunnel is still starting. */
-    public String publicUrl() {
-        return publicUrl;
-    }
-
     /**
      * A one-time login link, or null if the website isn't reachable yet. Whether the user may log in (and
      * with which view) is checked when the link is used.
@@ -444,6 +446,10 @@ public final class WebServer {
             String method = ex.getRequestMethod();
             if (path.startsWith("/api/")) {
                 handleApi(ex, method, path);
+                return;
+            }
+            if (path.startsWith("/cards/") && (method.equals("GET") || method.equals("HEAD"))) {
+                serveCard(ex, path.substring("/cards/".length()));
                 return;
             }
             if (method.equals("POST") && path.equals("/login/link")) {
@@ -509,20 +515,19 @@ public final class WebServer {
         }
         switch (route) {
             case "GET /api/home" -> sendJson(ex, 200, home());
-            case "GET /api/members" -> sendJson(ex, 200, memberList());
+            case "GET /api/members" -> sendJson(ex, 200, memberList(staff));
             case "POST /api/duty" -> setDuty(ex, session);
             case "GET /api/online" -> sendJson(ex, 200, onlineList(session));
             case "GET /api/spy" -> sendJson(ex, 200, spyStatus(session));
             case "POST /api/spy/start" -> spyStart(ex, session);
             case "POST /api/spy/end", "POST /api/spy/kick", "POST /api/spy/suspend" -> spyAction(ex, path, session);
             case "GET /api/me" -> sendJson(ex, 200, meJson(session));
-            case "GET /api/linked" -> sendJson(ex, 200, linkedList());
             case "GET /api/search" -> sendJson(ex, 200, search(query(ex), staff));
             case "GET /api/player" -> {
                 if (staff) {
-                    playerPage(ex, query(ex));
+                    playerPage(ex, query(ex), session);
                 } else {
-                    publicPlayerPage(ex, query(ex));
+                    publicPlayerPage(ex, query(ex), session);
                 }
             }
             case "GET /api/player/inventory" -> inventory(ex, query(ex), session);
@@ -536,7 +541,12 @@ public final class WebServer {
                  "POST /api/settings/domain/login-link", "GET /api/settings/messages",
                  "GET /api/settings/messages/feed" ->
                     settings(ex, method, path, session);
-            case "GET /api/community" -> sendJson(ex, 200, community(query(ex), staff));
+            case "GET /api/community" -> sendJson(ex, 200, community(staff));
+            case "GET /api/leaderboard" -> sendJson(ex, 200, leaderboard(query(ex), session));
+            case "GET /api/cosmetics" -> sendJson(ex, 200, cosmeticsJson(session));
+            case "POST /api/cosmetics/buy", "POST /api/cosmetics/equip" -> cosmeticForSelf(ex, path, session);
+            case "POST /api/cosmetics/save", "POST /api/cosmetics/delete", "POST /api/cosmetics/card",
+                 "POST /api/cosmetics/give", "POST /api/cosmetics/revoke" -> cosmeticForOwner(ex, path, session);
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
             case "GET /api/shop" -> sendJson(ex, 200, shop(session));
             case "POST /api/shop/checkout" -> shopCheckout(ex, session);
@@ -577,7 +587,10 @@ public final class WebServer {
 
     private DataObject meJson(Sessions.Session session) {
         boolean staff = session.staff();
+        LinkedAccount own = ownAccount(session);
         return DataObject.empty()
+                .put("minecraftUuid", own == null ? null : own.uuid().toString())
+                .put("minecraftName", own == null ? null : own.minecraftName())
                 .put("id", String.valueOf(session.user.id()))
                 .put("name", session.user.name())
                 .put("avatar", session.user.avatarUrl())
@@ -589,7 +602,17 @@ public final class WebServer {
                 .put("isOwner", staff && isOwner(session))
                 .put("communityEnabled", plugin.config().fadEnabled())
                 .put("shopOpen", plugin.community().shop().open())
-                .put("marketOpen", plugin.community().market().open());
+                .put("marketOpen", plugin.community().market().open())
+                .put("cosmeticsOpen", plugin.community().cosmetics().open());
+    }
+
+    /** The Minecraft account linked to whoever is logged in, or null. */
+    private LinkedAccount ownAccount(Sessions.Session session) {
+        try {
+            return plugin.database().findByDiscordId(session.user.id()).orElse(null);
+        } catch (SQLException e) {
+            return null;
+        }
     }
 
     private void setDuty(HttpExchange ex, Sessions.Session session) throws IOException {
@@ -787,7 +810,9 @@ public final class WebServer {
                 .put("minecraftName", name)
                 .put("linked", linked != null)
                 .put("online", online.isPresent())
-                .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""));
+                .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""))
+                .put("card", plugin.community().cosmetics().cardUrl(uuid))
+                .put("prefix", plugin.community().cosmetics().prefix(uuid));
         if (linked != null) {
             if (linked.discordName() == null) {
                 plugin.bot().refreshProfile(linked.discordId());
@@ -822,15 +847,6 @@ public final class WebServer {
                 .put("active", s.isActive());
     }
 
-    private DataArray linkedList() throws SQLException {
-        Map<UUID, Suspension> suspensions = plugin.database().activeSuspensions();
-        DataArray result = DataArray.empty();
-        for (LinkedAccount account : plugin.database().allLinked()) {
-            result.add(playerJson(account.uuid(), account.minecraftName(), account, suspensions.get(account.uuid())));
-        }
-        return result;
-    }
-
     private DataArray search(Map<String, String> query, boolean staff) throws SQLException {
         String q = query.getOrDefault("q", "").trim();
         DataArray result = DataArray.empty();
@@ -848,8 +864,12 @@ public final class WebServer {
 
     // ---- Community view ----
 
-    /** Everyone who has played: linked members, plus players known from joins and the servers' player data. */
-    private DataArray memberList() throws SQLException {
+    /**
+     * Everyone who has played: linked members, plus players known from joins and the servers' player data. Staff
+     * also get each player's suspension and whether they're still in the Discord server.
+     */
+    private DataArray memberList(boolean staff) throws SQLException {
+        Map<UUID, Suspension> suspensions = staff ? plugin.database().activeSuspensions() : Map.of();
         Map<UUID, KnownPlayer> known = new HashMap<>();
         for (KnownPlayer player : plugin.database().knownPlayers()) {
             known.put(player.uuid(), player);
@@ -859,8 +879,9 @@ public final class WebServer {
         DataArray result = DataArray.empty();
         for (LinkedAccount account : plugin.database().allLinked()) {
             KnownPlayer k = known.remove(account.uuid());
-            result.add(withStreak(publicPlayerJson(account.uuid(), account.minecraftName(), account)
-                    .put("firstPlayed", k == null || k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli()),
+            DataObject row = staff ? playerJson(account.uuid(), account.minecraftName(), account, suspensions.get(account.uuid()))
+                    : publicPlayerJson(account.uuid(), account.minecraftName(), account);
+            result.add(withStreak(row.put("firstPlayed", k == null || k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli()),
                     streaks.get(account.uuid()), today));
         }
         for (KnownPlayer k : known.values()) {
@@ -874,7 +895,10 @@ public final class WebServer {
                     .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""))
                     .put("lastSeen", k.lastPlayed() == null ? null : k.lastPlayed().toEpochMilli())
                     .put("firstPlayed", k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli())
-                    .put("isAdmin", false), streaks.get(k.uuid()), today));
+                    .put("isAdmin", false)
+                    .put("card", plugin.community().cosmetics().cardUrl(k.uuid()))
+                    .put("suspension", suspensions.containsKey(k.uuid()) ? suspensionJson(suspensions.get(k.uuid())) : null),
+                    streaks.get(k.uuid()), today));
         }
         return result;
     }
@@ -905,7 +929,8 @@ public final class WebServer {
         return plugin.database().knownPlayer(uuid).map(KnownPlayer::firstPlayed).map(Instant::toEpochMilli).orElse(null);
     }
 
-    private void publicPlayerPage(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+    private void publicPlayerPage(HttpExchange ex, Map<String, String> query, Sessions.Session session)
+            throws IOException, SQLException {
         UUID uuid = parseUuid(query.get("uuid"));
         Optional<PlayerRef> ref = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
         if (ref.isEmpty()) {
@@ -922,7 +947,8 @@ public final class WebServer {
         sendJson(ex, 200, DataObject.empty()
                 .put("player", publicPlayerJson(uuid, ref.get().name(), linked).put("firstPlayed", firstPlayed(uuid))
                         .put("streak", streakJson(uuid)))
-                .put("community", community));
+                .put("community", community)
+                .put("cosmetics", playerCosmetics(uuid, session)));
     }
 
     /** The Home page of the community view: who's online where, the newest members and who was on recently. */
@@ -972,7 +998,8 @@ public final class WebServer {
                 .put("recent", recent);
     }
 
-    private void playerPage(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+    private void playerPage(HttpExchange ex, Map<String, String> query, Sessions.Session session)
+            throws IOException, SQLException {
         UUID uuid = parseUuid(query.get("uuid"));
         Optional<PlayerRef> ref = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
         if (ref.isEmpty()) {
@@ -1004,7 +1031,8 @@ public final class WebServer {
                     .put("lastSeen", ip.lastSeen().toEpochMilli()).put("times", ip.times()).put("others", others));
         }
         sendJson(ex, 200, DataObject.empty().put("player", player).put("suspensions", suspensions)
-                .put("notes", notes).put("ips", ips).put("community", playerCommunity(uuid, linked)));
+                .put("notes", notes).put("ips", ips).put("community", playerCommunity(uuid, linked))
+                .put("cosmetics", playerCosmetics(uuid, session)));
     }
 
     // ---- Community: credits and interactions (DiscordLinkedFAD) ----
@@ -1065,23 +1093,9 @@ public final class WebServer {
         return DataObject.empty().put("one", c.microName()).put("many", c.microNamePlural()).put("symbol", c.microSymbol());
     }
 
-    /** The Community page: totals, leaderboard, recent interactions and the interactions the servers offer. */
-    private DataObject community(Map<String, String> query, boolean staff) throws SQLException {
+    /** The Community page: totals, recent interactions and the interactions the servers offer. */
+    private DataObject community(boolean staff) throws SQLException {
         PluginConfig c = plugin.config();
-        String sort = query.getOrDefault("sort", "credits");
-        DataArray leaderboard = DataArray.empty();
-        for (LeaderboardRow row : plugin.database().leaderboard(sort, 100)) {
-            leaderboard.add(DataObject.empty()
-                    .put("uuid", row.uuid().toString())
-                    .put("name", row.name())
-                    .put("credits", row.credits())
-                    .put("earned", row.earned())
-                    .put("activeSeconds", row.activeSeconds())
-                    .put("advancements", row.advancements())
-                    .put("given", row.given())
-                    .put("received", row.received())
-                    .put("online", plugin.proxy().getPlayer(row.uuid()).isPresent()));
-        }
         DataArray recent = DataArray.empty();
         for (InteractionRecord i : plugin.database().recentInteractions(40)) {
             recent.add(DataObject.empty()
@@ -1126,9 +1140,9 @@ public final class WebServer {
                         .put("challenge", c.creditsAdvancementChallenge()))
                 .put("discordCommands", c.fadDiscordCommands())
                 .put("synced", definitions != null)
-                .put("sort", sort)
+                .put("market", plugin.community().market().open())
+                .put("microCurrency", microCurrency())
                 .put("totals", totals)
-                .put("leaderboard", leaderboard)
                 .put("recent", recent)
                 .put("actions", actions)
                 .put("servers", servers);
@@ -1271,6 +1285,271 @@ public final class WebServer {
         sendJson(ex, 200, DataObject.empty().put("ok", true));
     }
 
+    // ---- Leaderboards (the Community page) ----
+
+    /** A leaderboard: its key, its name on the page, and what its numbers are (credits, micro, seconds, days, count). */
+    private record Board(String key, String label, String unit) {
+    }
+
+    private List<Board> boards() {
+        PluginConfig c = plugin.config();
+        List<Board> boards = new ArrayList<>();
+        boards.add(new Board("credits", c.creditsNamePlural(), "credits"));
+        if (plugin.community().market().open()) {
+            boards.add(new Board("micro", c.microNamePlural(), "micro"));
+        }
+        boards.add(new Board("earned", c.creditsNamePlural() + " earned", "credits"));
+        boards.add(new Board("playtime", "Playtime", "seconds"));
+        boards.add(new Board("streak", "Login streaks", "days"));
+        boards.add(new Board("advancements", "Advancements", "count"));
+        boards.add(new Board("given", "Interactions given", "count"));
+        boards.add(new Board("received", "Interactions received", "count"));
+        return boards;
+    }
+
+    /** One leaderboard: the top {@value #LEADERBOARD_SIZE}, and where the viewer stands even if they're further down. */
+    private DataObject leaderboard(Map<String, String> query, Sessions.Session session) throws SQLException {
+        List<Board> boards = boards();
+        String key = query.getOrDefault("board", "credits");
+        Board board = boards.stream().filter(b -> b.key().equals(key)).findFirst().orElse(boards.get(0));
+        List<UUID> order = new ArrayList<>();
+        Map<UUID, String> names = new HashMap<>();
+        Map<UUID, Long> values = new HashMap<>();
+        if (board.key().equals("streak")) {
+            java.time.LocalDate today = java.time.LocalDate.now(ZoneId.systemDefault());
+            for (KnownPlayer k : plugin.database().knownPlayers()) {
+                names.put(k.uuid(), k.name());
+            }
+            for (LinkedAccount account : plugin.database().allLinked()) {
+                names.put(account.uuid(), account.minecraftName());
+            }
+            Map<UUID, com.huzzysnuzzy.discordlinked.storage.LoginStreak> streaks = plugin.database().loginStreaks();
+            streaks.entrySet().stream()
+                    .filter(e -> e.getValue().currentOn(today) > 0 && names.containsKey(e.getKey()))
+                    .sorted(java.util.Comparator.<Map.Entry<UUID, com.huzzysnuzzy.discordlinked.storage.LoginStreak>>comparingInt(
+                                    e -> -e.getValue().currentOn(today))
+                            .thenComparingInt(e -> -e.getValue().best())
+                            .thenComparing(e -> names.get(e.getKey()), String.CASE_INSENSITIVE_ORDER))
+                    .forEach(e -> {
+                        order.add(e.getKey());
+                        values.put(e.getKey(), (long) e.getValue().currentOn(today));
+                    });
+        } else {
+            Market market = plugin.community().market();
+            String sort = switch (board.key()) {
+                case "micro" -> market.byEarned() ? "microEarned" : "micro";
+                default -> board.key();
+            };
+            for (LeaderboardRow row : plugin.database().leaderboard(sort, 10_000)) {
+                long value = switch (board.key()) {
+                    case "micro" -> market.byEarned() ? row.microEarned() : row.micro();
+                    case "earned" -> row.earned();
+                    case "playtime" -> row.activeSeconds();
+                    case "advancements" -> row.advancements();
+                    case "given" -> row.given();
+                    case "received" -> row.received();
+                    default -> row.credits();
+                };
+                if (value > 0) {
+                    order.add(row.uuid());
+                    names.put(row.uuid(), row.name());
+                    values.put(row.uuid(), value);
+                }
+            }
+        }
+        DataArray rows = DataArray.empty();
+        for (UUID uuid : order.subList(0, Math.min(order.size(), LEADERBOARD_SIZE))) {
+            rows.add(DataObject.empty().put("uuid", uuid.toString()).put("name", names.get(uuid))
+                    .put("value", values.get(uuid)).put("online", plugin.proxy().getPlayer(uuid).isPresent())
+                    .put("card", plugin.community().cosmetics().cardUrl(uuid)));
+        }
+        LinkedAccount own = ownAccount(session);
+        int rank = own == null ? -1 : order.indexOf(own.uuid());
+        DataArray list = DataArray.empty();
+        boards.forEach(b -> list.add(DataObject.empty().put("key", b.key()).put("label", b.label())));
+        return DataObject.empty()
+                .put("enabled", plugin.config().fadEnabled())
+                .put("boards", list)
+                .put("board", board.key())
+                .put("label", board.label())
+                .put("unit", board.unit())
+                .put("ranking", board.key().equals("micro") && plugin.community().market().byEarned() ? "earned" : "held")
+                .put("currency", currency())
+                .put("microCurrency", microCurrency())
+                .put("total", order.size())
+                .put("rows", rows)
+                .put("me", own == null ? null : DataObject.empty().put("uuid", own.uuid().toString())
+                        .put("name", own.minecraftName()).put("rank", rank + 1).put("value", rank < 0 ? 0 : values.get(own.uuid())));
+    }
+
+    // ---- Cosmetics ----
+
+    private static DataObject cosmeticJson(Cosmetic c) {
+        return DataObject.empty()
+                .put("id", c.id())
+                .put("kind", c.kind())
+                .put("name", c.name())
+                .put("value", c.kind().equals(Cosmetics.CARD) ? null : c.value())
+                .put("card", Cosmetics.cardUrl(c))
+                .put("price", c.price())
+                .put("forSale", c.forSale());
+    }
+
+    /**
+     * The Cosmetics shop: what's for sale (and what the viewer already has or uses), the viewer's balance, and for
+     * the settings owner every item with how many players have it.
+     */
+    private DataObject cosmeticsJson(Sessions.Session session) throws SQLException {
+        Cosmetics cosmetics = plugin.community().cosmetics();
+        boolean manage = session.staff() && isOwner(session);
+        LinkedAccount me = ownAccount(session);
+        Map<Long, OwnedCosmetic> owned = new HashMap<>();
+        if (me != null) {
+            cosmetics.owned(me.uuid()).forEach(o -> owned.put(o.cosmeticId(), o));
+        }
+        Map<Long, Long> owners = manage ? plugin.database().cosmeticOwnerCounts() : Map.of();
+        DataArray items = DataArray.empty();
+        for (Cosmetic c : cosmetics.catalog()) {
+            OwnedCosmetic mine = owned.get(c.id());
+            boolean sellable = c.forSale() && !(c.kind().equals(Cosmetics.CARD) && c.value().isEmpty());
+            if (!manage && mine == null && !sellable) {
+                continue;
+            }
+            items.add(cosmeticJson(c).put("owned", mine != null).put("equipped", mine != null && mine.equipped())
+                    .put("owners", manage ? owners.getOrDefault(c.id(), 0L) : null));
+        }
+        DataObject buyer = DataObject.empty().put("linked", me != null);
+        if (me != null) {
+            buyer.put("uuid", me.uuid().toString()).put("name", me.minecraftName())
+                    .put("balance", plugin.database().creditAccount(me.uuid()).map(CreditAccount::credits).orElse(0L));
+        }
+        return DataObject.empty()
+                .put("open", cosmetics.open())
+                .put("fadEnabled", plugin.config().fadEnabled())
+                .put("manage", manage)
+                .put("currency", currency())
+                .put("keepInventoryDelay", plugin.config().keepInventoryDelayMinutes())
+                .put("particles", manage ? DataArray.fromCollection(Cosmetics.PARTICLES) : null)
+                .put("buyer", buyer)
+                .put("items", items);
+    }
+
+    /** What a player has, for their own page (to switch things on and off) and for staff. Null for anyone else. */
+    private DataObject playerCosmetics(UUID uuid, Sessions.Session session) throws SQLException {
+        LinkedAccount me = ownAccount(session);
+        boolean self = me != null && me.uuid().equals(uuid);
+        if (!self && !session.staff()) {
+            return null;
+        }
+        Cosmetics cosmetics = plugin.community().cosmetics();
+        DataArray items = DataArray.empty();
+        for (OwnedCosmetic owned : cosmetics.owned(uuid)) {
+            Cosmetic c = cosmetics.get(owned.cosmeticId());
+            items.add(cosmeticJson(c).put("equipped", owned.equipped())
+                    .put("equippedAt", owned.equipped() ? owned.equippedAt().toEpochMilli() : null)
+                    .put("paid", owned.paid()).put("acquiredAt", owned.acquiredAt().toEpochMilli()));
+        }
+        boolean canGive = session.staff() && isOwner(session);
+        DataArray all = DataArray.empty();
+        if (canGive) {
+            cosmetics.catalog().forEach(c -> all.add(DataObject.empty().put("id", c.id()).put("kind", c.kind())
+                    .put("name", c.name())));
+        }
+        return DataObject.empty()
+                .put("self", self)
+                .put("canGive", canGive)
+                .put("open", cosmetics.open())
+                .put("keepInventoryFrom", cosmetics.keepInventoryFrom(uuid))
+                .put("now", System.currentTimeMillis())
+                .put("items", items)
+                .put("all", all);
+    }
+
+    /** Buying a cosmetic or switching one on or off, for the viewer's own linked Minecraft account. */
+    private void cosmeticForSelf(HttpExchange ex, String path, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        LinkedAccount me = ownAccount(session);
+        if (me == null) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        long id = body.getLong("id", 0);
+        String actor = session.user.actor() + " (website)";
+        Cosmetics cosmetics = plugin.community().cosmetics();
+        Cosmetics.Result result = path.equals("/api/cosmetics/buy")
+                ? cosmetics.buy(me, id, actor)
+                : cosmetics.equip(me.uuid(), me.minecraftName(), me.discordId(), id, body.getBoolean("on", true), actor);
+        sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
+                .put("balance", result.balance()).put("error", result.ok() ? null : result.message()));
+    }
+
+    /** The settings owner making, changing, deleting, giving and taking away cosmetics. */
+    private void cosmeticForOwner(HttpExchange ex, String path, Sessions.Session session) throws IOException, SQLException {
+        if (!isOwner(session)) {
+            sendJson(ex, 403, error("Only the settings owner can change cosmetics."));
+            return;
+        }
+        Cosmetics cosmetics = plugin.community().cosmetics();
+        String actor = session.user.actor() + " (website)";
+        try {
+            if (path.equals("/api/cosmetics/card")) {
+                long id = Long.parseLong(query(ex).getOrDefault("id", "0"));
+                byte[] upload = ex.getRequestBody().readNBytes(CardImages.MAX_UPLOAD_BYTES + 1);
+                Cosmetic card = cosmetics.setCardImage(id, upload, actor);
+                sendJson(ex, 200, cosmeticJson(card).put("ok", true));
+                return;
+            }
+            DataObject body = readJson(ex);
+            if (body == null) {
+                return;
+            }
+            long id = body.getLong("id", 0);
+            switch (path) {
+                case "/api/cosmetics/save" -> {
+                    Cosmetic saved = cosmetics.save(id, body.getString("kind", ""), body.getString("name", ""),
+                            body.getString("value", ""), body.getLong("price", 0), body.getBoolean("forSale", true), actor);
+                    sendJson(ex, 200, cosmeticJson(saved).put("ok", true));
+                }
+                case "/api/cosmetics/delete" -> {
+                    int had = cosmetics.delete(id, actor);
+                    sendJson(ex, 200, DataObject.empty().put("ok", true).put("owners", had));
+                }
+                default -> {
+                    Optional<PlayerRef> player = resolvePlayer(parseUuid(body.getString("uuid", "")));
+                    if (player.isEmpty()) {
+                        sendJson(ex, 404, error("Unknown player"));
+                        return;
+                    }
+                    Cosmetics.Result result = path.equals("/api/cosmetics/give")
+                            ? cosmetics.give(player.get(), id, actor) : cosmetics.revoke(player.get(), id, actor);
+                    sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok())
+                            .put("message", result.message()).put("error", result.ok() ? null : result.message()));
+                }
+            }
+        } catch (IllegalArgumentException e) {
+            sendJson(ex, 400, error(e.getMessage()));
+        }
+    }
+
+    /** A profile card picture. Only for people logged in to the website. */
+    private void serveCard(HttpExchange ex, String name) throws IOException {
+        if (currentSession(ex) == null) {
+            sendText(ex, 401, "Not logged in");
+            return;
+        }
+        Path file = plugin.community().cosmetics().cardFile(name);
+        if (file == null) {
+            sendText(ex, 404, "Not found");
+            return;
+        }
+        // The name changes with the picture, so it can be kept for good.
+        ex.getResponseHeaders().set("Cache-Control", "private, max-age=31536000, immutable");
+        send(ex, 200, name.endsWith(".png") ? "image/png" : "image/jpeg", java.nio.file.Files.readAllBytes(file));
+    }
+
     // ---- Discord message log (settings owner only, see settings()) ----
 
     private static final int MESSAGE_LOG_PAGE = 150;
@@ -1350,12 +1629,6 @@ public final class WebServer {
     private DataObject market(Sessions.Session session) throws SQLException {
         PluginConfig c = plugin.config();
         Market market = plugin.community().market();
-        DataArray leaderboard = DataArray.empty();
-        for (LeaderboardRow row : market.top(50)) {
-            leaderboard.add(DataObject.empty().put("uuid", row.uuid().toString()).put("name", row.name())
-                    .put("micro", row.micro()).put("microEarned", row.microEarned())
-                    .put("online", plugin.proxy().getPlayer(row.uuid()).isPresent()));
-        }
         DataObject me = DataObject.empty();
         Optional<LinkedAccount> linked = plugin.database().findByDiscordId(session.user.id());
         me.put("linked", linked.isPresent());
@@ -1390,7 +1663,6 @@ public final class WebServer {
                 .put("earned", totals.getOrDefault("microEarned", 0L))
                 .put("manage", session.staff() && isOwner(session))
                 .put("me", me)
-                .put("leaderboard", leaderboard)
                 .put("items", items);
     }
 
@@ -2231,7 +2503,8 @@ public final class WebServer {
 
     private static void addSecurityHeaders(HttpExchange ex) {
         var headers = ex.getResponseHeaders();
-        headers.set("Content-Security-Policy", "default-src 'self'; img-src 'self' https://mc-heads.net "
+        // blob: is for previewing a profile card picture before it's uploaded.
+        headers.set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: https://mc-heads.net "
                 + "https://cdn.discordapp.com https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net; "
                 + "style-src 'self'; script-src 'self'; frame-ancestors 'none'; "
                 + "form-action 'self'; base-uri 'none'");

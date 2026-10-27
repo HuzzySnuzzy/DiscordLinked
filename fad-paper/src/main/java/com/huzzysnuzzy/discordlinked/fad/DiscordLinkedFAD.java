@@ -36,6 +36,7 @@ public final class DiscordLinkedFAD extends JavaPlugin {
     private volatile FadSettings settings;
     private ProxyLink link;
     private final SellPrices sellPrices = new SellPrices();
+    private Cosmetics cosmetics;
     private final Map<UUID, Long> lastInteraction = new ConcurrentHashMap<>();
     /** Interaction commands registered at startup; new ones in config.yml need a restart. */
     private final Set<String> registered = new HashSet<>();
@@ -51,6 +52,8 @@ public final class DiscordLinkedFAD extends JavaPlugin {
         getServer().getPluginManager().registerEvents(tracker, this);
         tracker.start();
         getServer().getPluginManager().registerEvents(new SellMenu.Events(this), this);
+        cosmetics = new Cosmetics(this);
+        getServer().getPluginManager().registerEvents(cosmetics, this);
         PluginCommand admin = getCommand("discordlinkedfad");
         if (admin != null) {
             admin.setExecutor((sender, command, label, args) -> {
@@ -135,6 +138,10 @@ public final class DiscordLinkedFAD extends JavaPlugin {
 
     SellPrices sellPrices() {
         return sellPrices;
+    }
+
+    Cosmetics cosmetics() {
+        return cosmetics;
     }
 
     /**

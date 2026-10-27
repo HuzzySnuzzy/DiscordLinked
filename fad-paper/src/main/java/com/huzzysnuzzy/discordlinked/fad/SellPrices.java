@@ -35,10 +35,6 @@ final class SellPrices {
         return prices != null;
     }
 
-    String symbol() {
-        return symbol;
-    }
-
     synchronized void receive(int part, int parts, boolean open, String symbol, Map<String, Price> chunk) {
         if (part == 0) {
             incoming = new HashMap<>();

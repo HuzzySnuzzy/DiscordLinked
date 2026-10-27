@@ -1,6 +1,6 @@
 'use strict';
 
-const state = { me: null, linked: [], logsBefore: null, logsLoading: false, player: null, playerLogsBefore: null };
+const state = { me: null, members: null, logsBefore: null, logsLoading: false, player: null, playerLogsBefore: null };
 
 const EVENT_LABELS = {
   LINK: ['Linked', 'good'],
@@ -32,6 +32,9 @@ const EVENT_LABELS = {
   CREDITS_ADJUST: ['Credits changed', 'warn'],
   SHOP_PURCHASE: ['Shop', 'warn'],
   TELEPORT: ['Teleport', 'info'],
+  SALE: ['Sale', 'good'],
+  EXCHANGE: ['Exchange', 'info'],
+  COSMETIC: ['Cosmetic', 'warn'],
 };
 
 // ---- Helpers ----
@@ -186,6 +189,40 @@ function statusPills(p) {
   return pills;
 }
 
+/** Minecraft's colours for &0-&f. */
+const MC_COLORS = { 0: '#000000', 1: '#0000aa', 2: '#00aa00', 3: '#00aaaa', 4: '#aa0000', 5: '#aa00aa', 6: '#ffaa00',
+  7: '#aaaaaa', 8: '#555555', 9: '#5555ff', a: '#55ff55', b: '#55ffff', c: '#ff5555', d: '#ff55ff', e: '#ffff55', f: '#ffffff' };
+
+/** Text with Minecraft &-codes (&6, &#ff8800, &l bold...) shown in colour, like in game. */
+function mcText(text, extraClass = '') {
+  const root = el('span', { class: `mc-text ${extraClass}` });
+  let color = null;
+  let formats = new Set();
+  let last = 0;
+  const add = (part) => {
+    if (!part) return;
+    const span = el('span', { class: [...formats].map((f) => `mc-${f}`).join(' ') || null }, part);
+    if (color) span.style.color = color;
+    root.append(span);
+  };
+  for (const match of text.matchAll(/&(#[0-9a-f]{6}|[0-9a-fk-or])/gi)) {
+    add(text.slice(last, match.index));
+    const code = match[1].toLowerCase();
+    if (code.startsWith('#') || MC_COLORS[code]) {
+      color = code.startsWith('#') ? code : MC_COLORS[code];
+      formats = new Set(); // like in game, a colour resets bold, italic...
+    } else if (code === 'r') {
+      color = null;
+      formats = new Set();
+    } else {
+      formats.add(code);
+    }
+    last = match.index + match[0].length;
+  }
+  add(text.slice(last));
+  return root;
+}
+
 // ---- Action dialog ----
 
 let dialogHandler = null;
@@ -252,11 +289,10 @@ $('action-form').addEventListener('submit', async (event) => {
     confirm.disabled = false;
   }
 });
-$('dialog-cancel').addEventListener('click', closeDialog);
+$('dialog-cancel').addEventListener('click', () => closeDialog());
 
 /** Plays the closing animation, then closes. */
-function closeDialog() {
-  const dialog = $('action-dialog');
+function closeDialog(dialog = $('action-dialog')) {
   if (!dialog.open || dialog.classList.contains('closing')) return;
   if (reducedMotion()) {
     dialog.close();
@@ -269,7 +305,39 @@ function closeDialog() {
   }, 180);
 }
 
-// ---- Actions (shared by the Linked list and the player page) ----
+// ---- Confirm dialog: a yes/no question, e.g. before buying something ----
+
+let confirmHandler = null;
+
+function confirmDialog({ title, text, confirmLabel = 'OK', confirmClass = '', onConfirm }) {
+  $('confirm-title').textContent = title;
+  $('confirm-text').replaceChildren(...[text].flat().filter(Boolean).map((part) => (part instanceof Node ? part : el('p', {}, part))));
+  $('confirm-error').hidden = true;
+  const ok = $('confirm-ok');
+  ok.textContent = confirmLabel;
+  ok.className = `btn ${confirmClass}`;
+  ok.disabled = false;
+  confirmHandler = onConfirm;
+  $('confirm-dialog').showModal();
+  ok.focus();
+}
+
+$('confirm-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const ok = $('confirm-ok');
+  ok.disabled = true;
+  try {
+    await confirmHandler();
+    closeDialog($('confirm-dialog'));
+  } catch (e) {
+    $('confirm-error').textContent = e.message;
+    $('confirm-error').hidden = false;
+    ok.disabled = false;
+  }
+});
+$('confirm-cancel').addEventListener('click', () => closeDialog($('confirm-dialog')));
+
+// ---- Actions (shared by the Players list and the player page) ----
 
 function actionButtons(p) {
   const small = (cls, label, handler) => el('button', { class: `btn ${cls} btn-small`, type: 'button', onclick: handler }, label);
@@ -358,77 +426,132 @@ function unlinkDialog(p) {
   });
 }
 
-// ---- Linked view ----
+// ---- Players: everyone who has played. Staff also get the admin columns and actions. ----
+
+/** localStorage, which can be unavailable (private windows, blocked storage). */
+function stored(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* storage unavailable */ }
+}
+
+/** When they joined the community: when they linked, or else when they first played. */
+const joinedAt = (p) => p.linkedAt || p.firstPlayed || null;
 
 const SORTS = {
+  seen: (a, b) => (b.online - a.online) || ((b.lastSeen || 0) - (a.lastSeen || 0)),
+  online: (a, b) => (b.online - a.online) || SORTS['name-asc'](a, b),
   'name-asc': (a, b) => a.minecraftName.localeCompare(b.minecraftName, undefined, { sensitivity: 'base' }),
   'name-desc': (a, b) => b.minecraftName.localeCompare(a.minecraftName, undefined, { sensitivity: 'base' }),
-  online: (a, b) => (b.online - a.online) || SORTS.seen(a, b),
-  seen: (a, b) => (b.online - a.online) || ((b.lastSeen || 0) - (a.lastSeen || 0)),
-  'linked-new': (a, b) => b.linkedAt - a.linkedAt,
-  'linked-old': (a, b) => a.linkedAt - b.linkedAt,
   'joined-new': (a, b) => (joinedAt(b) || 0) - (joinedAt(a) || 0),
+  'joined-old': (a, b) => (joinedAt(a) ?? Number.MAX_SAFE_INTEGER) - (joinedAt(b) ?? Number.MAX_SAFE_INTEGER),
   streak: (a, b) => ((b.streak || 0) - (a.streak || 0)) || SORTS.seen(a, b),
-  suspended: (a, b) => (!!b.suspension - !!a.suspension) || SORTS['name-asc'](a, b),
   admins: (a, b) => (b.isAdmin - a.isAdmin) || SORTS['name-asc'](a, b),
+  suspended: (a, b) => (!!b.suspension - !!a.suspension) || SORTS['name-asc'](a, b),
+};
+// [value, label, staff only]
+const PLAYER_SORTS = [['seen', 'Recently seen'], ['online', 'Online first'], ['name-asc', 'Name A–Z'],
+  ['name-desc', 'Name Z–A'], ['joined-new', 'Newest first'], ['joined-old', 'Oldest first'], ['streak', 'Longest streak'],
+  ['admins', 'Staff first'], ['suspended', 'Suspended first', true]];
+const PLAYER_FILTERS = [['all', 'Everyone who played'], ['online', 'Online now'], ['linked', 'Linked members'],
+  ['unlinked', 'Not linked'], ['staff', 'Staff'], ['suspended', 'Suspended', true]];
+const PLAYER_FILTER_TESTS = {
+  all: () => true, online: (p) => p.online, linked: (p) => p.linked, unlinked: (p) => !p.linked,
+  staff: (p) => p.isAdmin, suspended: (p) => !!p.suspension,
 };
 
-try {
-  // v2: the default became "Recently seen", so earlier saved choices start over once.
-  const saved = localStorage.getItem('dl-sort-v2');
-  if (saved && SORTS[saved]) $('linked-sort').value = saved;
-} catch (e) { /* storage unavailable */ }
+/** The sort and filter menus differ for staff and everyone else. */
+function setupPlayerControls() {
+  const staff = isStaff();
+  const fill = (select, options, current, fallback) => {
+    select.replaceChildren(...options.filter(([, , staffOnly]) => staff || !staffOnly)
+      .map(([value, label]) => el('option', { value }, label)));
+    select.value = [...select.options].some((o) => o.value === current) ? current : fallback;
+  };
+  fill($('players-sort'), PLAYER_SORTS, $('players-sort').value || stored('dl-players-sort'), 'seen');
+  fill($('players-show'), PLAYER_FILTERS, $('players-show').value, 'all');
+  $('players-legend').replaceChildren(...[el('span', {}, el('i', { class: 'dot dot-admin' }), ' Staff'),
+    staff && el('span', {}, el('i', { class: 'dot dot-suspended' }), ' Suspended')].filter(Boolean));
+}
 
-async function loadLinked() {
+async function loadPlayers() {
   try {
-    state.linked = await api('/api/linked');
-    renderLinked();
+    state.members = await api('/api/members');
+    renderPlayers();
   } catch (e) {
     toast(e.message);
   }
 }
 
-function renderLinked() {
-  const query = $('linked-search').value.trim().toLowerCase();
-  const rows = state.linked
-    .filter((p) => !query || [p.minecraftName, p.uuid, p.discordName, p.discordId]
+function renderPlayers() {
+  const staff = isStaff();
+  const members = state.members || [];
+  const query = $('players-search').value.trim().toLowerCase();
+  const shown = members.filter(PLAYER_FILTER_TESTS[$('players-show').value] || PLAYER_FILTER_TESTS.all);
+  const rows = shown
+    .filter((p) => !query || [p.minecraftName, p.uuid, p.discordName || '', staff ? p.discordId || '' : '']
       .some((value) => value.toLowerCase().includes(query)))
-    .sort(SORTS[$('linked-sort').value] || SORTS.seen);
-  $('linked-count').textContent = `(${state.linked.length})`;
-  $('linked-body').replaceChildren(...rows.map(linkedRow));
-  const empty = $('linked-empty');
-  empty.textContent = state.linked.length ? 'No players match your filter.' : 'No linked players yet.';
+    .sort(SORTS[$('players-sort').value] || SORTS.seen);
+  $('players-count').textContent = `(${shown.length.toLocaleString()})`;
+  // Long lists render in steps so a server with thousands of players stays responsive.
+  const limit = state.playersLimit || 200;
+  const list = $('players-list');
+  list.classList.toggle('staff', staff);
+  list.replaceChildren(playerListHead(staff), ...rows.slice(0, limit).map(playerRow));
+  list.hidden = rows.length === 0;
+  $('players-more').hidden = rows.length <= limit;
+  $('players-more').textContent = `Show more (${(rows.length - limit).toLocaleString()} left)`;
+  const empty = $('players-empty');
+  empty.textContent = members.length ? 'No players match your filter.' : 'No players yet.';
   empty.hidden = rows.length > 0;
 }
 
-function linkedRow(p) {
-  const status = statusPills(p);
-  if (p.suspension) {
+const playerListHead = (staff) => el('div', { class: 'prow prow-head', 'aria-hidden': 'true' },
+  el('div', {}, 'Player'), el('div', {}, 'Discord'), el('div', {}, 'Status'), el('div', {}, 'Joined'),
+  staff && el('div', { class: 'prow-actions' }, 'Actions'));
+
+/** A profile card picture behind something, fading out to the right. */
+function cardBackdrop(url) {
+  const node = el('div', { class: 'card-backdrop', 'aria-hidden': 'true' });
+  node.style.setProperty('--card', `url("${url}")`);
+  return node;
+}
+
+// The prow-* classes let the phone layout turn each row into a card.
+function playerRow(p) {
+  const staff = isStaff();
+  const joined = joinedAt(p);
+  const status = [...statusPills(p), streakChip(p.streak, p.bestStreak)];
+  if (staff && p.suspension) {
     status.push(el('div', { class: 'suspension-note' },
       `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by ${p.suspension.createdBy}`));
   }
-  if (!p.inGuild) status.push(el('div', { class: 'suspension-note' }, 'Not in the Discord server'));
-
-  // The cell-* classes let the phone layout turn each row into a card.
-  return el('tr', {},
-    el('td', { class: 'cell-mc' }, el('div', { class: 'identity' },
-      el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
-      el('div', {}, playerName(p), copyButton(p.uuid, 'UUID')))),
-    el('td', { class: 'cell-discord' }, el('div', { class: 'identity' },
-      discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
-      el('div', {}, discordName(p), copyButton(p.discordId, 'User ID')))),
-    el('td', { class: 'cell-status' }, status),
-    el('td', { class: 'cell-linked nowrap muted', title: formatTime(p.linkedAt) },
-      el('span', { class: 'when-long' }, formatTime(p.linkedAt)),
-      el('span', { class: 'when-short' }, shortDate(p.linkedAt))),
-    el('td', { class: 'cell-actions' }, actionButtons(p)));
+  if (staff && p.linked && p.inGuild === false) status.push(el('div', { class: 'suspension-note' }, 'Not in the Discord server'));
+  return el('div', { class: `prow ${p.card ? 'has-card' : ''}`, role: 'listitem' },
+    p.card && cardBackdrop(p.card),
+    el('div', { class: 'prow-id' },
+      el('a', { href: playerHref(p.uuid), tabindex: '-1' }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
+      el('div', { class: 'prow-name' }, playerName(p), staff && copyButton(p.uuid, 'UUID'))),
+    el('div', { class: 'prow-discord' }, p.linked
+      ? el('div', { class: 'identity' },
+        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
+        el('div', {}, discordName(p), staff && copyButton(p.discordId, 'User ID')))
+      : el('span', { class: 'muted' }, 'Not linked')),
+    el('div', { class: 'prow-status' }, status),
+    el('div', { class: 'prow-joined muted', title: joined ? formatTime(joined) : null },
+      el('span', { class: 'prow-label' }, p.linkedAt ? 'Linked ' : 'Joined '), joined ? shortDate(joined) : '—'),
+    staff && el('div', { class: 'prow-actions' }, actionButtons(p)));
 }
 
-$('linked-search').addEventListener('input', renderLinked);
-$('linked-sort').addEventListener('change', () => {
-  try { localStorage.setItem('dl-sort-v2', $('linked-sort').value); } catch (e) { /* storage unavailable */ }
-  renderLinked();
+const resetPlayersLimit = () => { state.playersLimit = 200; renderPlayers(); };
+$('players-search').addEventListener('input', resetPlayersLimit);
+$('players-show').addEventListener('change', resetPlayersLimit);
+$('players-sort').addEventListener('change', () => {
+  remember('dl-players-sort', $('players-sort').value);
+  resetPlayersLimit();
 });
+$('players-more').addEventListener('click', () => { state.playersLimit = (state.playersLimit || 200) + 400; renderPlayers(); });
 
 // ---- Logs (the Logs page and each player page share this) ----
 
@@ -572,30 +695,38 @@ async function teleportTo(p, mode, button) {
   }
 }
 
-function renderPlayer() {
-  const { player: p, suspensions, notes, ips } = state.player;
-  const badges = [
-    p.isAdmin && el('span', { class: 'badge warn' }, 'Admin'),
-    p.linked ? el('span', { class: 'badge good' }, 'Linked') : el('span', { class: 'badge' }, 'Not linked'),
-    p.linked && !p.inGuild && el('span', { class: 'badge bad' }, 'Left the Discord server'),
-    ...statusPills(p),
-  ];
-
-  const profile = el('div', { class: 'card profile' },
+/**
+ * The top of a player page: head, name (with their bought prefix), badges and streak, over their profile card if
+ * they show one. Staff also get teleports and the admin buttons.
+ */
+function profileHeader(p, staff) {
+  const badges = staff
+    ? [p.isAdmin && el('span', { class: 'badge warn' }, 'Admin'),
+      p.linked ? el('span', { class: 'badge good' }, 'Linked') : el('span', { class: 'badge' }, 'Not linked'),
+      p.linked && !p.inGuild && el('span', { class: 'badge bad' }, 'Left the Discord server')]
+    : [p.isAdmin && el('span', { class: 'badge warn' }, 'Staff'),
+      p.linked ? el('span', { class: 'badge good' }, 'Member') : el('span', { class: 'badge' }, 'Not linked')];
+  return el('div', { class: `card profile ${p.card ? 'has-card' : ''}` },
+    p.card && cardBackdrop(p.card),
     el('img', { class: 'head-large', src: headUrl(p.uuid, 192), alt: '' }),
     el('div', { class: 'info' },
-      el('h1', { class: nameClass(p) }, p.minecraftName),
-      el('div', { class: 'badges' }, badges),
+      el('h1', { class: nameClass(p) }, p.prefix && mcText(p.prefix, 'mc-chip'), p.minecraftName),
+      el('div', { class: 'badges' }, badges, statusPills(p)),
       streakBadge(p.streak),
       copyButton(p.uuid, 'UUID'),
       el('div', { class: 'actions' },
         el('a', { class: 'btn btn-ghost btn-small', href: `https://namemc.com/profile/${p.uuid}`, target: '_blank', rel: 'noopener' },
           'View on NameMC ↗'),
-        el('button', { class: 'btn btn-ghost btn-small', type: 'button', title: 'Teleports your own Minecraft character',
+        staff && el('button', { class: 'btn btn-ghost btn-small', type: 'button', title: 'Teleports your own Minecraft character',
           onclick: (e) => teleportTo(p, 'player', e.currentTarget) }, p.online ? 'Teleport to them' : 'Teleport to logout spot'),
-        el('button', { class: 'btn btn-ghost btn-small', type: 'button', title: 'Their bed or respawn anchor',
+        staff && el('button', { class: 'btn btn-ghost btn-small', type: 'button', title: 'Their bed or respawn anchor',
           onclick: (e) => teleportTo(p, 'bed', e.currentTarget) }, 'Teleport to their bed'))),
-    actionButtons(p));
+    staff && actionButtons(p));
+}
+
+function renderPlayer() {
+  const { player: p, suspensions, notes, ips } = state.player;
+  const profile = profileHeader(p, true);
 
   const discord = el('div', { class: 'card panel' },
     el('h2', {}, 'Discord'),
@@ -680,12 +811,104 @@ function renderPlayer() {
   ];
 
   $('view-player').replaceChildren(
-    el('a', { class: 'back', href: '#/linked' }, '← All linked players'),
+    el('a', { class: 'back', href: '#/players' }, '← All players'),
     profile,
     el('div', { class: 'grid' }, discord, suspension),
     inventorySection(p),
+    ...unlocksSection(p, state.player.cosmetics),
     ...communitySection(p, state.player.community),
     ...notesSection, ...historySection, ...ipSection, ...activitySection);
+}
+
+// ---- Unlocks: the cosmetics a player has, switched on and off on their own profile ----
+
+/** Cosmetic kinds in shop order: [kind, section title, one of them, what it does]. */
+const COSMETIC_KINDS = [
+  ['prefix', 'Prefixes', 'prefix', 'Shown in front of your name in chat and the tab list.'],
+  ['trail', 'Trails', 'trail', 'Particles that follow you while you walk.'],
+  ['card', 'Profile cards', 'profile card', 'A picture behind your name in the player lists and on your profile.'],
+  ['keepinv', 'Quality of life', 'KeepInventory', ''],
+];
+
+function keepInventoryText(delayMinutes) {
+  return 'Keep your items and XP when you die. While it\'s on you can\'t hurt other players.'
+    + (delayMinutes > 0 ? ` It starts working ${delayMinutes} minute${delayMinutes === 1 ? '' : 's'} after you switch it on.` : '');
+}
+
+async function equipCosmetic(item, on, button) {
+  if (button) button.disabled = true;
+  try {
+    const result = await api('/api/cosmetics/equip', { id: item.id, on });
+    toast(result.message);
+  } catch (e) {
+    toast(e.message);
+  }
+  refreshCurrentView();
+}
+
+function unlocksSection(p, cos) {
+  if (!cos) return [];
+  const self = cos.self;
+  const keepFrom = cos.keepInventoryFrom;
+  const groups = COSMETIC_KINDS.map(([kind, title]) => [title, cos.items.filter((item) => item.kind === kind)])
+    .filter(([, items]) => items.length);
+  const cur = state.player?.community?.currency || { one: 'credit', many: 'credits' };
+  const row = (item) => {
+    let sub = item.paid ? `Bought for ${credits(item.paid, cur)} · ${shortDate(item.acquiredAt)}` : `Given · ${shortDate(item.acquiredAt)}`;
+    if (item.kind === 'keepinv' && item.equipped) {
+      sub = keepFrom > cos.now ? `Starts working at ${new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date(keepFrom))}`
+        : 'Working: items and XP are kept on death';
+    }
+    let control;
+    if (self) {
+      const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `Use ${item.name}` });
+      box.checked = item.equipped;
+      box.addEventListener('change', () => equipCosmetic(item, box.checked, box));
+      control = el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }));
+    } else {
+      control = el('span', { class: `badge ${item.equipped ? 'good' : ''}` }, item.equipped ? 'In use' : 'Off');
+    }
+    return el('div', { class: `unlock ${item.equipped ? 'on' : ''}` },
+      cosmeticPreview(item, { name: p.minecraftName, uuid: p.uuid }, true),
+      el('div', { class: 'unlock-text' }, el('div', { class: 'unlock-name' }, item.name), el('div', { class: 'muted' }, sub)),
+      control,
+      cos.canGive && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
+        title: `Take ${item.name} away from ${p.minecraftName}?`,
+        text: item.paid ? `They paid ${credits(item.paid, cur)} for it and don't get that back.` : 'It was given to them.',
+        confirmLabel: 'Take it away', confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          toast((await api('/api/cosmetics/revoke', { uuid: p.uuid, id: item.id })).message);
+          refreshCurrentView();
+        },
+      }) }, 'Take away'));
+  };
+  let give = null;
+  if (cos.canGive) {
+    const have = new Set(cos.items.map((item) => item.id));
+    const choices = cos.all.filter((c) => !have.has(c.id));
+    const select = el('select', { 'aria-label': 'Cosmetic to give' },
+      choices.map((c) => el('option', { value: c.id }, `${c.name} (${COSMETIC_KINDS.find(([k]) => k === c.kind)?.[2] || c.kind})`)));
+    give = choices.length > 0 && el('div', { class: 'unlock-give' }, select,
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        try {
+          toast((await api('/api/cosmetics/give', { uuid: p.uuid, id: Number(select.value) })).message);
+        } catch (err) {
+          toast(err.message);
+        }
+        refreshCurrentView();
+      } }, 'Give for free'));
+  }
+  if (!self && !cos.items.length && !give) return [];
+  return [
+    el('h2', { class: 'section-title' }, self ? 'Your unlocks' : 'Unlocks',
+      self && cos.open && el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics' }, 'Get more')),
+    el('div', { class: 'card panel unlocks' },
+      groups.length ? groups.flatMap(([title, items]) => [el('div', { class: 'unlock-group' }, title), ...items.map(row)])
+        : el('p', { class: 'muted' }, self ? 'Nothing yet: prefixes, trails, profile cards and KeepInventory are in the Shop.'
+          : 'No cosmetics yet.'),
+      give),
+  ];
 }
 
 async function loadPlayerLogs(reset) {
@@ -1136,7 +1359,7 @@ const stat = (label, value, title) => el('div', { class: 'stat', title },
 
 const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
 const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop', DAILY: 'Daily reward',
-  SALE: 'Sold', EXCHANGE: 'Exchange' };
+  SALE: 'Sold', EXCHANGE: 'Exchange', COSMETIC: 'Cosmetics' };
 
 function creditsDialog(p, community) {
   const currency = community.currency;
@@ -1223,84 +1446,147 @@ function communitySection(p, c) {
   ].filter(Boolean); // the callers spread this into replaceChildren, which would print false/null
 }
 
-const COMMUNITY_SORTS = [['credits', (c) => `Most ${c.many}`], ['earned', () => 'Most earned in total'],
-  ['playtime', () => 'Most active playtime'], ['advancements', () => 'Most advancements'],
-  ['given', () => 'Most interactions given'], ['received', () => 'Most interactions received']];
+// ---- Community page: leaderboards and interactions ----
+
+const MEDALS = ['🥇', '🥈', '🥉'];
+const communityState = { board: stored('dl-board') || 'credits', stats: null, data: null, filter: '' };
 
 async function loadCommunity() {
+  const interactions = currentRoute().sub === 'interactions';
+  document.querySelectorAll('#community-subtabs a').forEach((a) => a.classList.toggle('active', a.dataset.sub === (interactions ? 'interactions' : '')));
+  $('community-leaderboards').hidden = interactions;
+  $('community-interactions').hidden = !interactions;
   try {
-    state.community = await api(`/api/community?sort=${encodeURIComponent(state.communitySort || 'credits')}`);
-    renderCommunity();
+    const [stats, data] = await Promise.all([api('/api/community'),
+      interactions ? null : api(`/api/leaderboard?board=${encodeURIComponent(communityState.board)}`)]);
+    communityState.stats = stats;
+    if (data) communityState.data = data;
   } catch (e) {
-    $('community-body').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    $('community-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    return;
+  }
+  const d = communityState.stats;
+  $('community-notice').replaceChildren(...(d.enabled ? [] : [el('div', { class: 'card panel' },
+    el('p', {}, 'Community features (credits, leaderboards and interactions) are turned off.'),
+    state.me.isOwner && el('a', { class: 'btn btn-small', href: '#/settings' }, 'Turn them on in Settings'))]));
+  if (!d.enabled) {
+    $('community-leaderboards').hidden = true;
+    $('community-interactions').hidden = true;
+    return;
+  }
+  if (interactions) renderInteractions();
+  else {
+    renderCommunityStats();
+    renderBoard();
   }
 }
 
-function renderCommunity() {
-  const d = state.community;
-  const currency = d.currency;
-  const r = d.rewards;
-  $('community-earning').textContent = d.enabled
-    ? `${credits(r.playtimeAmount, currency)} per ${r.playtimeMinutes} active minutes · ${r.task} / ${r.goal} / ${r.challenge} `
-      + 'per advancement (task / goal / challenge)'
-    : '';
-  if (!d.enabled) {
-    $('community-body').replaceChildren(el('div', { class: 'card panel' },
-      el('p', {}, 'Community features (interactions and credits) are turned off.'),
-      state.me.isOwner && el('a', { class: 'btn btn-small', href: '#/settings' }, 'Turn them on in Settings')));
-    return;
+async function loadBoard() {
+  try {
+    communityState.data = await api(`/api/leaderboard?board=${encodeURIComponent(communityState.board)}`);
+    renderBoard();
+  } catch (e) {
+    toast(e.message);
   }
+}
+
+function renderCommunityStats() {
+  const d = communityState.stats;
   const t = d.totals;
-  const stats = el('div', { class: 'card panel' }, el('div', { class: 'stats-grid' },
-    stat(`${currency.many} held`, t.credits.toLocaleString()),
+  $('community-stats').replaceChildren(...[
+    stat(`${d.currency.many} held`, t.credits.toLocaleString()),
     stat('Earned in total', t.earned.toLocaleString()),
+    d.market && stat(`${d.microCurrency.many} held`, micro(t.micro, d.microCurrency)),
     stat('Active playtime', playtime(t.activeSeconds)),
-    stat('Advancements made', t.advancements.toLocaleString()),
+    stat('Advancements', t.advancements.toLocaleString()),
     stat('Interactions', `${t.interactions.toLocaleString()} · ${t.interactionsToday.toLocaleString()} today`),
-    stat('Players', t.players.toLocaleString())),
-    state.me.isOwner && el('p', { class: 'muted' }, `Rename ${currency.many} or change how many players earn in `,
-      el('a', { href: '#/settings' }, 'Settings'), '.'));
+    stat('Players', t.players.toLocaleString())].filter(Boolean));
+}
 
-  const sort = el('select', { 'aria-label': 'Sort the leaderboard' },
-    COMMUNITY_SORTS.map(([value, label]) => el('option', { value }, label(currency))));
-  sort.value = d.sort;
-  sort.addEventListener('change', () => {
-    state.communitySort = sort.value;
-    loadCommunity();
-  });
-  const filter = el('input', { type: 'search', placeholder: 'Find a player…', 'aria-label': 'Filter the leaderboard' });
-  filter.value = state.communityFilter || '';
-  const rows = el('tbody');
-  const fillRows = () => {
-    state.communityFilter = filter.value;
+/** A leaderboard value in its own unit: credits, microcredits, playtime, days or a plain count. */
+function boardValue(d, value) {
+  switch (d.unit) {
+    case 'credits': return credits(value, d.currency);
+    case 'micro': return micro(value, d.microCurrency);
+    case 'seconds': return playtime(value);
+    case 'days': return `${value.toLocaleString()} day${value === 1 ? '' : 's'}`;
+    default: return value.toLocaleString();
+  }
+}
+
+function renderBoard() {
+  const d = communityState.data;
+  if (!d) return;
+  $('community-boards').replaceChildren(...d.boards.map((b) => el('button', {
+    class: `board-chip ${b.key === d.board ? 'active' : ''}`, type: 'button', role: 'tab', 'aria-selected': String(b.key === d.board),
+    onclick: () => {
+      communityState.board = b.key;
+      remember('dl-board', b.key);
+      loadBoard();
+    },
+  }, b.label)));
+  const myUuid = state.me.minecraftUuid;
+  const filter = el('input', { type: 'search', placeholder: 'Find a player…', 'aria-label': 'Find a player on this board' });
+  filter.value = communityState.filter;
+  const body = el('div');
+  const fill = () => {
+    communityState.filter = filter.value;
     const q = filter.value.trim().toLowerCase();
-    const shown = d.leaderboard.map((row, i) => [row, i + 1]).filter(([row]) => !q || row.name.toLowerCase().includes(q));
-    rows.replaceChildren(...shown.map(([row, rank]) => el('tr', {},
-      el('td', { class: 'muted' }, `#${rank}`),
-      el('td', {}, el('div', { class: 'identity' },
-        el('a', { href: playerHref(row.uuid) }, el('img', { class: 'head', src: headUrl(row.uuid, 64), alt: '', loading: 'lazy' })),
-        el('div', { class: 'leader-name' }, el('a', { class: 'name', href: playerHref(row.uuid) }, row.name),
-          row.online && el('span', { class: 'pill online' }, 'Online')))),
-      el('td', { class: 'nowrap' }, row.credits.toLocaleString()),
-      // Phones only show rank, player and balance; the rest is on each player's page.
-      el('td', { class: 'nowrap col-extra' }, playtime(row.activeSeconds)),
-      el('td', { class: 'col-extra' }, row.advancements.toLocaleString()),
-      el('td', { class: 'col-extra' }, row.given.toLocaleString()),
-      el('td', { class: 'col-extra' }, row.received.toLocaleString()))));
-    if (!shown.length) {
-      rows.append(el('tr', {}, el('td', { colspan: 7, class: 'empty' },
-        d.leaderboard.length ? 'No players match.' : `Nobody has earned any ${currency.many} yet.`)));
+    const ranked = d.rows.map((row, i) => [row, i + 1]);
+    if (!ranked.length) {
+      body.replaceChildren(el('p', { class: 'muted board-empty' }, 'Nobody is on this board yet.'));
+      return;
     }
+    if (q) {
+      const matches = ranked.filter(([row]) => row.name.toLowerCase().includes(q));
+      body.replaceChildren(matches.length ? el('div', { class: 'board-rows' }, matches.map(([row, rank]) => boardRow(d, row, rank, myUuid)))
+        : el('p', { class: 'muted board-empty' }, 'Nobody by that name on this board.'));
+      return;
+    }
+    body.replaceChildren(...[
+      el('div', { class: 'podium' }, ranked.slice(0, 3).map(([row, rank]) => podiumPlace(d, row, rank, myUuid))),
+      ranked.length > 3 && el('div', { class: 'board-rows' }, ranked.slice(3).map(([row, rank]) => boardRow(d, row, rank, myUuid)))]
+      .filter(Boolean));
   };
-  filter.addEventListener('input', fillRows);
-  fillRows();
-  const leaderboard = el('div', { class: 'card panel' },
-    el('h2', {}, 'Leaderboard', el('div', { class: 'actions' }, sort, filter)),
-    el('div', { class: 'table-wrap flat' }, el('table', { class: 'table leaderboard' },
-      el('thead', {}, el('tr', {}, ['#', 'Player', currency.many, 'Active playtime', 'Advancements', 'Given', 'Received']
-        .map((h, i) => el('th', { class: i >= 3 ? 'col-extra' : null }, h)))),
-      rows)));
+  filter.addEventListener('input', fill);
+  fill();
+  const me = d.me;
+  const standing = me && (me.rank
+    ? el('a', { class: 'board-me', href: playerHref(me.uuid) }, `You're #${me.rank.toLocaleString()} with ${boardValue(d, me.value)}`)
+    : el('span', { class: 'board-me muted' }, 'You\'re not on this board yet.'));
+  $('community-board').replaceChildren(...[
+    el('div', { class: 'board-head' },
+      el('h2', {}, d.label, d.board === 'micro' && el('span', { class: 'muted board-note' },
+        d.ranking === 'earned' ? 'earned by selling, in total' : 'held right now')),
+      standing, filter),
+    body,
+    d.total > d.rows.length && el('p', { class: 'muted board-more' },
+      `Showing the top ${d.rows.length} of ${d.total.toLocaleString()} players.`)].filter(Boolean));
+}
 
+function podiumPlace(d, row, rank, myUuid) {
+  return el('a', { class: `podium-place place-${rank} ${row.card ? 'has-card' : ''} ${row.uuid === myUuid ? 'is-me' : ''}`, href: playerHref(row.uuid) },
+    row.card && cardBackdrop(row.card),
+    el('span', { class: 'podium-medal', 'aria-label': `#${rank}` }, MEDALS[rank - 1]),
+    el('img', { class: 'head', src: headUrl(row.uuid, 96), alt: '', loading: 'lazy' }),
+    el('span', { class: 'name' }, row.name),
+    el('span', { class: 'podium-value' }, boardValue(d, row.value)),
+    row.online && el('span', { class: 'pill online' }, 'Online'));
+}
+
+function boardRow(d, row, rank, myUuid) {
+  return el('a', { class: `lrow ${row.card ? 'has-card' : ''} ${row.uuid === myUuid ? 'is-me' : ''}`, href: playerHref(row.uuid) },
+    row.card && cardBackdrop(row.card),
+    el('span', { class: 'lrow-rank' }, rank <= 3 ? MEDALS[rank - 1] : `#${rank}`),
+    el('img', { class: 'head', src: headUrl(row.uuid, 48), alt: '', loading: 'lazy' }),
+    el('span', { class: 'name' }, row.name),
+    row.online && el('span', { class: 'pill online' }, 'Online'),
+    el('span', { class: 'lrow-value' }, boardValue(d, row.value)));
+}
+
+function renderInteractions() {
+  const d = communityState.stats;
+  const r = d.rewards;
   const person = (name, uuid) => (uuid ? el('a', { class: 'name', href: playerHref(uuid) }, name) : el('span', { class: 'name' }, name));
   const recent = el('div', { class: 'card panel' },
     el('h2', {}, 'Recent interactions'),
@@ -1311,9 +1597,8 @@ function renderCommunity() {
         ` · /${i.action} · `, i.source === 'discord' ? 'Discord' : i.source, ' · ',
         el('span', { title: formatTime(i.time) }, timeAgo(i.time))))))
       : el('p', { class: 'muted' }, 'No interactions yet.'));
-
   const actions = el('div', { class: 'card panel' },
-    el('h2', {}, `Interactions (${d.actions.length})`),
+    el('h2', {}, `Interaction commands (${d.actions.length})`),
     d.synced
       ? el('div', { class: 'others' }, d.actions.map((a) => el('span', {
         class: 'chip', title: `${a.description} · ${a.lines} lines · ${a.target === 'required' ? 'needs a player' : a.target === 'optional' ? 'player optional' : 'no player'}`,
@@ -1325,10 +1610,17 @@ function renderCommunity() {
       ? 'These also work as slash commands in Discord (e.g. /hug @someone).'
       : isStaff() && 'Slash commands for these are turned off in Settings.'),
     d.servers.length > 0 && el('p', { class: 'muted' }, 'DiscordLinkedFAD is running on ',
-      d.servers.map((s) => `${s.name} (${s.version})`).join(', '), '.'),
+      d.servers.map((x) => `${x.name} (${x.version})`).join(', '), '.'),
     isStaff() && el('p', { class: 'muted' }, 'The lines, sounds and commands are set in DiscordLinkedFAD\'s config.yml on each server.'));
-
-  $('community-body').replaceChildren(stats, leaderboard, el('div', { class: 'grid' }, recent, actions));
+  const earning = el('div', { class: 'card panel' },
+    el('h2', {}, `How to earn ${d.currency.many}`),
+    el('ul', { class: 'market-how' },
+      el('li', {}, `${credits(r.playtimeAmount, d.currency)} for every ${r.playtimeMinutes} minutes of active play`),
+      el('li', {}, `${r.task} / ${r.goal} / ${r.challenge} for each new advancement (task / goal / challenge)`),
+      el('li', {}, 'A daily reward for your first join of the day, more the longer your streak')),
+    state.me.isOwner && el('p', { class: 'muted' }, `Rename ${d.currency.many} or change what players earn in `,
+      el('a', { href: '#/settings' }, 'Settings'), '.'));
+  $('community-interactions').replaceChildren(el('div', { class: 'grid' }, recent, el('div', { class: 'stack' }, actions, earning)));
 }
 
 // ---- Moderate page ----
@@ -2312,6 +2604,281 @@ function shopItemDialog(item) {
 }
 $('shop-item-cancel').addEventListener('click', () => $('shop-item-dialog').close());
 
+// ---- Shop → Cosmetics: prefixes, trails, profile cards and KeepInventory, bought once with credits ----
+
+/** Trail particles: [name, emoji for the preview]. */
+const PARTICLES = {
+  heart: ['Hearts', '❤️'], flame: ['Flames', '🔥'], small_flame: ['Small flames', '🕯️'], soul_fire_flame: ['Soul fire', '💙'],
+  note: ['Music notes', '🎵'], end_rod: ['Sparkles', '✨'], cherry_leaves: ['Cherry petals', '🌸'], pale_oak_leaves: ['Pale leaves', '🍂'],
+  snowflake: ['Snowflakes', '❄️'], enchant: ['Magic runes', '🔮'], happy_villager: ['Happy sparks', '💚'],
+  angry_villager: ['Angry clouds', '💢'], glow: ['Glow', '🌟'], totem_of_undying: ['Totem', '💛'], portal: ['Portal', '🟣'],
+  reverse_portal: ['Reverse portal', '🟪'], witch: ['Witch magic', '🧪'], electric_spark: ['Electric sparks', '⚡'],
+  wax_on: ['Wax on', '🟠'], wax_off: ['Wax off', '⚪'], scrape: ['Scrape', '🔷'], bubble_pop: ['Bubbles', '🫧'], cloud: ['Clouds', '☁️'],
+  crit: ['Crits', '✴️'], enchanted_hit: ['Enchanted crits', '💠'], dripping_honey: ['Honey', '🍯'], falling_nectar: ['Nectar', '🌼'],
+  falling_spore_blossom: ['Spore blossom', '🌺'], sculk_soul: ['Sculk souls', '👻'], soul: ['Souls', '💀'], white_ash: ['White ash', '🌫️'],
+  composter: ['Compost', '🌱'], firework: ['Fireworks', '🎆'], nautilus: ['Nautilus', '🐚'], dolphin: ['Dolphin', '🐬'],
+  glow_squid_ink: ['Glow ink', '💎'], squid_ink: ['Ink', '⚫'], egg_crack: ['Egg crack', '🥚'],
+  trial_spawner_detection: ['Trial flames', '🔥'], ominous_spawning: ['Ominous', '🕸️'], dust_plume: ['Dust', '💨'],
+};
+const particleName = (key) => PARTICLES[key]?.[0] || titleCase(key);
+const DEFAULT_PRICES = { prefix: 200, trail: 300, card: 250, keepinv: 750 };
+
+const cos = { data: null, edit: false };
+
+/**
+ * A little preview of a cosmetic: the prefix in chat, the trail's particles, the profile card behind a name, or
+ * KeepInventory's shield. {@code who} is whose name and head to show.
+ */
+function cosmeticPreview(item, who, small = false) {
+  const name = who?.name || 'You';
+  const head = who?.uuid ? el('img', { class: 'head', src: headUrl(who.uuid, 64), alt: '', loading: 'lazy' })
+    : el('span', { class: 'head head-blank', 'aria-hidden': 'true' }, '🙂');
+  switch (item.kind) {
+    case 'prefix':
+      return el('div', { class: `cos-preview chat ${small ? 'small' : ''}` },
+        el('span', {}, mcText(item.value || ''), ' ', el('span', { class: 'chat-name' }, name), !small && el('span', { class: 'chat-msg' }, ': hiii~')));
+    case 'trail': {
+      const icon = PARTICLES[item.value]?.[1] || '✦';
+      return el('div', { class: `cos-preview trail ${small ? 'small' : ''}`, title: particleName(item.value) },
+        el('span', { class: 'sparks', 'aria-hidden': 'true' }, [1, 2, 3, 4, 5, 6].map(() => el('i', {}, icon))), head);
+    }
+    case 'card':
+      return el('div', { class: `cos-preview cardp ${item.card ? 'has-card' : ''} ${small ? 'small' : ''}` },
+        item.card ? cardBackdrop(item.card) : el('span', { class: 'muted cardp-empty' }, 'No picture yet'),
+        head, el('span', { class: 'name' }, name));
+    default:
+      return el('div', { class: `cos-preview keepinv ${small ? 'small' : ''}` }, el('span', { 'aria-hidden': 'true' }, '🛡️'),
+        !small && el('span', {}, 'Items & XP kept'));
+  }
+}
+
+async function loadCosmetics() {
+  try {
+    cos.data = await api('/api/cosmetics');
+  } catch (e) {
+    $('shop-cosmetics').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    return;
+  }
+  renderCosmetics();
+}
+
+function renderCosmetics() {
+  const d = cos.data;
+  const b = d.buyer;
+  $('shop-balance').textContent = b.linked ? `You have ${credits(b.balance, d.currency)}` : '';
+  const parts = [];
+  if (!d.open) {
+    parts.push(el('div', { class: 'card panel shop-closed' }, d.manage
+      ? ['The cosmetics shop is closed for players. Open it in ', el('a', { href: '#/settings' }, 'Settings'), '.']
+      : 'The cosmetics shop is closed right now. What you already have keeps working.'));
+  }
+  if (!b.linked) parts.push(el('p', { class: 'card panel muted' }, 'Link your Minecraft account to buy cosmetics (/link in Discord).'));
+  else if (!d.manage || !cos.edit) {
+    parts.push(el('p', { class: 'card panel muted cos-intro' }, 'Bought once, yours to keep. Switch them on and off under ',
+      el('a', { href: playerHref(b.uuid) }, 'Your unlocks'), ' on your profile.'));
+  }
+  if (d.manage) {
+    parts.push(el('div', { class: 'card panel shop-manage' },
+      el('span', {}, cos.edit ? 'Click Edit on an item to change it, or add new ones. Profile cards take a picture you drop in.'
+        : 'You can add, change and price cosmetics.'),
+      el('button', { class: `btn btn-small ${cos.edit ? '' : 'btn-ghost'}`, type: 'button',
+        onclick: () => { cos.edit = !cos.edit; renderCosmetics(); } }, cos.edit ? 'Done editing' : 'Edit cosmetics')));
+  }
+  const editing = d.manage && cos.edit;
+  for (const [kind, title, one, help] of COSMETIC_KINDS) {
+    const items = d.items.filter((item) => item.kind === kind);
+    const canAdd = editing && (kind !== 'keepinv' || !items.length);
+    if (!items.length && !canAdd) continue;
+    parts.push(el('section', { class: 'cos-section' },
+      el('h2', { class: 'section-title' }, title,
+        canAdd && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => cosmeticDialog(null, kind) }, `New ${one}`)),
+      help && el('p', { class: 'muted cos-help' }, help),
+      items.length ? el('div', { class: 'cos-grid' }, items.map(cosmeticTile)) : el('p', { class: 'muted' }, 'None yet.')));
+  }
+  $('shop-cosmetics').replaceChildren(...parts);
+}
+
+function cosmeticTile(item) {
+  const d = cos.data;
+  const b = d.buyer;
+  const editing = d.manage && cos.edit;
+  let action;
+  if (editing) {
+    action = el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => cosmeticDialog(item) }, 'Edit');
+  } else if (item.owned) {
+    action = el('button', { class: `btn btn-small ${item.equipped ? 'btn-ghost' : ''}`, type: 'button',
+      onclick: (e) => equipCosmetic(item, !item.equipped, e.currentTarget) }, item.equipped ? 'Stop using' : 'Use');
+  } else {
+    const short = b.linked && b.balance < item.price;
+    action = el('button', { class: 'btn btn-small', type: 'button', disabled: !d.open || !b.linked || short,
+      title: short ? `You need ${credits(item.price - b.balance, d.currency)} more` : null,
+      onclick: () => buyCosmetic(item) }, item.price ? `Buy · ${credits(item.price, d.currency)}` : 'Get for free');
+  }
+  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${item.forSale ? '' : 'not-for-sale'}` },
+    cosmeticPreview(item, b.linked ? { name: b.name, uuid: b.uuid } : null),
+    el('div', { class: 'cos-info' },
+      el('div', { class: 'cos-name' }, item.name,
+        item.equipped ? el('span', { class: 'badge good' }, 'In use') : item.owned && el('span', { class: 'badge' }, 'Yours')),
+      item.kind === 'trail' && particleName(item.value).toLowerCase() !== item.name.toLowerCase()
+        && el('div', { class: 'muted cos-meta' }, particleName(item.value)),
+      item.kind === 'keepinv' && el('p', { class: 'muted cos-desc' }, keepInventoryText(d.keepInventoryDelay)),
+      editing && el('div', { class: 'muted cos-meta' }, `${credits(item.price, d.currency)} · ${item.owners} ${item.owners === 1 ? 'player has' : 'players have'} it`
+        + (item.forSale ? '' : ' · not for sale') + (item.kind === 'card' && !item.card ? ' · needs a picture' : ''))),
+    action);
+}
+
+function buyCosmetic(item) {
+  const d = cos.data;
+  confirmDialog({
+    title: `Buy ${item.name}?`,
+    text: [`${credits(item.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`,
+      item.kind === 'keepinv' ? keepInventoryText(d.keepInventoryDelay)
+        : 'It\'s switched on straight away; switch it off any time under Your unlocks on your profile.'],
+    confirmLabel: item.price ? `Buy for ${credits(item.price, d.currency)}` : 'Get it',
+    onConfirm: async () => {
+      const result = await api('/api/cosmetics/buy', { id: item.id });
+      toast(result.message);
+      await loadCosmetics();
+    },
+  });
+}
+
+/** Sends a profile card picture as it is; the server checks and shrinks it. */
+async function uploadCardPicture(id, file) {
+  const res = await fetch(`/api/cosmetics/card?id=${id}`, {
+    method: 'POST', credentials: 'same-origin', body: file,
+    headers: { 'X-CSRF-Token': state.me.csrf, 'Content-Type': file.type || 'application/octet-stream' },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+  return data;
+}
+
+/** The settings owner's editor for one cosmetic ({@code item} null = a new one of {@code kind}). */
+function cosmeticDialog(item, kind = item?.kind) {
+  const d = cos.data;
+  const [, , one] = COSMETIC_KINDS.find(([k]) => k === kind);
+  $('cosmetic-title').textContent = item ? `Edit ${item.name}` : `New ${one}`;
+  $('cosmetic-name').value = item?.name || (kind === 'keepinv' ? 'KeepInventory' : '');
+  $('cosmetic-price').value = item?.price ?? DEFAULT_PRICES[kind];
+  $('cosmetic-for-sale').checked = item ? item.forSale : true;
+  $('cosmetic-error').hidden = true;
+  $('cosmetic-note').textContent = item && item.owners
+    ? `${item.owners} ${item.owners === 1 ? 'player has' : 'players have'} it. Deleting it gives back what they paid.` : '';
+  let value = () => '';
+  let picture = null;
+  const box = $('cosmetic-value');
+  if (kind === 'prefix') {
+    const input = el('input', { type: 'text', maxlength: '64', required: true, spellcheck: 'false', placeholder: '&6[Tycoon]', value: item?.value || '' });
+    const preview = el('div', { class: 'cos-preview chat' });
+    const update = () => preview.replaceChildren(el('span', {}, mcText(input.value || ''), ' ',
+      el('span', { class: 'chat-name' }, d.buyer.name || 'Steve'), el('span', { class: 'chat-msg' }, ': hiii~')));
+    input.addEventListener('input', update);
+    update();
+    box.replaceChildren(el('label', { class: 'reason' }, 'Prefix', input),
+      el('p', { class: 'muted' }, 'Colours with & codes: &6 gold, &b aqua, &d pink, &c red, &a green, &#ff8800 any colour; &l bold, &o italic.'),
+      preview);
+    value = () => input.value;
+  } else if (kind === 'trail') {
+    const select = el('select', { 'aria-label': 'Particle' }, d.particles.map((key) => el('option', { value: key },
+      `${PARTICLES[key]?.[1] || '✦'} ${particleName(key)}`)));
+    select.value = item?.value || d.particles[0];
+    box.replaceChildren(el('label', { class: 'reason' }, 'Particle', select));
+    value = () => select.value;
+  } else if (kind === 'card') {
+    const file = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif', class: 'offscreen' });
+    let preview = el('div');
+    const who = d.buyer.linked ? { name: d.buyer.name, uuid: d.buyer.uuid } : null;
+    const show = (url) => {
+      const next = cosmeticPreview({ kind: 'card', card: url }, who);
+      preview.replaceWith(next);
+      preview = next;
+    };
+    const take = (chosen) => {
+      if (!chosen) return;
+      if (!/^image\/(png|jpeg|gif)$/.test(chosen.type)) {
+        toast('Use a PNG, JPEG or GIF picture.');
+        return;
+      }
+      picture = chosen;
+      show(URL.createObjectURL(chosen));
+    };
+    file.addEventListener('change', () => take(file.files[0]));
+    const drop = el('label', { class: 'dropzone' }, file, el('b', {}, 'Drop a picture here'), el('span', { class: 'muted' }, 'or click to choose one. '
+      + 'Wide pictures work best (it fades out to the right); it\'s shrunk to at most 1600×900.'));
+    ['dragenter', 'dragover'].forEach((type) => drop.addEventListener(type, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach((type) => drop.addEventListener(type, () => drop.classList.remove('over')));
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      take(e.dataTransfer.files[0]);
+    });
+    box.replaceChildren(drop, preview);
+    show(item?.card);
+  } else {
+    box.replaceChildren(el('p', { class: 'muted' }, keepInventoryText(d.keepInventoryDelay)));
+  }
+  const remove = $('cosmetic-delete');
+  remove.hidden = !item;
+  remove.onclick = () => confirmDialog({
+    title: `Delete ${item.name}?`,
+    text: item.owners ? `${item.owners} ${item.owners === 1 ? 'player has' : 'players have'} it. They lose it, and everyone who paid gets their ${d.currency.many} back.`
+      : 'Nobody has it yet.',
+    confirmLabel: 'Delete', confirmClass: 'btn-danger',
+    onConfirm: async () => {
+      await api('/api/cosmetics/delete', { id: item.id });
+      closeDialog($('cosmetic-dialog'));
+      toast(`${item.name} was deleted`);
+      await loadCosmetics();
+    },
+  });
+  $('cosmetic-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const save = $('cosmetic-save');
+    save.disabled = true;
+    try {
+      const saved = await api('/api/cosmetics/save', { id: item?.id || 0, kind, name: $('cosmetic-name').value,
+        value: value(), price: Number($('cosmetic-price').value), forSale: $('cosmetic-for-sale').checked });
+      if (picture) await uploadCardPicture(saved.id, picture);
+      closeDialog($('cosmetic-dialog'));
+      toast(`${saved.name} saved`);
+      await loadCosmetics();
+    } catch (err) {
+      $('cosmetic-error').textContent = err.message;
+      $('cosmetic-error').hidden = false;
+    } finally {
+      save.disabled = false;
+    }
+  };
+  $('cosmetic-dialog').showModal();
+}
+$('cosmetic-cancel').addEventListener('click', () => closeDialog($('cosmetic-dialog')));
+
+// ---- Shop page: Items, Cosmetics and Sell & exchange tabs ----
+
+/** The Shop's tabs that are open (the settings owner sees them all, to set them up). */
+function shopTabs() {
+  const owner = state.me.isOwner && state.me.communityEnabled;
+  return [['', state.me.shopOpen || owner], ['cosmetics', state.me.cosmeticsOpen || owner], ['sell', state.me.marketOpen || owner]]
+    .filter(([, open]) => open).map(([sub]) => sub);
+}
+
+function loadShopView() {
+  const tabs = shopTabs();
+  const wanted = currentRoute().sub || '';
+  const sub = tabs.includes(wanted) ? wanted : tabs[0] ?? '';
+  document.querySelectorAll('#shop-subtabs a').forEach((a) => {
+    a.hidden = !tabs.includes(a.dataset.sub);
+    a.classList.toggle('active', a.dataset.sub === sub);
+  });
+  $('shop-items').hidden = sub !== '';
+  $('shop-cosmetics').hidden = sub !== 'cosmetics';
+  $('shop-sell').hidden = sub !== 'sell';
+  $('shop-balance').textContent = '';
+  if (sub === 'cosmetics') loadCosmetics();
+  else if (sub === 'sell') loadMarket();
+  else loadShop();
+}
+
 // ---- Discord message log (settings owner only) ----
 
 const msglog = { data: null, channel: null, messages: [], more: false, search: '', searchTimer: 0 };
@@ -2480,7 +3047,7 @@ function renderMessageFeed(scroll) {
   list.scrollTop = scroll === 'keep' ? oldTop + (list.scrollHeight - oldHeight) : list.scrollHeight;
 }
 
-// ---- Market: selling items in game for microcredits ----
+// ---- Shop → Sell & exchange: selling items in game for microcredits ----
 
 /** Sell prices are kept in thousandths of a microcredit: "1,234 µc", or "0.3 µc" for fractions. */
 function formatMicro(milli, currency) {
@@ -2490,7 +3057,6 @@ function formatMicro(milli, currency) {
 }
 /** Whole microcredits (balances): "12,345 µc". */
 const micro = (n, currency) => `${n.toLocaleString()} ${currency.symbol}`;
-const MEDALS = ['🥇', '🥈', '🥉'];
 
 const market = { data: null, tab: SHOP_TABS[0][0] };
 
@@ -2511,7 +3077,7 @@ function renderMarket() {
   const d = market.data;
   const cur = d.currency;
   const me = d.me;
-  $('market-balance').textContent = me.linked ? `You have ${micro(me.micro, cur)}${me.rank ? ` · #${me.rank}` : ''}` : '';
+  $('shop-balance').textContent = me.linked ? `You have ${credits(me.credits, d.credits)} · ${micro(me.micro, cur)}` : '';
   const notices = [];
   if (!d.open) {
     notices.push(el('div', { class: 'card panel shop-closed' }, d.manage
@@ -2519,29 +3085,6 @@ function renderMarket() {
       : 'Selling is closed right now.'));
   }
   $('market-notice').replaceChildren(...notices);
-
-  // Leaderboard: a podium for the top three, then a list.
-  const value = (row) => (d.ranking === 'earned' ? row.microEarned : row.micro);
-  const rows = d.leaderboard;
-  const podium = rows.slice(0, 3).map((row, i) => el('a', { class: `podium-place place-${i + 1}`, href: playerHref(row.uuid) },
-    el('span', { class: 'podium-medal', 'aria-label': `#${i + 1}` }, MEDALS[i]),
-    el('img', { class: 'head', src: headUrl(row.uuid, 96), alt: '', loading: 'lazy' }),
-    el('span', { class: 'name' }, row.name),
-    el('span', { class: 'podium-value' }, micro(value(row), cur)),
-    row.online && el('span', { class: 'pill online' }, 'Online')));
-  const rest = rows.slice(3).map((row, i) => el('a', { class: 'leader-row', href: playerHref(row.uuid) },
-    el('span', { class: 'muted leader-rank' }, `#${i + 4}`),
-    el('img', { class: 'head', src: headUrl(row.uuid, 48), alt: '', loading: 'lazy' }),
-    el('span', { class: 'name' }, row.name),
-    row.online && el('span', { class: 'pill online' }, 'Online'),
-    el('span', { class: 'leader-value' }, micro(value(row), cur))));
-  $('market-leaders').replaceChildren(
-    el('h2', {}, `Most ${cur.many}`, el('span', { class: 'muted market-ranking' },
-      d.ranking === 'earned' ? 'earned by selling, in total' : 'held right now')),
-    rows.length
-      ? el('div', {}, el('div', { class: 'podium' }, podium), rest.length > 0 && el('div', { class: 'leader-rows' }, rest))
-      : el('p', { class: 'muted' }, `Nobody has any ${cur.many} yet. Sell something in game with /sell!`),
-    el('p', { class: 'muted market-totals' }, `${micro(d.held, cur)} held · ${micro(d.earned, cur)} earned by everyone`));
 
   // Exchanging: one way only, microcredits to credits.
   const exchange = $('market-exchange');
@@ -2575,11 +3118,15 @@ function renderMarket() {
     all.addEventListener('click', () => run(all, { all: true }));
     exchange.replaceChildren(el('h2', {}, `${cur.many} → ${d.credits.many}`),
       el('div', { class: 'stats-grid' },
-        stat(me.rank ? `Yours · rank #${me.rank}` : 'Yours', micro(me.micro, cur)),
+        stat(me.rank ? `Yours · #${me.rank} on the leaderboard` : 'Yours', micro(me.micro, cur)),
         stat(d.credits.many, credits(me.credits, d.credits))),
       el('p', { class: 'muted' }, `1 ${d.credits.one} = ${micro(d.rate, cur)}. Exchanging only goes this way, `
         + (d.ranking === 'balance' ? 'and lowers your place on the leaderboard.' : 'and doesn\'t change your place on the leaderboard.')),
-      el('div', { class: 'market-exchange-row' }, amount, cost, one, all));
+      el('div', { class: 'market-exchange-row' }, amount, cost, one, all),
+      el('a', { class: 'muted market-leaderboard-link', href: '#/community', onclick: () => {
+        communityState.board = 'micro';
+        remember('dl-board', 'micro');
+      } }, `${cur.many} leaderboard →`));
   }
 
   $('market-how').replaceChildren(el('h2', {}, 'How to sell'),
@@ -2587,10 +3134,11 @@ function renderMarket() {
       el('li', {}, el('code', {}, '/sell'), ' opens a chest: put items in and close it.'),
       el('li', {}, el('code', {}, '/sellhand'), ' sells what you hold, ', el('code', {}, '/sellhand all'), ' every one of it you have.'),
       el('li', {}, el('code', {}, '/worth'), ' shows what the item in your hand is worth.'),
-      el('li', {}, el('code', {}, '/mct'), ' shows this leaderboard in game, ', el('code', {}, '/exchange'), ' turns them into ', d.credits.many, '.')),
+      el('li', {}, el('code', {}, '/mct'), ' shows the leaderboard in game, ', el('code', {}, '/exchange'), ' turns them into ', d.credits.many, '.')),
     el('p', { class: 'muted' }, `Items sell for ${d.sellPercent}% of their Shop price. Enchanted, named, damaged or filled items can't be sold.`
       + (d.dropping ? ` Prices drop the more of an item everyone sells (half price after ${d.dropAfter.toLocaleString()} `
-        + `${d.credits.many}' worth) and recover over time (halfway every ${d.recoveryHours} hours).` : '')));
+        + `${d.credits.many}' worth) and recover over time (halfway every ${d.recoveryHours} hours).` : '')),
+    el('p', { class: 'muted market-totals' }, `${micro(d.held, cur)} held · ${micro(d.earned, cur)} earned by everyone`));
 
   $('market-tabs').replaceChildren(...SHOP_TABS.map(([tab, icon]) => el('button', {
     class: `shop-tab ${tab === market.tab && !$('market-search').value.trim() ? 'active' : ''}`, type: 'button', role: 'tab',
@@ -2671,74 +3219,9 @@ async function loadHome() {
     : [el('p', { class: 'muted' }, 'Nobody yet.')]));
 }
 
-async function loadPlayers() {
-  try {
-    state.members = await api('/api/members');
-    renderPlayers();
-  } catch (e) {
-    toast(e.message);
-  }
-}
-
-function renderPlayers() {
-  const members = state.members || [];
-  const query = $('players-search').value.trim().toLowerCase();
-  const linkedOnly = $('players-show').value === 'linked';
-  const shown = linkedOnly ? members.filter((p) => p.linked) : members;
-  const rows = shown
-    .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
-    .sort(SORTS[$('players-sort').value] || SORTS.seen);
-  $('players-count').textContent = `(${shown.length})`;
-  // Long lists render in steps so a server with thousands of players stays responsive.
-  const limit = state.playersLimit || 200;
-  $('players-body').replaceChildren(...rows.slice(0, limit).map((p) => {
-    const joined = joinedAt(p);
-    return el('tr', {},
-      el('td', { class: 'cell-mc' }, el('div', { class: 'identity' },
-        el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
-        el('div', {}, playerName(p)))),
-      el('td', { class: 'cell-discord' }, p.linked
-        ? el('div', { class: 'identity' },
-          discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
-          el('div', {}, discordName(p)))
-        : el('span', { class: 'muted' }, 'Not linked')),
-      el('td', { class: 'cell-status' }, statusPills(p), streakChip(p.streak, p.bestStreak)),
-      el('td', { class: 'cell-linked nowrap muted', title: joined ? formatTime(joined) : '' },
-        el('span', { class: 'when-long' }, joined ? shortDate(joined) : '—'),
-        el('span', { class: 'when-short' }, joined ? shortDate(joined) : '—')));
-  }));
-  $('players-more').hidden = rows.length <= limit;
-  $('players-more').textContent = `Show more (${(rows.length - limit).toLocaleString()} left)`;
-  const empty = $('players-empty');
-  empty.textContent = members.length ? 'No players match your filter.' : 'No players yet.';
-  empty.hidden = rows.length > 0;
-}
-
-/** When they joined the community: when they linked, or else when they first played. */
-const joinedAt = (p) => p.linkedAt || p.firstPlayed || null;
-
-$('players-show').addEventListener('change', () => { state.playersLimit = 200; renderPlayers(); });
-$('players-more').addEventListener('click', () => { state.playersLimit = (state.playersLimit || 200) + 400; renderPlayers(); });
-
-$('players-search').addEventListener('input', () => { state.playersLimit = 200; renderPlayers(); });
-$('players-sort').addEventListener('change', () => { state.playersLimit = 200; renderPlayers(); });
-
 /** The simple profile everyone can see: who they are, their Discord, and whether they're on. */
 function renderPublicPlayer() {
   const p = state.player.player;
-  const profile = el('div', { class: 'card profile' },
-    el('img', { class: 'head-large', src: headUrl(p.uuid, 192), alt: '' }),
-    el('div', { class: 'info' },
-      el('h1', { class: nameClass(p) }, p.minecraftName),
-      el('div', { class: 'badges' },
-        p.isAdmin && el('span', { class: 'badge warn' }, 'Staff'),
-        p.linked ? el('span', { class: 'badge good' }, 'Member') : el('span', { class: 'badge' }, 'Not linked'),
-        ...statusPills(p)),
-      streakBadge(p.streak),
-      copyButton(p.uuid, 'UUID'),
-      el('div', { class: 'actions' },
-        el('a', { class: 'btn btn-ghost btn-small', href: `https://namemc.com/profile/${p.uuid}`, target: '_blank', rel: 'noopener' },
-          'View on NameMC ↗'))));
   const discord = el('div', { class: 'card panel' },
     el('h2', {}, 'Discord'),
     p.linked
@@ -2756,27 +3239,29 @@ function renderPublicPlayer() {
         el('dd', {}, p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never')]));
   $('view-player').replaceChildren(
     el('a', { class: 'back', href: '#/players' }, '← All players'),
-    profile,
+    profileHeader(p, false),
     el('div', { class: 'grid' }, discord, server),
+    ...unlocksSection(p, state.player.cosmetics),
     ...communitySection(p, state.player.community));
 }
 
+/** Community view: something about a player changed (members only hear that much). */
 function onPresence(change) {
   const route = currentRoute();
   if (!change.uuid && route.view !== 'community') return;
   if (route.view === 'home') soon('home', loadHome);
   else if (route.view === 'community') soon('community', loadCommunity);
-  else if (route.view === 'shop') soon('shop', loadShop);
-  else if (route.view === 'market') soon('market', loadMarket);
+  else if (route.view === 'shop') soon('shop', loadShopView);
   else if (route.view === 'players') soon('players', loadPlayers);
   else if (route.view === 'player' && route.uuid === change.uuid) soon('player', () => loadPlayer(route.uuid));
 }
 
 // ---- On duty / off duty ----
 
-const ADMIN_VIEWS = new Set(['linked', 'players', 'logs', 'moderate', 'settings', 'community', 'shop', 'market', 'messages']);
-const MEMBER_VIEWS = new Set(['home', 'community', 'players', 'shop', 'market']);
-const homeHash = () => (isStaff() ? '#/linked' : '#/home');
+const ADMIN_VIEWS = new Set(['players', 'logs', 'moderate', 'settings', 'messages', 'community', 'shop']);
+const MEMBER_VIEWS = new Set(['home', 'players', 'community', 'shop']);
+const homeView = () => (isStaff() ? 'players' : 'home');
+const homeHash = () => `#/${homeView()}`;
 
 function applyMode() {
   const staff = isStaff();
@@ -2788,9 +3273,9 @@ function applyMode() {
   $('duty').classList.toggle('off', state.me.isAdmin && !state.me.onDuty);
   $('duty-switch').checked = state.me.onDuty;
   $('community-tab').hidden = !state.me.communityEnabled;
-  $('shop-tab').hidden = !(state.me.shopOpen || (state.me.isOwner && state.me.communityEnabled));
-  $('market-tab').hidden = !(state.me.marketOpen || (state.me.isOwner && state.me.communityEnabled));
+  $('shop-tab').hidden = shopTabs().length === 0;
   $('global-search').placeholder = staff ? 'Find any player…' : 'Find a player…';
+  setupPlayerControls();
   updateTabPills();
 }
 
@@ -2801,9 +3286,12 @@ $('duty-switch').addEventListener('change', async (e) => {
     const me = await api('/api/duty', { onDuty: input.checked });
     state.me = { ...state.me, ...me };
     state.player = null;
+    state.members = null;
     applyMode();
     toast(me.onDuty ? 'On duty: admin view' : 'Off duty: you see what everyone else sees');
-    const target = currentRoute().view === 'player' ? location.hash : homeHash();
+    const route = currentRoute().view;
+    const target = route === 'player' || route === 'players' || route === 'community' || route === 'shop'
+      ? location.hash : homeHash();
     if (location.hash === target) showView();
     else location.hash = target;
     if (me.onDuty) pollSpy();
@@ -2815,15 +3303,14 @@ $('duty-switch').addEventListener('change', async (e) => {
   }
 });
 
+// Which log events change which page.
 const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK', 'SUSPEND', 'SUSPEND_EDIT',
   'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED', 'ADVANCEMENT',
-  'CREDITS_ADJUST']);
-// Events that change the Community page.
-// Events that can change the Shop page (balances, whether you're online).
-const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'EXCHANGE', 'ADVANCEMENT', 'JOIN', 'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE']);
-const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'JOIN', 'LEAVE']);
-// Events that change the Market page (balances, the leaderboard, prices).
-const MARKET_EVENTS = new Set(['SALE', 'EXCHANGE', 'JOIN', 'LEAVE', 'SETTINGS_CHANGE']);
+  'CREDITS_ADJUST', 'COSMETIC']);
+const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'SHOP_PURCHASE', 'SALE', 'EXCHANGE',
+  'COSMETIC', 'JOIN', 'LEAVE']);
+const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'SALE', 'EXCHANGE', 'COSMETIC', 'ADVANCEMENT', 'JOIN',
+  'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE']);
 const pendingRefresh = {};
 
 /** Coalesces bursts of events into one refresh. */
@@ -2835,12 +3322,10 @@ function soon(key, fn, ms = 700) {
 function onLiveLog(entry) {
   const route = currentRoute();
   if (route.view === 'logs') prependLog(entry);
-  else if (route.view === 'linked' && STATUS_EVENTS.has(entry.type)) soon('linked', loadLinked);
   else if (route.view === 'players' && STATUS_EVENTS.has(entry.type)) soon('players', loadPlayers);
   else if (route.view === 'moderate' && STATUS_EVENTS.has(entry.type)) soon('moderate', loadModerate);
   else if (route.view === 'community' && COMMUNITY_EVENTS.has(entry.type)) soon('community', loadCommunity);
-  else if (route.view === 'shop' && SHOP_EVENTS.has(entry.type)) soon('shop', loadShop);
-  else if (route.view === 'market' && MARKET_EVENTS.has(entry.type)) soon('market', loadMarket);
+  else if (route.view === 'shop' && SHOP_EVENTS.has(entry.type)) soon('shop', loadShopView);
   else if (route.view === 'player' && entry.uuid === route.uuid) {
     prependPlayerLog(entry);
     if (STATUS_EVENTS.has(entry.type)) soon('player', () => loadPlayer(route.uuid));
@@ -2851,8 +3336,7 @@ function onLivePlayer(change) {
   const route = currentRoute();
   // Someone opened or left the website: lists and their page show it.
   if (change.kind === 'web') {
-    if (route.view === 'linked') soon('linked', loadLinked);
-    else if (route.view === 'moderate') soon('moderate', loadModerate);
+    if (route.view === 'moderate') soon('moderate', loadModerate);
     else onPresence(change);
     return;
   }
@@ -2990,65 +3474,68 @@ document.addEventListener('pointerdown', (e) => {
 
 // ---- Navigation ----
 
+/** The page in the address: #/view, #/view/sub-page or #/player/<uuid>[/inventory]. */
 function currentRoute() {
   const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})(\/inventory)?$/);
   if (match) return { view: 'player', uuid: match[1].toLowerCase(), inventory: !!match[2] && isStaff() };
-  const view = location.hash.replace(/^#\//, '');
+  let [view = '', sub = ''] = location.hash.replace(/^#\/?/, '').split('/');
+  // Pages from before 0.18 moved: the Linked list is part of Players, the Market is a Shop tab.
+  if (view === 'linked') view = 'players';
+  if (view === 'market') [view, sub] = ['shop', 'sell'];
+  if ((view === 'settings' || view === 'messages') && !state.me.isOwner) return { view: homeView() };
   // Each view only exists in its own mode; anything else goes to that mode's home page.
-  if ((view === 'settings' || view === 'messages') && !state.me.isOwner) return { view: isStaff() ? 'linked' : 'home' };
-  if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view };
-  return { view: isStaff() ? 'linked' : 'home' };
+  if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view, sub };
+  return { view: homeView() };
 }
 
 function refreshCurrentView() {
   const route = currentRoute();
-  if (route.view === 'linked') loadLinked();
-  else if (route.view === 'home') loadHome();
+  if (route.view === 'home') loadHome();
   else if (route.view === 'players') loadPlayers();
   else if (route.view === 'player') loadPlayer(route.uuid);
   else if (route.view === 'moderate') loadModerate();
   else if (route.view === 'settings') loadSettings();
   else if (route.view === 'community') loadCommunity();
-  else if (route.view === 'shop') loadShop();
-  else if (route.view === 'market') loadMarket();
+  else if (route.view === 'shop') loadShopView();
   else if (route.view === 'messages') loadMessageLog();
+  else if (route.view === 'logs') loadLogs(true);
 }
+
+const VIEWS = ['logs', 'player', 'moderate', 'settings', 'messages', 'community', 'home', 'players', 'shop'];
 
 function showView() {
   const route = currentRoute();
-  for (const name of ['linked', 'logs', 'player', 'moderate', 'settings', 'community', 'home', 'players', 'shop', 'market', 'messages']) {
-    $(`view-${name}`).hidden = name !== route.view;
-  }
-  document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
+  for (const name of VIEWS) $(`view-${name}`).hidden = name !== route.view;
+  document.querySelectorAll('#main-tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
   $('settings-link').classList.toggle('active', route.view === 'settings' || route.view === 'messages');
   // On phones the tab row scrolls; keep the current tab in sight.
-  const tabs = document.querySelector('.tabs');
+  const tabs = $('main-tabs');
   const active = tabs.querySelector('a.active');
   if (active && tabs.scrollWidth > tabs.clientWidth) {
     tabs.scrollLeft = Math.max(0, active.offsetLeft - (tabs.clientWidth - active.offsetWidth) / 2);
   }
-  if (route.view === 'logs') loadLogs(true);
-  else refreshCurrentView();
+  refreshCurrentView();
   window.scrollTo(0, 0);
   playEnter($(`view-${route.view}`));
 }
 
 window.addEventListener('hashchange', showView);
 
+const dialogOpen = () => document.querySelector('dialog[open]') !== null;
+
 // Keep things fresh (online status, admin colours, expiring suspensions).
 setInterval(() => {
-  if ($('action-dialog').open || document.hidden) return;
-  if (!$('view-linked').hidden) loadLinked();
-  else if (!$('view-home').hidden) loadHome();
+  if (dialogOpen() || document.hidden) return;
+  if (!$('view-home').hidden) loadHome();
   else if (!$('view-players').hidden) loadPlayers();
 }, 30000);
 setInterval(() => {
-  if ($('action-dialog').open || document.hidden || state.spy) return;
+  if (dialogOpen() || document.hidden || state.spy) return;
   if (!$('view-moderate').hidden) loadModerate();
 }, 10000);
 // Playtime and credits change every minute without a log entry.
 setInterval(() => {
-  if ($('action-dialog').open || document.hidden) return;
+  if (dialogOpen() || document.hidden) return;
   if (!$('view-community').hidden) loadCommunity();
 }, 60000);
 
@@ -3060,10 +3547,13 @@ setInterval(() => {
   }
   $('me-name').textContent = state.me.name;
   $('me-avatar').src = state.me.avatar;
+  // Your name opens your own profile (with your unlocks), once your Minecraft account is linked.
+  if (state.me.minecraftUuid) $('me-link').href = playerHref(state.me.minecraftUuid);
+  else $('me-link').title = 'Link your Minecraft account to get a profile';
   applyMode();
   showView();
   pollSpy();
   connectLive();
   // Admin status is looked up in the background; pick it up shortly after the first load.
-  setTimeout(() => { if (!$('view-linked').hidden) loadLinked(); else if (!$('view-players').hidden) loadPlayers(); }, 3000);
+  setTimeout(() => { if (!$('view-players').hidden) loadPlayers(); }, 3000);
 })();

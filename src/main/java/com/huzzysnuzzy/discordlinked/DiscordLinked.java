@@ -45,7 +45,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.17.2";
+    public static final String VERSION = "0.18.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -259,6 +259,10 @@ public final class DiscordLinked {
         config = PluginConfig.load(dataDirectory, logger);
         // Community settings (credit name, slash commands on/off) show in Discord's command list.
         bot.refreshCommands();
+        if (community != null) {
+            // E.g. the KeepInventory delay changed, or community features were switched off.
+            community.cosmetics().settingsChanged();
+        }
     }
 
     /** The Discord user who may open the Settings page: web-owner-id, else the Discord server's owner (0 if unknown). */

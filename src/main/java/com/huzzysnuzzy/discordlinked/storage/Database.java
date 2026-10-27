@@ -289,6 +289,67 @@ public final class Database implements AutoCloseable {
             st.execute("CREATE INDEX IF NOT EXISTS idx_discord_messages_channel ON discord_messages (channel_id, created_at)");
         }
         addColumnIfMissing("discord_messages", "channel_name", "TEXT");
+        // Added in 0.18.0: cosmetics bought with credits (prefixes, trails, profile cards, KeepInventory).
+        boolean newCosmetics = !tableExists("cosmetics");
+        try (Statement st = connection.createStatement()) {
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS cosmetics (
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        kind       TEXT NOT NULL,
+                        name       TEXT NOT NULL,
+                        value      TEXT NOT NULL,
+                        price      INTEGER NOT NULL,
+                        for_sale   INTEGER NOT NULL,
+                        sort       INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS cosmetic_owned (
+                        minecraft_uuid TEXT NOT NULL,
+                        cosmetic_id    INTEGER NOT NULL,
+                        paid           INTEGER NOT NULL,
+                        acquired_at    INTEGER NOT NULL,
+                        equipped_at    INTEGER,
+                        PRIMARY KEY (minecraft_uuid, cosmetic_id)
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_cosmetic_owned_item ON cosmetic_owned (cosmetic_id)");
+        }
+        if (newCosmetics) {
+            seedCosmetics();
+        }
+    }
+
+    /** A first set so the shop isn't empty; the settings owner can change or delete all of them. */
+    private void seedCosmetics() throws SQLException {
+        Object[][] defaults = {
+                {"prefix", "Builder", "&b[Builder]", 150},
+                {"prefix", "Farmer", "&a[Farmer]", 150},
+                {"prefix", "Night Owl", "&9[Night Owl]", 200},
+                {"prefix", "Cutie", "&d[✿ Cutie]", 250},
+                {"prefix", "Tycoon", "&6&l[Tycoon]", 400},
+                {"trail", "Hearts", "heart", 300},
+                {"trail", "Flames", "flame", 250},
+                {"trail", "Soul fire", "soul_fire_flame", 300},
+                {"trail", "Music notes", "note", 250},
+                {"trail", "Sparkles", "end_rod", 350},
+                {"trail", "Cherry petals", "cherry_leaves", 400},
+                {"trail", "Snowfall", "snowflake", 250},
+                {"trail", "Magic runes", "enchant", 200},
+                {"keepinv", "KeepInventory", "", 750},
+        };
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cosmetics (kind, name, value, price, for_sale, sort, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)")) {
+            int sort = 0;
+            for (Object[] row : defaults) {
+                ps.setString(1, (String) row[0]);
+                ps.setString(2, (String) row[1]);
+                ps.setString(3, (String) row[2]);
+                ps.setLong(4, ((Integer) row[3]).longValue());
+                ps.setInt(5, sort++);
+                ps.setLong(6, Instant.now().toEpochMilli());
+                ps.executeUpdate();
+            }
+        }
     }
 
     private boolean tableExists(String table) throws SQLException {
@@ -1509,6 +1570,243 @@ public final class Database implements AutoCloseable {
         return deleted;
     }
 
+    // ---- Cosmetics ----
+
+    public synchronized List<Cosmetic> cosmetics() throws SQLException {
+        List<Cosmetic> list = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM cosmetics ORDER BY sort, id")) {
+            while (rs.next()) {
+                list.add(new Cosmetic(rs.getLong("id"), rs.getString("kind"), rs.getString("name"), rs.getString("value"),
+                        rs.getLong("price"), rs.getInt("for_sale") != 0, rs.getInt("sort")));
+            }
+        }
+        return list;
+    }
+
+    /** Saves a new cosmetic ({@code id} 0, added at the end of its kind) or changes one; returns its id. */
+    public synchronized long saveCosmetic(Cosmetic c) throws SQLException {
+        if (c.id() == 0) {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO cosmetics (kind, name, value, price, for_sale, sort, created_at) "
+                            + "VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?) RETURNING id")) {
+                ps.setString(1, c.kind());
+                ps.setString(2, c.name());
+                ps.setString(3, c.value());
+                ps.setLong(4, c.price());
+                ps.setInt(5, c.forSale() ? 1 : 0);
+                ps.setLong(6, Instant.now().toEpochMilli());
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    return rs.getLong(1);
+                }
+            }
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cosmetics SET name = ?, value = ?, price = ?, for_sale = ? WHERE id = ?")) {
+            ps.setString(1, c.name());
+            ps.setString(2, c.value());
+            ps.setLong(3, c.price());
+            ps.setInt(4, c.forSale() ? 1 : 0);
+            ps.setLong(5, c.id());
+            ps.executeUpdate();
+        }
+        return c.id();
+    }
+
+    /** Who had a deleted cosmetic, and the credits they got back. */
+    public record Refund(UUID uuid, long amount, long balance) {
+    }
+
+    /** Deletes a cosmetic, gives everyone who paid for it their credits back, and returns who that was. */
+    public synchronized List<Refund> deleteCosmetic(long id, String detail, String actor) throws SQLException {
+        return transaction(() -> {
+            List<UUID> owners = new ArrayList<>();
+            List<Long> paid = new ArrayList<>();
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT minecraft_uuid, paid FROM cosmetic_owned WHERE cosmetic_id = ?")) {
+                ps.setLong(1, id);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        owners.add(UUID.fromString(rs.getString(1)));
+                        paid.add(rs.getLong(2));
+                    }
+                }
+            }
+            List<Refund> refunds = new ArrayList<>();
+            for (int i = 0; i < owners.size(); i++) {
+                UUID uuid = owners.get(i);
+                long amount = paid.get(i);
+                if (amount <= 0) {
+                    refunds.add(new Refund(uuid, 0, -1));
+                    continue;
+                }
+                long balance = creditBalance(uuid) + amount;
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "UPDATE fad_accounts SET credits = credits + ? WHERE minecraft_uuid = ?")) {
+                    ps.setLong(1, amount);
+                    ps.setString(2, uuid.toString());
+                    ps.executeUpdate();
+                }
+                insertCreditTransaction(uuid, amount, balance, "COSMETIC", detail, actor, Instant.now());
+                refunds.add(new Refund(uuid, amount, balance));
+            }
+            try (PreparedStatement ps = connection.prepareStatement("DELETE FROM cosmetic_owned WHERE cosmetic_id = ?")) {
+                ps.setLong(1, id);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = connection.prepareStatement("DELETE FROM cosmetics WHERE id = ?")) {
+                ps.setLong(1, id);
+                ps.executeUpdate();
+            }
+            return refunds;
+        });
+    }
+
+    /** How many players have each cosmetic, by id. */
+    public synchronized Map<Long, Long> cosmeticOwnerCounts() throws SQLException {
+        Map<Long, Long> counts = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT cosmetic_id, COUNT(*) FROM cosmetic_owned GROUP BY cosmetic_id")) {
+            while (rs.next()) {
+                counts.put(rs.getLong(1), rs.getLong(2));
+            }
+        }
+        return counts;
+    }
+
+    public synchronized List<OwnedCosmetic> ownedCosmetics(UUID uuid) throws SQLException {
+        return readOwned("SELECT * FROM cosmetic_owned WHERE minecraft_uuid = ? ORDER BY acquired_at", uuid.toString());
+    }
+
+    /** Every cosmetic in use, by anyone. */
+    public synchronized List<OwnedCosmetic> equippedCosmetics() throws SQLException {
+        return readOwned("SELECT * FROM cosmetic_owned WHERE equipped_at IS NOT NULL", null);
+    }
+
+    private List<OwnedCosmetic> readOwned(String sql, String param) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            if (param != null) {
+                ps.setString(1, param);
+            }
+            List<OwnedCosmetic> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long equipped = rs.getLong("equipped_at");
+                    boolean isEquipped = !rs.wasNull();
+                    list.add(new OwnedCosmetic(UUID.fromString(rs.getString("minecraft_uuid")), rs.getLong("cosmetic_id"),
+                            rs.getLong("paid"), Instant.ofEpochMilli(rs.getLong("acquired_at")),
+                            isEquipped ? Instant.ofEpochMilli(equipped) : null));
+                }
+            }
+            return list;
+        }
+    }
+
+    /**
+     * Buys a cosmetic: takes the credits and adds it to what the player has, in one go.
+     *
+     * @return the new balance, -1 if they don't have enough credits, -2 if they already have it
+     */
+    public synchronized long buyCosmetic(UUID uuid, String name, Cosmetic cosmetic, String detail, String actor)
+            throws SQLException {
+        return transaction(() -> {
+            if (ownsCosmetic(uuid, cosmetic.id())) {
+                return -2L;
+            }
+            ensureCreditAccount(uuid, name);
+            long balance = creditBalance(uuid) - cosmetic.price();
+            if (balance < 0) {
+                return -1L;
+            }
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET credits = credits - ? WHERE minecraft_uuid = ?")) {
+                ps.setLong(1, cosmetic.price());
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            insertCreditTransaction(uuid, -cosmetic.price(), balance, "COSMETIC", detail, actor, Instant.now());
+            insertOwned(uuid, cosmetic.id(), cosmetic.price());
+            return balance;
+        });
+    }
+
+    /** Gives a cosmetic for free; false if they already have it. */
+    public synchronized boolean giveCosmetic(UUID uuid, long cosmeticId) throws SQLException {
+        if (ownsCosmetic(uuid, cosmeticId)) {
+            return false;
+        }
+        insertOwned(uuid, cosmeticId, 0);
+        return true;
+    }
+
+    /** Takes a cosmetic away (no refund); false if they didn't have it. */
+    public synchronized boolean revokeCosmetic(UUID uuid, long cosmeticId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM cosmetic_owned WHERE minecraft_uuid = ? AND cosmetic_id = ?")) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, cosmeticId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /**
+     * Puts a cosmetic to use, or stops using it. Only one of each kind is used at a time, so using one stops the
+     * others of its kind. Returns false if the player doesn't have it.
+     */
+    public synchronized boolean setCosmeticEquipped(UUID uuid, long cosmeticId, String kind, boolean on)
+            throws SQLException {
+        return transaction(() -> {
+            if (!ownsCosmetic(uuid, cosmeticId)) {
+                return false;
+            }
+            if (on) {
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "UPDATE cosmetic_owned SET equipped_at = NULL WHERE minecraft_uuid = ? AND cosmetic_id <> ? "
+                                + "AND cosmetic_id IN (SELECT id FROM cosmetics WHERE kind = ?)")) {
+                    ps.setString(1, uuid.toString());
+                    ps.setLong(2, cosmeticId);
+                    ps.setString(3, kind);
+                    ps.executeUpdate();
+                }
+            }
+            try (PreparedStatement ps = connection.prepareStatement(on
+                    ? "UPDATE cosmetic_owned SET equipped_at = COALESCE(equipped_at, ?) WHERE minecraft_uuid = ? AND cosmetic_id = ?"
+                    : "UPDATE cosmetic_owned SET equipped_at = NULL WHERE minecraft_uuid = ? AND cosmetic_id = ?")) {
+                int i = 1;
+                if (on) {
+                    ps.setLong(i++, Instant.now().toEpochMilli());
+                }
+                ps.setString(i++, uuid.toString());
+                ps.setLong(i, cosmeticId);
+                ps.executeUpdate();
+            }
+            return true;
+        });
+    }
+
+    private boolean ownsCosmetic(UUID uuid, long cosmeticId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM cosmetic_owned WHERE minecraft_uuid = ? AND cosmetic_id = ?")) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, cosmeticId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private void insertOwned(UUID uuid, long cosmeticId, long paid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO cosmetic_owned (minecraft_uuid, cosmetic_id, paid, acquired_at) VALUES (?, ?, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, cosmeticId);
+            ps.setLong(3, paid);
+            ps.setLong(4, Instant.now().toEpochMilli());
+            ps.executeUpdate();
+        }
+    }
+
     // ---- Discord message log ----
 
     /** {@code channelName} is kept so the log still has a name for channels that were deleted. */
@@ -1787,12 +2085,6 @@ public final class Database implements AutoCloseable {
             }
             return null;
         });
-    }
-
-    public synchronized void clearMarketPressure() throws SQLException {
-        try (Statement st = connection.createStatement()) {
-            st.execute("DELETE FROM market_items");
-        }
     }
 
     public synchronized Optional<String> marketState(String key) throws SQLException {
