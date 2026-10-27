@@ -1996,7 +1996,14 @@ function renderSettings() {
         el('div', { class: 'setting-label' }, field.label, field.restart && el('span', { class: 'badge warn' }, 'needs restart')),
         el('div', { class: 'setting-help' }, field.help),
         el('div', { class: 'setting-key mono' }, field.key)),
-      el('div', { class: 'setting-input' }, settingInput(field))))));
+      el('div', { class: 'setting-input' }, settingInput(field)))),
+    // The cosmetics themselves (prefixes, trails, cards) are edited in the shop; link straight to it.
+    group.fields.some((f) => f.key === 'cosmetics-enabled') && el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' },
+        el('div', { class: 'setting-label' }, 'Prefixes, trails, profile cards and KeepInventory'),
+        el('div', { class: 'setting-help' }, 'Add new ones, rename them, change their text or price, take them off sale or delete them (buyers get their credits back).')),
+      el('div', { class: 'setting-input' }, el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics',
+        onclick: () => { cos.edit = true; } }, 'Edit cosmetics')))));
 
   const secret = (label, set, hint) => el('div', { class: 'setting' },
     el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, label), el('div', { class: 'setting-help' }, hint)),

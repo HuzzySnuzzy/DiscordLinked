@@ -165,9 +165,10 @@ DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers.
   players while it's on (hits, arrows, tridents, their pets, fire, harmful potions). It starts working
   `keep-inventory-delay-minutes` after it's switched on (default 5), so it can't be switched on in the middle
   of a fight.
-- The shop starts with a few prefixes, eight trails and KeepInventory. In **Edit** the settings owner changes
-  names, prefix texts, trail particles and prices, takes things off sale (owners keep them) or deletes them
-  (everyone who paid gets their credits back). A player's profile has **Give for free** and **Take away** for
+- The shop starts with a few prefixes, eight trails and KeepInventory; they're only examples. In **Edit**
+  (Shop → Cosmetics → **Edit cosmetics**, or **Edit cosmetics** in Settings → Shop) the settings owner adds
+  new ones, changes names, prefix texts, trail particles and prices, takes things off sale (owners keep them)
+  or deletes them (everyone who paid gets their credits back). A player's profile has **Give for free** and **Take away** for
   admins. Purchases are in the credit history and everything is in the Logs (**Cosmetics** filter).
 - `cosmetics-enabled=false` stops new purchases; what players already have keeps working.
 
@@ -406,8 +407,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.18.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.18.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.18.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.18.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.18.1.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.18.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup
