@@ -89,6 +89,7 @@ public final class PlayerListener {
         updateLastSeen(player);
         recordIp(player);
         LoginStreak streak = plugin.community().dailyLogin(player);
+        plugin.community().welcome(player, streak);
         int days = streak == null ? 0 : streak.current();
         int announceFrom = plugin.config().streakAnnounceDays();
         if (announceFrom > 0 && days >= announceFrom) {

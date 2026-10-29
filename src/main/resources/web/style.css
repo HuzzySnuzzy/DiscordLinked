@@ -1261,3 +1261,6 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   .cos-tile, .podium-place { transition: none; }
   .cos-tile:hover, .podium-place:hover { transform: none; }
 }
+
+/* Players list: people who only use the website (Discord, no linked Minecraft account). */
+.prow .head-none { border: 1px dashed var(--glass-border); background: none; }

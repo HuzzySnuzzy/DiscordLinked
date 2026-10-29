@@ -13,6 +13,8 @@ import com.huzzysnuzzy.discordlinked.storage.PlaytimeReward;
 import com.velocitypowered.api.proxy.Player;
 import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 
 import java.sql.SQLException;
@@ -404,6 +406,42 @@ public final class Community {
             plugin.logger().warn("Could not update the login streak of {}", player.getUsername(), e);
             return null;
         }
+    }
+
+    /**
+     * Shortly after joining (after the daily reward): the player's balances and a clickable reminder that /dla
+     * opens the website. Each line is switched off by leaving its message empty. {@code streak} is this join's
+     * login streak (or null): when the daily reward message already showed their credits and there are no
+     * microcredits to add, the balance line is left out.
+     */
+    public void welcome(Player player, LoginStreak streak) {
+        plugin.proxy().getScheduler().buildTask(plugin, () -> {
+            if (plugin.proxy().getPlayer(player.getUniqueId()).filter(online -> online == player).isEmpty()) {
+                return; // left again
+            }
+            PluginConfig c = config();
+            boolean rewardShown = streak != null && streak.newDay() && dailyReward(streak.current()) > 0
+                    && !plugin.messages().isEmpty("minecraft.fad.daily-reward");
+            if (c.fadEnabled() && (c.marketOpen() || !rewardShown)) {
+                String key = c.marketOpen() ? "minecraft.join.balance-micro" : "minecraft.join.balance";
+                if (!plugin.messages().isEmpty(key)) {
+                    try {
+                        Optional<CreditAccount> account = plugin.database().creditAccount(player.getUniqueId());
+                        player.sendMessage(plugin.messages().minecraft(key,
+                                "credits", c.credits(account.map(CreditAccount::credits).orElse(0L)),
+                                "micro", c.micro(account.map(CreditAccount::micro).orElse(0L))));
+                    } catch (SQLException e) {
+                        plugin.logger().warn("Could not look up the balance of {}", player.getUsername(), e);
+                    }
+                }
+            }
+            if (plugin.web() != null && !plugin.messages().isEmpty("minecraft.join.website")) {
+                player.sendMessage(plugin.messages().minecraft("minecraft.join.website",
+                        Placeholder.component("link", plugin.messages().minecraft("minecraft.join.website-link")
+                                .clickEvent(ClickEvent.runCommand("/dla"))
+                                .hoverEvent(HoverEvent.showText(plugin.messages().minecraft("minecraft.join.website-hover"))))));
+            }
+        }).delay(6, TimeUnit.SECONDS).schedule();
     }
 
     /** What the daily reward is on a given day of a streak: base, plus a bit per extra day, up to the cap. */

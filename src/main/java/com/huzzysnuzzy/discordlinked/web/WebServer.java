@@ -33,6 +33,7 @@ import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
 import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
+import com.huzzysnuzzy.discordlinked.storage.WebUser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.velocitypowered.api.proxy.Player;
@@ -396,6 +397,16 @@ public final class WebServer {
         sendJson(ex, 200, domainJson());
     }
 
+    /** The website's address, or null while it's still starting. */
+    public String address() {
+        return publicUrl;
+    }
+
+    /** Whether the website has a "Log in with Discord" button (needs discord-client-secret). */
+    public boolean discordLoginAvailable() {
+        return oauth != null;
+    }
+
     /**
      * A one-time login link, or null if the website isn't reachable yet. Whether the user may log in (and
      * with which view) is checked when the link is used.
@@ -681,6 +692,7 @@ public final class WebServer {
             return;
         }
         Sessions.Session session = sessions.create(link.user(), access == Access.ADMIN);
+        rememberWebUser(link.user());
         plugin.audit().log(null, null, link.user().id(), EventTypes.WEB_LOGIN, "logged in with a /dla link"
                 + (access == Access.ADMIN ? "" : " (community view)"), link.user().actor());
         ex.getResponseHeaders().add("Set-Cookie", cookie(SESSION_COOKIE, session.token,
@@ -753,11 +765,21 @@ public final class WebServer {
             return;
         }
         Sessions.Session session = sessions.create(user, access == Access.ADMIN);
+        rememberWebUser(user);
         plugin.audit().log(null, null, user.id(), EventTypes.WEB_LOGIN,
                 access == Access.ADMIN ? "logged in" : "logged in (community view)", user.actor());
         ex.getResponseHeaders().add("Set-Cookie", cookie(SESSION_COOKIE, session.token,
                 Sessions.SESSION_LIFETIME.toSeconds()));
         redirect(ex, "/");
+    }
+
+    /** Remembers who logged in, so people without a linked Minecraft account show up in the Players list. */
+    private void rememberWebUser(DiscordOAuth.DiscordUser user) {
+        try {
+            plugin.database().recordWebLogin(user.id(), user.name(), user.avatarUrl());
+        } catch (SQLException e) {
+            plugin.logger().warn("Couldn't save a website login: {}", e.getMessage());
+        }
     }
 
     private void logout(HttpExchange ex) throws IOException {
@@ -877,7 +899,9 @@ public final class WebServer {
         Map<UUID, com.huzzysnuzzy.discordlinked.storage.LoginStreak> streaks = plugin.database().loginStreaks();
         java.time.LocalDate today = java.time.LocalDate.now(ZoneId.systemDefault());
         DataArray result = DataArray.empty();
+        Set<Long> linkedDiscord = new java.util.HashSet<>();
         for (LinkedAccount account : plugin.database().allLinked()) {
+            linkedDiscord.add(account.discordId());
             KnownPlayer k = known.remove(account.uuid());
             DataObject row = staff ? playerJson(account.uuid(), account.minecraftName(), account, suspensions.get(account.uuid()))
                     : publicPlayerJson(account.uuid(), account.minecraftName(), account);
@@ -899,6 +923,31 @@ public final class WebServer {
                     .put("card", plugin.community().cosmetics().cardUrl(k.uuid()))
                     .put("suspension", suspensions.containsKey(k.uuid()) ? suspensionJson(suspensions.get(k.uuid())) : null),
                     streaks.get(k.uuid()), today));
+        }
+        // People who used the website with Discord but never linked a Minecraft account.
+        for (WebUser user : plugin.database().webUsers()) {
+            if (linkedDiscord.contains(user.discordId())) {
+                continue;
+            }
+            DiscordBot.MemberInfo member = plugin.bot().memberInfo(user.discordId());
+            DataObject row = DataObject.empty()
+                    .put("uuid", null)
+                    .put("discordOnly", true)
+                    .put("linked", false)
+                    .put("online", false)
+                    .put("discordId", String.valueOf(user.discordId()))
+                    .put("discordName", user.name())
+                    .put("discordAvatar", user.avatar() == null ? DiscordOAuth.avatarUrl(user.discordId(), null) : user.avatar())
+                    .put("firstPlayed", user.firstLogin().toEpochMilli())
+                    .put("lastSeen", user.lastLogin().toEpochMilli())
+                    .put("isAdmin", member != null && member.admin())
+                    .put("onWebsite", onWebsite(user.discordId()))
+                    .put("streak", 0)
+                    .put("bestStreak", 0);
+            if (staff) {
+                row.put("inGuild", member == null || member.inGuild());
+            }
+            result.add(row);
         }
         return result;
     }

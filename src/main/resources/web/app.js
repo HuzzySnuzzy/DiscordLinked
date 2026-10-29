@@ -179,7 +179,10 @@ function statusPills(p) {
   if (p.suspension) {
     pills.push(el('span', { class: 'pill suspended' }, `Suspended · ${formatRemaining(p.suspension.expiresAt)} left`));
   }
-  if (p.online) {
+  if (p.discordOnly) {
+    pills.push(el('span', { class: 'pill', title: `Uses the website without a linked Minecraft account. Last visit ${formatTime(p.lastSeen)}` },
+      `Website only · ${timeAgo(p.lastSeen)}`));
+  } else if (p.online) {
     pills.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
   } else if (!p.suspension) {
     const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never joined';
@@ -439,11 +442,14 @@ function remember(key, value) {
 /** When they joined the community: when they linked, or else when they first played. */
 const joinedAt = (p) => p.linkedAt || p.firstPlayed || null;
 
+/** Minecraft name, or the Discord name for people who only use the website. */
+const listName = (p) => p.minecraftName || p.discordName || '';
+
 const SORTS = {
   seen: (a, b) => (b.online - a.online) || ((b.lastSeen || 0) - (a.lastSeen || 0)),
   online: (a, b) => (b.online - a.online) || SORTS['name-asc'](a, b),
-  'name-asc': (a, b) => a.minecraftName.localeCompare(b.minecraftName, undefined, { sensitivity: 'base' }),
-  'name-desc': (a, b) => b.minecraftName.localeCompare(a.minecraftName, undefined, { sensitivity: 'base' }),
+  'name-asc': (a, b) => listName(a).localeCompare(listName(b), undefined, { sensitivity: 'base' }),
+  'name-desc': (a, b) => listName(b).localeCompare(listName(a), undefined, { sensitivity: 'base' }),
   'joined-new': (a, b) => (joinedAt(b) || 0) - (joinedAt(a) || 0),
   'joined-old': (a, b) => (joinedAt(a) ?? Number.MAX_SAFE_INTEGER) - (joinedAt(b) ?? Number.MAX_SAFE_INTEGER),
   streak: (a, b) => ((b.streak || 0) - (a.streak || 0)) || SORTS.seen(a, b),
@@ -454,7 +460,7 @@ const SORTS = {
 const PLAYER_SORTS = [['seen', 'Recently seen'], ['online', 'Online first'], ['name-asc', 'Name A–Z'],
   ['name-desc', 'Name Z–A'], ['joined-new', 'Newest first'], ['joined-old', 'Oldest first'], ['streak', 'Longest streak'],
   ['admins', 'Staff first'], ['suspended', 'Suspended first', true]];
-const PLAYER_FILTERS = [['all', 'Everyone who played'], ['online', 'Online now'], ['linked', 'Linked members'],
+const PLAYER_FILTERS = [['all', 'Everyone'], ['online', 'Online now'], ['linked', 'Linked members'],
   ['unlinked', 'Not linked'], ['staff', 'Staff'], ['suspended', 'Suspended', true]];
 const PLAYER_FILTER_TESTS = {
   all: () => true, online: (p) => p.online, linked: (p) => p.linked, unlinked: (p) => !p.linked,
@@ -490,7 +496,7 @@ function renderPlayers() {
   const query = $('players-search').value.trim().toLowerCase();
   const shown = members.filter(PLAYER_FILTER_TESTS[$('players-show').value] || PLAYER_FILTER_TESTS.all);
   const rows = shown
-    .filter((p) => !query || [p.minecraftName, p.uuid, p.discordName || '', staff ? p.discordId || '' : '']
+    .filter((p) => !query || [p.minecraftName || '', p.uuid || '', p.discordName || '', staff ? p.discordId || '' : '']
       .some((value) => value.toLowerCase().includes(query)))
     .sort(SORTS[$('players-sort').value] || SORTS.seen);
   $('players-count').textContent = `(${shown.length.toLocaleString()})`;
@@ -528,6 +534,19 @@ function playerRow(p) {
       `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by ${p.suspension.createdBy}`));
   }
   if (staff && p.linked && p.inGuild === false) status.push(el('div', { class: 'suspension-note' }, 'Not in the Discord server'));
+  if (p.discordOnly) {
+    // Logged in to the website with Discord but never linked Minecraft: no profile page or player actions.
+    return el('div', { class: 'prow', role: 'listitem' },
+      el('div', { class: 'prow-id' },
+        el('span', { class: 'head head-none', 'aria-hidden': 'true' }),
+        el('div', { class: 'prow-name muted' }, 'No Minecraft account')),
+      el('div', { class: 'prow-discord' }, el('div', { class: 'identity' },
+        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
+        el('div', {}, discordName(p), staff && copyButton(p.discordId, 'User ID')))),
+      el('div', { class: 'prow-status' }, status),
+      el('div', { class: 'prow-joined muted', title: formatTime(p.firstPlayed) },
+        el('span', { class: 'prow-label' }, 'First visit '), shortDate(p.firstPlayed)));
+  }
   return el('div', { class: `prow ${p.card ? 'has-card' : ''}`, role: 'listitem' },
     p.card && cardBackdrop(p.card),
     el('div', { class: 'prow-id' },

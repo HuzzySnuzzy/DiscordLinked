@@ -313,6 +313,14 @@ public final class Database implements AutoCloseable {
                         PRIMARY KEY (minecraft_uuid, cosmetic_id)
                     )""");
             st.execute("CREATE INDEX IF NOT EXISTS idx_cosmetic_owned_item ON cosmetic_owned (cosmetic_id)");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS web_users (
+                        discord_id  INTEGER PRIMARY KEY,
+                        name        TEXT NOT NULL,
+                        avatar      TEXT,
+                        first_login INTEGER NOT NULL,
+                        last_login  INTEGER NOT NULL
+                    )""");
         }
         if (newCosmetics) {
             seedCosmetics();
@@ -558,6 +566,35 @@ public final class Database implements AutoCloseable {
             }
         }
         return players;
+    }
+
+    /** Remembers someone who logged in to the website (with their current Discord name and avatar). */
+    public synchronized void recordWebLogin(long discordId, String name, String avatar) throws SQLException {
+        long now = System.currentTimeMillis();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO web_users (discord_id, name, avatar, first_login, last_login) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (discord_id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar,
+                    last_login = excluded.last_login""")) {
+            ps.setLong(1, discordId);
+            ps.setString(2, name);
+            ps.setString(3, avatar);
+            ps.setLong(4, now);
+            ps.setLong(5, now);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Everyone who has logged in to the website, most recent first. */
+    public synchronized List<WebUser> webUsers() throws SQLException {
+        List<WebUser> users = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM web_users ORDER BY last_login DESC")) {
+            while (rs.next()) {
+                users.add(new WebUser(rs.getLong("discord_id"), rs.getString("name"), rs.getString("avatar"),
+                        Instant.ofEpochMilli(rs.getLong("first_login")), Instant.ofEpochMilli(rs.getLong("last_login"))));
+            }
+        }
+        return users;
     }
 
     public synchronized void setLastServer(UUID uuid, String name, String server) throws SQLException {

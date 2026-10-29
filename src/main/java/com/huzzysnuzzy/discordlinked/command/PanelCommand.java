@@ -15,6 +15,7 @@ import java.util.Optional;
 /**
  * /dla — sends a one-time, clickable login link for the website. Anyone can run it; linked players get a
  * link if their Discord account has the admin role, or is in the Discord server while web-member-access is on.
+ * Unlinked players get the website's address to log in there with Discord (or are sent to /dla in Discord).
  */
 public final class PanelCommand implements SimpleCommand {
 
@@ -43,12 +44,23 @@ public final class PanelCommand implements SimpleCommand {
             player.sendMessage(plugin.messages().minecraft("minecraft.command.database-error"));
             return;
         }
-        if (account.isEmpty()) {
-            player.sendMessage(plugin.messages().minecraft("minecraft.dla.not-linked"));
-            return;
-        }
         if (plugin.web() == null) {
             player.sendMessage(plugin.messages().minecraft("minecraft.dla.offline"));
+            return;
+        }
+        if (account.isEmpty()) {
+            // No Discord account to log them in as: give them the address to log in with Discord there.
+            String address = plugin.web().address();
+            if (address == null) {
+                player.sendMessage(plugin.messages().minecraft("minecraft.dla.starting"));
+            } else if (plugin.web().discordLoginAvailable()) {
+                player.sendMessage(plugin.messages().minecraft("minecraft.dla.unlinked",
+                        Placeholder.component("link", plugin.messages().minecraft("minecraft.dla.link-text")
+                                .clickEvent(ClickEvent.openUrl(address))
+                                .hoverEvent(HoverEvent.showText(plugin.messages().minecraft("minecraft.dla.address-hover"))))));
+            } else {
+                player.sendMessage(plugin.messages().minecraft("minecraft.dla.unlinked-discord"));
+            }
             return;
         }
         DiscordBot.MemberInfo member = plugin.bot().isReady() ? plugin.bot().checkMember(account.get().discordId()) : null;

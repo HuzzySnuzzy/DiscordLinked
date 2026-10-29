@@ -195,7 +195,8 @@ while they're logged in.
   ago"), login streak and the action buttons. Show everyone, online, linked, not linked, staff or suspended
   players; sort by recently seen, online, name, join date, longest streak, admins or suspended; filter by name
   or ID. Names are **gold** for admins (their Discord account has `admin-role-id`) and **dark red** for
-  suspended players.
+  suspended players. People who used the website with Discord but never linked a Minecraft account are in the
+  list too, as **Website only** (under Everyone and Not linked), with when they first and last visited.
 - **Find any player**: the search box in the top bar finds everyone who has ever connected, linked or not,
   by Minecraft name, UUID, Discord name or Discord ID.
 - **Player page** (click any name): profile with a NameMC link, Discord details, current suspension,
@@ -396,8 +397,15 @@ In game with DiscordLinkedFAD: every interaction (`/hug <player>`…), `/interac
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, and
 `/discordlinkedfad reload` (op).
 
-`/dla` (in Discord and in game): a one-time login link for the website. Admins get the admin view; with
-`web-member-access` on, everyone else in the Discord server gets the community view.
+`/dla` (in Discord and in game) is the way to the website, for everyone: a one-time login link. Admins get the
+admin view; with `web-member-access` on, everyone else in the Discord server gets the community view, linked to
+Minecraft or not. Players who haven't linked Discord get the website's address in game and log in there with
+Discord (or, without `discord-client-secret`, are told to run `/dla` in Discord).
+
+A few seconds after joining, players see their credits (and microcredits, when selling is on) and a clickable
+**[/dla]** reminder for the website. On the first join of the day the daily reward message already shows their
+credits, so the balance line is skipped unless there are microcredits to show. Change or turn off these lines
+(`minecraft.join.*`, empty = off) in `messages.properties`.
 
 ## Building
 
@@ -407,8 +415,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.18.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.18.1.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.18.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.19.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.19.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.19.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup
