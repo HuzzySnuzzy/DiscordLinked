@@ -204,13 +204,18 @@ final class FadBridge {
      * What a player has in use: their prefix (with &amp; colour codes), trail particle and from when KeepInventory
      * works (epoch millis, 0 = off). Empty strings switch a prefix or trail off.
      */
-    void cosmetics(ServerConnection connection, UUID player, String prefix, String trail, long keepInventoryFrom) {
+    void cosmetics(ServerConnection connection, UUID player, String prefix, String trail, String trailStyle,
+                   String aura, String auraStyle, long keepInventoryFrom) {
         send(connection, out -> {
             out.writeUTF("COSMETICS");
             out.writeUTF(player.toString());
             out.writeUTF(prefix);
             out.writeUTF(trail);
             out.writeLong(keepInventoryFrom);
+            // Added in 0.20 at the end, so DiscordLinkedFAD 0.18 (which stops reading here) keeps working.
+            out.writeUTF(trailStyle);
+            out.writeUTF(aura);
+            out.writeUTF(auraStyle);
         });
     }
 

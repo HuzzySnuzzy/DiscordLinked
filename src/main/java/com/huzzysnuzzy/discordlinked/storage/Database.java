@@ -322,8 +322,13 @@ public final class Database implements AutoCloseable {
                         last_login  INTEGER NOT NULL
                     )""");
         }
+        boolean newStyles = addColumnIfMissing("cosmetics", "style", "TEXT");
+        addColumnIfMissing("cosmetic_owned", "style", "TEXT");
         if (newCosmetics) {
             seedCosmetics();
+            seedAuras();
+        } else if (newStyles) {
+            seedAuras(); // upgrading from 0.18: standing-still particles are new
         }
     }
 
@@ -355,6 +360,32 @@ public final class Database implements AutoCloseable {
                 ps.setLong(4, ((Integer) row[3]).longValue());
                 ps.setInt(5, sort++);
                 ps.setLong(6, Instant.now().toEpochMilli());
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /**
+     * Standing-still particles to start with. Each is a particle type: whoever buys one picks its shape, animation and
+     * colour on their profile.
+     */
+    private void seedAuras() throws SQLException {
+        Object[][] defaults = {
+                {"Hearts", "heart", null, 350},
+                {"Sparkles", "end_rod", null, 350},
+                {"Soul fire", "soul_fire_flame", null, 350},
+                {"Glow", "glow", null, 300},
+                {"Witch magic", "witch", null, 300},
+                {"Cherry petals", "cherry_leaves", null, 400},
+        };
+        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO cosmetics (kind, name, value, style, price, "
+                + "for_sale, sort, created_at) VALUES ('aura', ?, ?, ?, ?, 1, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?)")) {
+            for (Object[] row : defaults) {
+                ps.setString(1, (String) row[0]);
+                ps.setString(2, (String) row[1]);
+                ps.setString(3, (String) row[2]);
+                ps.setLong(4, ((Integer) row[3]).longValue());
+                ps.setLong(5, Instant.now().toEpochMilli());
                 ps.executeUpdate();
             }
         }
@@ -1615,7 +1646,7 @@ public final class Database implements AutoCloseable {
              ResultSet rs = st.executeQuery("SELECT * FROM cosmetics ORDER BY sort, id")) {
             while (rs.next()) {
                 list.add(new Cosmetic(rs.getLong("id"), rs.getString("kind"), rs.getString("name"), rs.getString("value"),
-                        rs.getLong("price"), rs.getInt("for_sale") != 0, rs.getInt("sort")));
+                        rs.getString("style"), rs.getLong("price"), rs.getInt("for_sale") != 0, rs.getInt("sort")));
             }
         }
         return list;
@@ -1625,14 +1656,15 @@ public final class Database implements AutoCloseable {
     public synchronized long saveCosmetic(Cosmetic c) throws SQLException {
         if (c.id() == 0) {
             try (PreparedStatement ps = connection.prepareStatement(
-                    "INSERT INTO cosmetics (kind, name, value, price, for_sale, sort, created_at) "
-                            + "VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?) RETURNING id")) {
+                    "INSERT INTO cosmetics (kind, name, value, style, price, for_sale, sort, created_at) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?) RETURNING id")) {
                 ps.setString(1, c.kind());
                 ps.setString(2, c.name());
                 ps.setString(3, c.value());
-                ps.setLong(4, c.price());
-                ps.setInt(5, c.forSale() ? 1 : 0);
-                ps.setLong(6, Instant.now().toEpochMilli());
+                ps.setString(4, c.style());
+                ps.setLong(5, c.price());
+                ps.setInt(6, c.forSale() ? 1 : 0);
+                ps.setLong(7, Instant.now().toEpochMilli());
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     return rs.getLong(1);
@@ -1640,12 +1672,13 @@ public final class Database implements AutoCloseable {
             }
         }
         try (PreparedStatement ps = connection.prepareStatement(
-                "UPDATE cosmetics SET name = ?, value = ?, price = ?, for_sale = ? WHERE id = ?")) {
+                "UPDATE cosmetics SET name = ?, value = ?, style = ?, price = ?, for_sale = ? WHERE id = ?")) {
             ps.setString(1, c.name());
             ps.setString(2, c.value());
-            ps.setLong(3, c.price());
-            ps.setInt(4, c.forSale() ? 1 : 0);
-            ps.setLong(5, c.id());
+            ps.setString(3, c.style());
+            ps.setLong(4, c.price());
+            ps.setInt(5, c.forSale() ? 1 : 0);
+            ps.setLong(6, c.id());
             ps.executeUpdate();
         }
         return c.id();
@@ -1733,7 +1766,7 @@ public final class Database implements AutoCloseable {
                     boolean isEquipped = !rs.wasNull();
                     list.add(new OwnedCosmetic(UUID.fromString(rs.getString("minecraft_uuid")), rs.getLong("cosmetic_id"),
                             rs.getLong("paid"), Instant.ofEpochMilli(rs.getLong("acquired_at")),
-                            isEquipped ? Instant.ofEpochMilli(equipped) : null));
+                            isEquipped ? Instant.ofEpochMilli(equipped) : null, rs.getString("style")));
                 }
             }
             return list;
@@ -1766,6 +1799,17 @@ public final class Database implements AutoCloseable {
             insertOwned(uuid, cosmetic.id(), cosmetic.price());
             return balance;
         });
+    }
+
+    /** Sets the look a player picked for a trail or aura they have (null = the item's own); false if they don't have it. */
+    public synchronized boolean setOwnedStyle(UUID uuid, long cosmeticId, String style) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE cosmetic_owned SET style = ? WHERE minecraft_uuid = ? AND cosmetic_id = ?")) {
+            ps.setString(1, style);
+            ps.setString(2, uuid.toString());
+            ps.setLong(3, cosmeticId);
+            return ps.executeUpdate() > 0;
+        }
     }
 
     /** Gives a cosmetic for free; false if they already have it. */

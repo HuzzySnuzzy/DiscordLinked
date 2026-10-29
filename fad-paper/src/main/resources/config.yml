@@ -1,6 +1,6 @@
 # DiscordLinkedFAD: interaction commands, credits, selling items and cosmetics for DiscordLinked.
 #
-# Needs DiscordLinked 0.10.0 or newer on the Velocity proxy (0.16.0 or newer for selling, 0.18.0 for cosmetics). The
+# Needs DiscordLinked 0.10.0 or newer on the Velocity proxy (0.16.0 or newer for selling, 0.18.0 for cosmetics, 0.20.0 for auras and particle looks). The
 # proxy keeps everyone's credits, shows interactions on every server and in Discord, and puts it all on the website.
 #
 # Credits themselves (their name, how many players get for playing and for advancements) are set on the
@@ -78,8 +78,9 @@ cosmetics:
   prefix-priority: 150
   # Add a space after the prefix.
   prefix-space: true
-  # Trails: how often (in ticks, 20 = a second) and how many particles appear behind walking players.
-  trail-interval-ticks: 3
+  # Trails (while walking) and auras (while standing still): how often they're drawn, in ticks (20 = a second;
+  # lower = smoother spinning shapes, more particles), and how many particles a "cloud" shape has.
+  trail-interval-ticks: 2
   trail-particles: 2
 
 messages:

@@ -144,7 +144,7 @@ its own leaderboard, made for people building farms and factories. Needs Discord
 **Cosmetics.** Shop → **Cosmetics** on the website sells things that aren't items, for credits only. They're
 bought once and kept; players switch them on and off under **Your unlocks** on their own profile (click your
 name in the top bar). One of each kind is on at a time, and a new purchase is switched on straight away. Needs
-DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers.
+DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers (0.20.0 for auras and particle looks).
 
 - **Prefixes** in front of the player's name in chat and the tab list, with `&` colour codes (`&b[Builder]`,
   `&6&l[Tycoon]`, hex as `&#ff88cc`). With **LuckPerms** on a server they're LuckPerms prefixes, so every chat
@@ -154,8 +154,14 @@ DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers.
   show it for players without one (or set up LuckPerms' prefix stacking to show both). Without LuckPerms the
   prefix goes in front of the player's display name.
 - **Trails**: particles behind the player while they walk (hearts, flames, music notes, cherry petals, snow,
-  …). Nothing shows while they're in spectator mode, invisible or vanished. `cosmetics.trail-interval-ticks` and
-  `cosmetics.trail-particles` set how often and how many.
+  …). **Auras**: particles around them while they stand still (shown after half a second without moving).
+  Nothing shows while they're in spectator mode, invisible or vanished.
+- Trails and auras are bought per particle type, and buying one gives every look of it: next to it under **Your
+  unlocks**, one menu picks the look (cloud, ring at the feet, halo, orbit, helix or wings, each still,
+  spinning, pulsing (wings flap) or rising) and one the colour (the particle's own, rainbow, a preset or any
+  custom colour; a colour draws the particles as coloured dust). Changes show in game straight away, and the
+  previews on the website use the same shapes. `cosmetics.trail-interval-ticks` (how often they're drawn,
+  default 2) and `cosmetics.trail-particles` (how many particles a cloud has) are in DiscordLinkedFAD's config.yml.
 - **Profile cards**: a picture behind the player's name in the Players list, fading out to the right, and at
   the top of their profile. The settings owner makes them: Shop → Cosmetics → **Edit** → **New profile card**,
   drop in a PNG, JPEG or GIF (up to 8 MB) and set a price. Pictures are re-saved (only the pixels are kept) and
@@ -165,7 +171,7 @@ DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers.
   players while it's on (hits, arrows, tridents, their pets, fire, harmful potions). It starts working
   `keep-inventory-delay-minutes` after it's switched on (default 5), so it can't be switched on in the middle
   of a fight.
-- The shop starts with a few prefixes, eight trails and KeepInventory; they're only examples. In **Edit**
+- The shop starts with a few prefixes, eight trails, six auras and KeepInventory; they're only examples. In **Edit**
   (Shop → Cosmetics → **Edit cosmetics**, or **Edit cosmetics** in Settings → Shop) the settings owner adds
   new ones, changes names, prefix texts, trail particles and prices, takes things off sale (owners keep them)
   or deletes them (everyone who paid gets their credits back). A player's profile has **Give for free** and **Take away** for
@@ -415,8 +421,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.19.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.19.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.19.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.20.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.20.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.20.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

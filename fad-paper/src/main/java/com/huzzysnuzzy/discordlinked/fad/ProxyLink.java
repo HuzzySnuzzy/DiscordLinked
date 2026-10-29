@@ -286,7 +286,13 @@ final class ProxyLink implements PluginMessageListener {
                 // What a player bought on the website and uses: prefix, trail, KeepInventory.
                 case "COSMETICS" -> {
                     UUID uuid = UUID.fromString(in.readUTF());
-                    Cosmetics.State state = new Cosmetics.State(in.readUTF(), in.readUTF(), in.readLong());
+                    String prefix = in.readUTF();
+                    String trail = in.readUTF();
+                    long keepInventoryFrom = in.readLong();
+                    // Proxies before 0.20 stop here: no trail looks and no auras.
+                    boolean more = in.available() > 0;
+                    Cosmetics.State state = new Cosmetics.State(prefix, trail, more ? in.readUTF() : "",
+                            more ? in.readUTF() : "", more ? in.readUTF() : "", keepInventoryFrom);
                     Player player = Bukkit.getPlayer(uuid);
                     if (player != null) {
                         player.getScheduler().run(plugin, task -> plugin.cosmetics().apply(player, state), null);

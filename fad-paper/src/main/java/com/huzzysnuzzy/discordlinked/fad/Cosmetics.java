@@ -4,6 +4,7 @@ import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
@@ -39,17 +40,34 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Cosmetics players bought on the website, as the proxy says they use them: a chat prefix (through LuckPerms when
- * it's installed, else in front of their name in chat and the tab list), a particle trail while they walk, and
- * KeepInventory, which keeps their items and XP when they die but stops them from hurting other players.
+ * it's installed, else in front of their name in chat and the tab list), a particle trail while they walk, a
+ * particle aura while they stand still (both in the shape, animation and colour they picked), and KeepInventory, which keeps their items and XP when they die but stops them from hurting other players.
  *
  * <p>Works on Folia: everything about a player runs on that player's own scheduler or in their events.
  */
 final class Cosmetics implements Listener {
 
-    /** What a player uses. {@code keepInventoryFrom}: epoch millis it works from, 0 = off. */
-    record State(String prefix, String trail, long keepInventoryFrom) {
-        static final State NONE = new State("", "", 0);
+    /**
+     * What a player uses. Trail and aura are particle names ("" = none) with their look ("shape;animation;colour").
+     * {@code keepInventoryFrom}: epoch millis it works from, 0 = off.
+     */
+    record State(String prefix, String trail, String trailStyle, String aura, String auraStyle, long keepInventoryFrom) {
+        static final State NONE = new State("", "", "", "", "", 0);
+
+        boolean sameParticles(State other) {
+            return trail.equals(other.trail) && trailStyle.equals(other.trailStyle) && aura.equals(other.aura)
+                    && auraStyle.equals(other.auraStyle);
+        }
     }
+
+    /** One particle effect, ready to draw. */
+    private record Effect(Particle particle, ParticleShapes.Style style) {
+    }
+
+    private static final ParticleShapes.Style TRAIL_STYLE = new ParticleShapes.Style("cloud", "still", "");
+    private static final ParticleShapes.Style AURA_STYLE = new ParticleShapes.Style("orbit", "spin", "");
+    /** Standing still this long (in ticks) before the aura shows. */
+    private static final int STILL_TICKS = 10;
 
     private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.builder()
             .character('&').hexColors().build();
@@ -87,8 +105,8 @@ final class Cosmetics implements Listener {
         if (!old.prefix().equals(state.prefix())) {
             applyPrefix(player, state.prefix());
         }
-        if (!old.trail().equals(state.trail()) || !trails.containsKey(uuid)) {
-            startTrail(player, state.trail());
+        if (!old.sameParticles(state) || !trails.containsKey(uuid)) {
+            startEffects(player, state);
         }
     }
 
@@ -118,31 +136,72 @@ final class Cosmetics implements Listener {
 
     // ---- Trails ----
 
-    private void startTrail(Player player, String key) {
+    /** Starts (or restarts) the player's trail and aura: the trail while they move, the aura while they stand still. */
+    private void startEffects(Player player, State state) {
         UUID uuid = player.getUniqueId();
         ScheduledTask old = trails.remove(uuid);
         if (old != null) {
             old.cancel();
         }
-        Particle particle = particle(key);
-        if (particle == null) {
+        Effect trail = effect(state.trail(), state.trailStyle(), TRAIL_STYLE);
+        Effect aura = effect(state.aura(), state.auraStyle(), AURA_STYLE);
+        if (trail == null && aura == null) {
             return;
         }
         Location[] last = {player.getLocation()};
+        long[] ticks = {0, 0}; // ticks running, ticks standing still
         long interval = Math.max(1, plugin.settings().trailIntervalTicks);
         ScheduledTask task = player.getScheduler().runAtFixedRate(plugin, t -> {
             Location now = player.getLocation();
             Location before = last[0];
             last[0] = now;
-            boolean moved = now.getWorld().equals(before.getWorld()) && now.distanceSquared(before) > 0.0025;
-            if (!moved || hidden(player)) {
+            ticks[0] += interval;
+            boolean moved = !now.getWorld().equals(before.getWorld()) || now.distanceSquared(before) > 0.0025;
+            ticks[1] = moved ? 0 : ticks[1] + interval;
+            if (hidden(player)) {
                 return;
             }
-            now.getWorld().spawnParticle(particle, now.clone().add(0, 0.15, 0), plugin.settings().trailParticles,
-                    0.18, 0.05, 0.18, 0.01);
+            if (moved && trail != null) {
+                draw(player, now, trail, ticks[0]);
+            } else if (!moved && aura != null && ticks[1] >= STILL_TICKS) {
+                draw(player, now, aura, ticks[0]);
+            }
         }, () -> trails.remove(uuid), interval, interval);
         if (task != null) {
             trails.put(uuid, task);
+        }
+    }
+
+    private Effect effect(String particle, String style, ParticleShapes.Style fallback) {
+        Particle p = particle(particle);
+        return p == null ? null : new Effect(p, ParticleShapes.Style.parse(style, fallback));
+    }
+
+    private void draw(Player player, Location feet, Effect effect, long tick) {
+        ParticleShapes.Style style = effect.style();
+        String color = style.color();
+        boolean dust = !color.isEmpty();
+        for (ParticleShapes.Point point : ParticleShapes.points(style, tick, player.getBodyYaw(), plugin.settings().trailParticles)) {
+            Location at = feet.clone().add(point.x(), point.y(), point.z());
+            if (dust) {
+                feet.getWorld().spawnParticle(Particle.DUST, at, 1, 0, 0, 0, 0,
+                        new Particle.DustOptions(dustColor(color, tick, point.index()), 0.9f));
+            } else {
+                feet.getWorld().spawnParticle(effect.particle(), at, 1, 0, 0, 0, 0);
+            }
+        }
+    }
+
+    /** "#rrggbb", or "rainbow": colours running along the shape and changing over time. */
+    private static Color dustColor(String color, long tick, int index) {
+        if (color.equals("rainbow")) {
+            float hue = ((tick * 0.02f) + index * 0.07f) % 1f;
+            return Color.fromRGB(java.awt.Color.HSBtoRGB(hue, 0.85f, 1f) & 0xFFFFFF);
+        }
+        try {
+            return Color.fromRGB(Integer.parseInt(color.substring(1), 16));
+        } catch (RuntimeException e) {
+            return Color.WHITE;
         }
     }
 
@@ -154,7 +213,7 @@ final class Cosmetics implements Listener {
         NamespacedKey namespaced = NamespacedKey.fromString(key);
         Particle particle = namespaced == null ? null : Registry.PARTICLE_TYPE.get(namespaced);
         if (particle == null || particle.getDataType() != Void.class) {
-            plugin.getLogger().warning("The trail particle '" + key + "' doesn't exist on this server's Minecraft "
+            plugin.getLogger().warning("The particle '" + key + "' doesn't exist on this server's Minecraft "
                     + "version (or needs extra data), so it isn't shown.");
             return null;
         }

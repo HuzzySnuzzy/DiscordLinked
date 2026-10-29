@@ -125,7 +125,7 @@ public final class SettingsEditor {
                             + "Single items are changed on the Shop page.", 1, 100_000),
 
             bool("cosmetics-enabled", "Shop", "Cosmetics shop open",
-                    "Players can buy prefixes, trails, profile cards and KeepInventory. Off: nothing can be bought, "
+                    "Players can buy prefixes, trails, auras, profile cards and KeepInventory. Off: nothing can be bought, "
                             + "but what players have keeps working. The items are made on the Shop page.", false),
             number("keep-inventory-delay-minutes", "Shop", "KeepInventory starts after (minutes)",
                     "So it can't be switched on in the middle of a fight. 0 = right away.", 0, 1440),

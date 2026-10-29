@@ -845,6 +845,7 @@ function renderPlayer() {
 const COSMETIC_KINDS = [
   ['prefix', 'Prefixes', 'prefix', 'Shown in front of your name in chat and the tab list.'],
   ['trail', 'Trails', 'trail', 'Particles that follow you while you walk.'],
+  ['aura', 'Auras', 'aura', 'Particles around you while you stand still.'],
   ['card', 'Profile cards', 'profile card', 'A picture behind your name in the player lists and on your profile.'],
   ['keepinv', 'Quality of life', 'KeepInventory', ''],
 ];
@@ -887,9 +888,25 @@ function unlocksSection(p, cos) {
     } else {
       control = el('span', { class: `badge ${item.equipped ? 'good' : ''}` }, item.equipped ? 'In use' : 'Off');
     }
+    const styled = item.kind === 'trail' || item.kind === 'aura';
+    let look = null;
+    if (styled && self) {
+      // Their own look for it: saved as soon as a menu changes.
+      look = styleEditor(item.myStyle, async (style) => {
+        try {
+          toast((await api('/api/cosmetics/style', { id: item.id, style })).message);
+        } catch (e) {
+          toast(e.message);
+        }
+        refreshCurrentView();
+      });
+    } else if (styled && styleText(item.myStyle)) {
+      sub += ` · ${styleText(item.myStyle)}`;
+    }
     return el('div', { class: `unlock ${item.equipped ? 'on' : ''}` },
       cosmeticPreview(item, { name: p.minecraftName, uuid: p.uuid }, true),
       el('div', { class: 'unlock-text' }, el('div', { class: 'unlock-name' }, item.name), el('div', { class: 'muted' }, sub)),
+      look,
       control,
       cos.canGive && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
         title: `Take ${item.name} away from ${p.minecraftName}?`,
@@ -924,7 +941,7 @@ function unlocksSection(p, cos) {
       self && cos.open && el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics' }, 'Get more')),
     el('div', { class: 'card panel unlocks' },
       groups.length ? groups.flatMap(([title, items]) => [el('div', { class: 'unlock-group' }, title), ...items.map(row)])
-        : el('p', { class: 'muted' }, self ? 'Nothing yet: prefixes, trails, profile cards and KeepInventory are in the Shop.'
+        : el('p', { class: 'muted' }, self ? 'Nothing yet: prefixes, trails, auras, profile cards and KeepInventory are in the Shop.'
           : 'No cosmetics yet.'),
       give),
   ];
@@ -2019,7 +2036,7 @@ function renderSettings() {
     // The cosmetics themselves (prefixes, trails, cards) are edited in the shop; link straight to it.
     group.fields.some((f) => f.key === 'cosmetics-enabled') && el('div', { class: 'setting' },
       el('div', { class: 'setting-text' },
-        el('div', { class: 'setting-label' }, 'Prefixes, trails, profile cards and KeepInventory'),
+        el('div', { class: 'setting-label' }, 'Prefixes, trails, auras, profile cards and KeepInventory'),
         el('div', { class: 'setting-help' }, 'Add new ones, rename them, change their text or price, take them off sale or delete them (buyers get their credits back).')),
       el('div', { class: 'setting-input' }, el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics',
         onclick: () => { cos.edit = true; } }, 'Edit cosmetics')))));
@@ -2630,7 +2647,7 @@ function shopItemDialog(item) {
 }
 $('shop-item-cancel').addEventListener('click', () => $('shop-item-dialog').close());
 
-// ---- Shop → Cosmetics: prefixes, trails, profile cards and KeepInventory, bought once with credits ----
+// ---- Shop → Cosmetics: prefixes, trails, auras, profile cards and KeepInventory, bought once with credits ----
 
 /** Trail particles: [name, emoji for the preview]. */
 const PARTICLES = {
@@ -2647,7 +2664,174 @@ const PARTICLES = {
   trial_spawner_detection: ['Trial flames', '🔥'], ominous_spawning: ['Ominous', '🕸️'], dust_plume: ['Dust', '💨'],
 };
 const particleName = (key) => PARTICLES[key]?.[0] || titleCase(key);
-const DEFAULT_PRICES = { prefix: 200, trail: 300, card: 250, keepinv: 750 };
+const DEFAULT_PRICES = { prefix: 200, trail: 300, aura: 350, card: 250, keepinv: 750 };
+
+// ---- Trail and aura looks: shape, animation and colour ----
+
+const STYLE_SHAPES = [['cloud', 'Cloud'], ['ring', 'Ring at the feet'], ['halo', 'Halo'], ['orbit', 'Orbit'],
+  ['helix', 'Helix'], ['wings', 'Wings']];
+const STYLE_ANIMATIONS = [['still', 'Still'], ['spin', 'Spin'], ['pulse', 'Pulse (wings flap)'], ['rise', 'Rise']];
+const STYLE_COLORS = [['', 'Particle\'s own'], ['rainbow', 'Rainbow'], ['#ff4d4d', 'Red'], ['#ff9f1c', 'Orange'],
+  ['#ffe14d', 'Yellow'], ['#7ddc3a', 'Lime'], ['#2ecc71', 'Green'], ['#3ad6e0', 'Aqua'], ['#4d7cff', 'Blue'],
+  ['#a55eea', 'Purple'], ['#ff6fb5', 'Pink'], ['#ffffff', 'White'], ['custom', 'Custom…']];
+const styleLabel = (list, key) => list.find(([k]) => k === key)?.[1] || key;
+/** "Halo · Spin · Pink"; nothing for a plain still cloud. */
+function styleText(style) {
+  if (!style || style.shape === 'cloud' && style.animation === 'still' && !style.color) return '';
+  const color = !style.color ? '' : STYLE_COLORS.find(([k]) => k === style.color)?.[1] || 'Custom colour';
+  return [styleLabel(STYLE_SHAPES, style.shape), styleLabel(STYLE_ANIMATIONS, style.animation).replace(/ \(.*\)/, ''), color]
+    .filter(Boolean).join(' · ');
+}
+
+/**
+ * Where a trail's or aura's particles are, as offsets from the feet in blocks: the same maths as
+ * DiscordLinkedFAD's ParticleShapes, so the preview looks like the game. Seen from the front (yaw 0).
+ */
+function stylePoints(style, tick) {
+  const pts = [];
+  const anim = style.animation;
+  const pulse = anim === 'pulse' ? 1 + 0.3 * Math.sin(tick * 0.25) : 1;
+  const spin = anim === 'spin' ? tick * 0.22 : 0;
+  const up = (tick % 40) / 40;
+  const bob = anim === 'rise' ? 0.12 * Math.sin(tick * 0.2) : 0;
+  const circle = (y, radius, count) => {
+    const shown = anim === 'spin' ? 3 : count;
+    for (let i = 0; i < shown; i++) {
+      const a = spin + (Math.PI * 2 * i) / shown;
+      pts.push([Math.cos(a) * radius, y, Math.sin(a) * radius, i]);
+    }
+  };
+  switch (style.shape) {
+    case 'ring': circle(anim === 'rise' ? 0.1 + up * 1.9 : 0.1, 0.6 * pulse, 16); break;
+    case 'halo': circle(2.15 + bob, 0.32 * pulse, 12); break;
+    case 'orbit': circle(anim === 'rise' ? 1 + 0.8 * Math.sin(tick * 0.12) : 1, 0.75 * pulse, 10); break;
+    case 'helix': {
+      const r = 0.5 * pulse;
+      if (anim === 'rise') {
+        const y = up * 2;
+        for (let k = 0; k < 2; k++) pts.push([Math.cos(y * Math.PI * 2 + k * Math.PI) * r, y, Math.sin(y * Math.PI * 2 + k * Math.PI) * r, k]);
+      } else {
+        for (let k = 0; k < 2; k++) {
+          for (let i = 0; i < 10; i++) {
+            const y = (2 * i) / 9;
+            const a = y * Math.PI * 1.5 + k * Math.PI + spin;
+            pts.push([Math.cos(a) * r, y, Math.sin(a) * r, k * 10 + i]);
+          }
+        }
+      }
+      break;
+    }
+    case 'wings': {
+      const flap = anim === 'pulse' ? Math.sin(tick * 0.2) : anim === 'spin' ? Math.sin(tick * 0.45) : 0;
+      const open = ((25 + 20 * flap) * Math.PI) / 180;
+      let i = 0;
+      for (const side of [-1, 1]) {
+        for (const [u, v] of WING_OUTLINE) pts.push([-side * u * Math.cos(open), v + bob, -(0.25 + u * Math.sin(open)), i++]);
+      }
+      break;
+    }
+    default: { // cloud: a puff that changes every tick
+      let seed = tick * 9301 + 49297;
+      const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280 - 0.5; };
+      const y = anim === 'rise' ? up * 1.8 : 0.15 + Math.max(0, bob);
+      for (let i = 0; i < 6; i++) pts.push([rnd() * 0.8, y + rnd() * 0.2, rnd() * 0.8, i]);
+    }
+  }
+  return pts;
+}
+const WING_OUTLINE = (() => {
+  const out = [];
+  for (let i = 0; i <= 7; i++) out.push([0.15 + (i / 7) * 0.85, 1.35 + 0.55 * Math.sin((i / 7) * Math.PI * 0.85)]);
+  for (let i = 6; i >= 1; i--) out.push([0.15 + (i / 7) * 0.85, 0.95 + 0.6 * (i / 7) ** 2]);
+  return out;
+})();
+
+/** Every animated particle preview on the page, redrawn 20 times a second while it's in the page. */
+const particlePreviews = new Set();
+let particleTimer = null;
+/** A trail is shown as if walking left: particles stay where they appeared and drift right as they fade. */
+function trailPoints(preview, tick) {
+  const live = preview.live || (preview.live = []);
+  if (tick !== preview.lastTick && tick % 2 === 0) {
+    for (const [x, y, z, index] of stylePoints(preview.style, tick)) live.push({ x, y, z, index, born: tick });
+  }
+  preview.lastTick = tick;
+  while (live.length && tick - live[0].born > 14) live.shift();
+  return live.slice(-60).map((p) => [p.x + (tick - p.born) * 0.13, p.y, p.z, p.index, 1 - (tick - p.born) / 15]);
+}
+function drawParticlePreview(preview, tick) {
+  const { style, icon, field, size } = preview;
+  const pts = preview.trail ? trailPoints(preview, tick) : stylePoints(style, tick);
+  while (field.children.length < pts.length) field.append(el('i', {}, icon));
+  [...field.children].forEach((dot, i) => {
+    const p = pts[i];
+    dot.hidden = !p;
+    if (!p) return;
+    const [x, y, z, index, fade = 1] = p;
+    const scale = 0.75 + 0.25 * Math.max(-1, Math.min(1, z));
+    dot.style.transform = `translate(${(x * size).toFixed(1)}px, ${(-y * size).toFixed(1)}px) scale(${scale.toFixed(2)})`;
+    dot.style.opacity = ((0.55 + 0.45 * scale) * fade).toFixed(2);
+    dot.style.zIndex = z > 0 ? 2 : 0;
+    if (style.color === 'rainbow') dot.style.color = `hsl(${Math.round(((tick * 0.02 + index * 0.07) % 1) * 360)} 90% 60%)`;
+  });
+}
+function tickParticlePreviews() {
+  const tick = Math.floor(performance.now() / 50);
+  for (const preview of particlePreviews) {
+    if (!preview.root.isConnected) particlePreviews.delete(preview);
+    else drawParticlePreview(preview, tick);
+  }
+  if (!particlePreviews.size) {
+    clearInterval(particleTimer);
+    particleTimer = null;
+  }
+}
+/** A head with a trail's or aura's particles around it, moving like in game. */
+function particlePreview(item, style, head, small) {
+  const icon = PARTICLES[item.value]?.[1] || '✦';
+  const colored = !!style.color;
+  const field = el('span', { class: `pfield ${colored ? 'colored' : ''}`, 'aria-hidden': 'true' });
+  if (colored && style.color !== 'rainbow') field.style.color = style.color;
+  // Drawn to scale (a player is 1.8 blocks tall): the head on a faint body, the particles around them.
+  const root = el('div', { class: `cos-preview particles ${small ? 'small' : ''}`, title: [particleName(item.value), styleText(style)].filter(Boolean).join(' · ') },
+    el('span', { class: 'pbody', 'aria-hidden': 'true' }, el('span', { class: 'ptorso' }), head), field);
+  const preview = { root, style, icon: colored ? '●' : icon, field, size: small ? 16 : 28, trail: item.kind === 'trail' };
+  if (reducedMotion()) {
+    for (let t = 0; t <= 12; t++) drawParticlePreview(preview, t);
+  } else {
+    particlePreviews.add(preview);
+    drawParticlePreview(preview, Math.floor(performance.now() / 50));
+    particleTimer ??= setInterval(tickParticlePreviews, 50);
+  }
+  return root;
+}
+
+/**
+ * Two small menus for a trail's or aura's look, shown next to it in Your unlocks: the look (a shape with an
+ * animation, grouped by shape) and the colour (a custom one adds a colour picker). Owning the particle means owning
+ * every look. {@code onChange} gets the new style.
+ */
+function styleEditor(style, onChange) {
+  const current = { ...style };
+  const look = el('select', { 'aria-label': 'Look', title: 'Shape and animation' },
+    STYLE_SHAPES.map(([shape, shapeName]) => el('optgroup', { label: shapeName },
+      STYLE_ANIMATIONS.map(([animation, animationName]) => el('option', { value: `${shape};${animation}` },
+        `${shapeName} · ${animationName.replace(/ \(.*\)/, '')}`)))));
+  look.value = `${current.shape};${current.animation}`;
+  const known = STYLE_COLORS.some(([k]) => k === current.color);
+  const color = el('select', { 'aria-label': 'Colour' }, STYLE_COLORS.map(([k, text]) => el('option', { value: k }, text)));
+  color.value = known ? current.color : 'custom';
+  const picker = el('input', { type: 'color', 'aria-label': 'Custom colour', value: /^#[0-9a-f]{6}$/i.test(current.color) ? current.color : '#ff88cc' });
+  picker.hidden = color.value !== 'custom';
+  const changed = () => {
+    picker.hidden = color.value !== 'custom';
+    [current.shape, current.animation] = look.value.split(';');
+    current.color = color.value === 'custom' ? picker.value.toLowerCase() : color.value;
+    onChange({ ...current });
+  };
+  [look, color, picker].forEach((box) => box.addEventListener('change', changed));
+  return el('div', { class: 'style-editor' }, look, el('span', { class: 'style-color' }, color, picker));
+}
 
 const cos = { data: null, edit: false };
 
@@ -2663,11 +2847,9 @@ function cosmeticPreview(item, who, small = false) {
     case 'prefix':
       return el('div', { class: `cos-preview chat ${small ? 'small' : ''}` },
         el('span', {}, mcText(item.value || ''), ' ', el('span', { class: 'chat-name' }, name), !small && el('span', { class: 'chat-msg' }, ': hiii~')));
-    case 'trail': {
-      const icon = PARTICLES[item.value]?.[1] || '✦';
-      return el('div', { class: `cos-preview trail ${small ? 'small' : ''}`, title: particleName(item.value) },
-        el('span', { class: 'sparks', 'aria-hidden': 'true' }, [1, 2, 3, 4, 5, 6].map(() => el('i', {}, icon))), head);
-    }
+    case 'trail':
+    case 'aura':
+      return particlePreview(item, item.myStyle || item.style || { shape: 'cloud', animation: 'still', color: '' }, head, small);
     case 'card':
       return el('div', { class: `cos-preview cardp ${item.card ? 'has-card' : ''} ${small ? 'small' : ''}` },
         item.card ? cardBackdrop(item.card) : el('span', { class: 'muted cardp-empty' }, 'No picture yet'),
@@ -2745,7 +2927,7 @@ function cosmeticTile(item) {
     el('div', { class: 'cos-info' },
       el('div', { class: 'cos-name' }, item.name,
         item.equipped ? el('span', { class: 'badge good' }, 'In use') : item.owned && el('span', { class: 'badge' }, 'Yours')),
-      item.kind === 'trail' && particleName(item.value).toLowerCase() !== item.name.toLowerCase()
+      (item.kind === 'trail' || item.kind === 'aura') && particleName(item.value).toLowerCase() !== item.name.toLowerCase()
         && el('div', { class: 'muted cos-meta' }, particleName(item.value)),
       item.kind === 'keepinv' && el('p', { class: 'muted cos-desc' }, keepInventoryText(d.keepInventoryDelay)),
       editing && el('div', { class: 'muted cos-meta' }, `${credits(item.price, d.currency)} · ${item.owners} ${item.owners === 1 ? 'player has' : 'players have'} it`
@@ -2759,7 +2941,8 @@ function buyCosmetic(item) {
     title: `Buy ${item.name}?`,
     text: [`${credits(item.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`,
       item.kind === 'keepinv' ? keepInventoryText(d.keepInventoryDelay)
-        : 'It\'s switched on straight away; switch it off any time under Your unlocks on your profile.'],
+        : `It's switched on straight away; switch it off any time under Your unlocks on your profile${
+          item.kind === 'trail' || item.kind === 'aura' ? ', where you also pick its look (halo, wings, helix…) and colour' : ''}.`],
     confirmLabel: item.price ? `Buy for ${credits(item.price, d.currency)}` : 'Get it',
     onConfirm: async () => {
       const result = await api('/api/cosmetics/buy', { id: item.id });
@@ -2805,11 +2988,22 @@ function cosmeticDialog(item, kind = item?.kind) {
       el('p', { class: 'muted' }, 'Colours with & codes: &6 gold, &b aqua, &d pink, &c red, &a green, &#ff8800 any colour; &l bold, &o italic.'),
       preview);
     value = () => input.value;
-  } else if (kind === 'trail') {
+  } else if (kind === 'trail' || kind === 'aura') {
     const select = el('select', { 'aria-label': 'Particle' }, d.particles.map((key) => el('option', { value: key },
       `${PARTICLES[key]?.[1] || '✦'} ${particleName(key)}`)));
     select.value = item?.value || d.particles[0];
-    box.replaceChildren(el('label', { class: 'reason' }, 'Particle', select));
+    const look = item?.style || (kind === 'aura' ? { shape: 'orbit', animation: 'spin', color: '' } : { shape: 'cloud', animation: 'still', color: '' });
+    let preview = el('div');
+    const who = d.buyer.linked ? { name: d.buyer.name, uuid: d.buyer.uuid } : null;
+    const show = () => {
+      const next = cosmeticPreview({ kind, value: select.value, style: look }, who);
+      preview.replaceWith(next);
+      preview = next;
+    };
+    select.addEventListener('change', show);
+    box.replaceChildren(el('label', { class: 'reason' }, 'Particle', select), preview,
+      el('p', { class: 'muted' }, 'Whoever buys it gets every look: they pick the shape, animation and colour under Your unlocks.'));
+    show();
     value = () => select.value;
   } else if (kind === 'card') {
     const file = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif', class: 'offscreen' });

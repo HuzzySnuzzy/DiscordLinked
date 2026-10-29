@@ -12,6 +12,7 @@ import com.huzzysnuzzy.discordlinked.fad.CardImages;
 import com.huzzysnuzzy.discordlinked.fad.Cosmetics;
 import com.huzzysnuzzy.discordlinked.fad.FadActions;
 import com.huzzysnuzzy.discordlinked.fad.Market;
+import com.huzzysnuzzy.discordlinked.fad.ParticleStyle;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
 import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
 import com.huzzysnuzzy.discordlinked.spy.SpyManager;
@@ -90,7 +91,8 @@ public final class WebServer {
     private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
             "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty",
             "GET /api/shop", "POST /api/shop/checkout", "GET /api/market", "POST /api/market/exchange",
-            "GET /api/leaderboard", "GET /api/cosmetics", "POST /api/cosmetics/buy", "POST /api/cosmetics/equip");
+            "GET /api/leaderboard", "GET /api/cosmetics", "POST /api/cosmetics/buy", "POST /api/cosmetics/equip",
+            "POST /api/cosmetics/style");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
             EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
@@ -555,7 +557,8 @@ public final class WebServer {
             case "GET /api/community" -> sendJson(ex, 200, community(staff));
             case "GET /api/leaderboard" -> sendJson(ex, 200, leaderboard(query(ex), session));
             case "GET /api/cosmetics" -> sendJson(ex, 200, cosmeticsJson(session));
-            case "POST /api/cosmetics/buy", "POST /api/cosmetics/equip" -> cosmeticForSelf(ex, path, session);
+            case "POST /api/cosmetics/buy", "POST /api/cosmetics/equip", "POST /api/cosmetics/style" ->
+                    cosmeticForSelf(ex, path, session);
             case "POST /api/cosmetics/save", "POST /api/cosmetics/delete", "POST /api/cosmetics/card",
                  "POST /api/cosmetics/give", "POST /api/cosmetics/revoke" -> cosmeticForOwner(ex, path, session);
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
@@ -1440,8 +1443,26 @@ public final class WebServer {
                 .put("name", c.name())
                 .put("value", c.kind().equals(Cosmetics.CARD) ? null : c.value())
                 .put("card", Cosmetics.cardUrl(c))
+                .put("style", styleJson(c.kind(), Cosmetics.style(c)))
                 .put("price", c.price())
                 .put("forSale", c.forSale());
+    }
+
+    /** A trail's or aura's look, or null for other kinds. */
+    private static DataObject styleJson(String kind, ParticleStyle style) {
+        if (!kind.equals(Cosmetics.TRAIL) && !kind.equals(Cosmetics.AURA)) {
+            return null;
+        }
+        return DataObject.empty().put("shape", style.shape()).put("animation", style.animation()).put("color", style.color());
+    }
+
+    /** A shape, animation and colour sent by the page; null if none was sent (or "reset" asked for). */
+    private static ParticleStyle styleFrom(DataObject body) {
+        if (body.isNull("style") || !body.hasKey("style")) {
+            return null;
+        }
+        DataObject s = body.getObject("style");
+        return ParticleStyle.of(s.getString("shape", ""), s.getString("animation", ""), s.getString("color", ""));
     }
 
     /**
@@ -1465,6 +1486,7 @@ public final class WebServer {
                 continue;
             }
             items.add(cosmeticJson(c).put("owned", mine != null).put("equipped", mine != null && mine.equipped())
+                    .put("myStyle", mine == null ? null : styleJson(c.kind(), Cosmetics.style(c, mine)))
                     .put("owners", manage ? owners.getOrDefault(c.id(), 0L) : null));
         }
         DataObject buyer = DataObject.empty().put("linked", me != null);
@@ -1495,6 +1517,8 @@ public final class WebServer {
         for (OwnedCosmetic owned : cosmetics.owned(uuid)) {
             Cosmetic c = cosmetics.get(owned.cosmeticId());
             items.add(cosmeticJson(c).put("equipped", owned.equipped())
+                    .put("myStyle", styleJson(c.kind(), Cosmetics.style(c, owned)))
+                    .put("customStyle", owned.style() != null)
                     .put("equippedAt", owned.equipped() ? owned.equippedAt().toEpochMilli() : null)
                     .put("paid", owned.paid()).put("acquiredAt", owned.acquiredAt().toEpochMilli()));
         }
@@ -1528,9 +1552,17 @@ public final class WebServer {
         long id = body.getLong("id", 0);
         String actor = session.user.actor() + " (website)";
         Cosmetics cosmetics = plugin.community().cosmetics();
-        Cosmetics.Result result = path.equals("/api/cosmetics/buy")
-                ? cosmetics.buy(me, id, actor)
-                : cosmetics.equip(me.uuid(), me.minecraftName(), me.discordId(), id, body.getBoolean("on", true), actor);
+        Cosmetics.Result result;
+        try {
+            result = switch (path) {
+                case "/api/cosmetics/buy" -> cosmetics.buy(me, id, actor);
+                case "/api/cosmetics/style" -> cosmetics.setStyle(me.uuid(), id, styleFrom(body));
+                default -> cosmetics.equip(me.uuid(), me.minecraftName(), me.discordId(), id, body.getBoolean("on", true), actor);
+            };
+        } catch (IllegalArgumentException e) {
+            sendJson(ex, 400, error(e.getMessage()));
+            return;
+        }
         sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
                 .put("balance", result.balance()).put("error", result.ok() ? null : result.message()));
     }
@@ -1559,7 +1591,8 @@ public final class WebServer {
             switch (path) {
                 case "/api/cosmetics/save" -> {
                     Cosmetic saved = cosmetics.save(id, body.getString("kind", ""), body.getString("name", ""),
-                            body.getString("value", ""), body.getLong("price", 0), body.getBoolean("forSale", true), actor);
+                            body.getString("value", ""), styleFrom(body), body.getLong("price", 0),
+                            body.getBoolean("forSale", true), actor);
                     sendJson(ex, 200, cosmeticJson(saved).put("ok", true));
                 }
                 case "/api/cosmetics/delete" -> {

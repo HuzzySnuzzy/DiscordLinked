@@ -38,11 +38,16 @@ public final class Cosmetics {
 
     public static final String PREFIX = "prefix";
     public static final String TRAIL = "trail";
+    /** Particles around a player while they stand still. */
+    public static final String AURA = "aura";
     public static final String CARD = "card";
     public static final String KEEP_INVENTORY = "keepinv";
-    public static final List<String> KINDS = List.of(PREFIX, TRAIL, CARD, KEEP_INVENTORY);
+    public static final List<String> KINDS = List.of(PREFIX, TRAIL, AURA, CARD, KEEP_INVENTORY);
 
-    /** Particles a trail can use: ones that need no extra data, in every version DiscordLinkedFAD runs on. */
+    /**
+     * Particles a trail or aura can use: ones that need no extra data, in every version DiscordLinkedFAD runs on.
+     * (With a colour picked they're drawn as coloured dust instead.)
+     */
     public static final List<String> PARTICLES = List.of("heart", "flame", "small_flame", "soul_fire_flame", "note",
             "end_rod", "cherry_leaves", "pale_oak_leaves", "snowflake", "enchant", "happy_villager", "angry_villager",
             "glow", "totem_of_undying", "portal", "reverse_portal", "witch", "electric_spark", "wax_on", "wax_off",
@@ -54,9 +59,13 @@ public final class Cosmetics {
     private static final long MAX_PRICE = 1_000_000_000L;
     private static final long PUSH_DELAY_MS = 1500;
 
-    /** What a player has in use. {@code keepInventorySince} is when they switched KeepInventory on, or null. */
-    public record Equipped(Cosmetic prefix, Cosmetic trail, Cosmetic card, Instant keepInventorySince) {
-        static final Equipped NONE = new Equipped(null, null, null, null);
+    /**
+     * What a player has in use, with the look of their trail and aura. {@code keepInventorySince} is when they
+     * switched KeepInventory on, or null.
+     */
+    public record Equipped(Cosmetic prefix, Cosmetic trail, ParticleStyle trailStyle, Cosmetic aura,
+                           ParticleStyle auraStyle, Cosmetic card, Instant keepInventorySince) {
+        static final Equipped NONE = new Equipped(null, null, null, null, null, null, null);
     }
 
     /** What a request did, with a message for the website. {@code balance} is -1 when it's not about credits. */
@@ -100,14 +109,29 @@ public final class Cosmetics {
             }
             Equipped e = inUse.getOrDefault(owned.uuid(), Equipped.NONE);
             inUse.put(owned.uuid(), switch (c.kind()) {
-                case PREFIX -> new Equipped(c, e.trail(), e.card(), e.keepInventorySince());
-                case TRAIL -> new Equipped(e.prefix(), c, e.card(), e.keepInventorySince());
-                case CARD -> new Equipped(e.prefix(), e.trail(), c, e.keepInventorySince());
-                default -> new Equipped(e.prefix(), e.trail(), e.card(), owned.equippedAt());
+                case PREFIX -> new Equipped(c, e.trail(), e.trailStyle(), e.aura(), e.auraStyle(), e.card(), e.keepInventorySince());
+                case TRAIL -> new Equipped(e.prefix(), c, style(c, owned), e.aura(), e.auraStyle(), e.card(), e.keepInventorySince());
+                case AURA -> new Equipped(e.prefix(), e.trail(), e.trailStyle(), c, style(c, owned), e.card(), e.keepInventorySince());
+                case CARD -> new Equipped(e.prefix(), e.trail(), e.trailStyle(), e.aura(), e.auraStyle(), c, e.keepInventorySince());
+                default -> new Equipped(e.prefix(), e.trail(), e.trailStyle(), e.aura(), e.auraStyle(), e.card(), owned.equippedAt());
             });
         }
         catalog = items;
         equipped = inUse;
+    }
+
+    /** A trail's or aura's own look (as the settings owner made it). */
+    public static ParticleStyle style(Cosmetic c) {
+        return ParticleStyle.parse(c.style(), ParticleStyle.defaultFor(c.kind()));
+    }
+
+    /** The look a player uses: what they picked, else the item's own. */
+    public static ParticleStyle style(Cosmetic c, OwnedCosmetic owned) {
+        return ParticleStyle.parse(owned == null ? null : owned.style(), style(c));
+    }
+
+    private static boolean particles(String kind) {
+        return TRAIL.equals(kind) || AURA.equals(kind);
     }
 
     private PluginConfig config() {
@@ -209,6 +233,21 @@ public final class Cosmetics {
         return new Result(true, on ? cosmetic.name() + " is on." : cosmetic.name() + " is off.", -1);
     }
 
+    /** A player picks how their trail or aura looks ({@code style} null = back to the item's own). */
+    public Result setStyle(UUID uuid, long id, ParticleStyle style) throws SQLException {
+        Cosmetic cosmetic = catalog.get(id);
+        if (cosmetic == null || !particles(cosmetic.kind())) {
+            return Result.fail("That can't be styled.");
+        }
+        if (!plugin.database().setOwnedStyle(uuid, id, style == null ? null : style.encode())) {
+            return Result.fail("You don't have " + cosmetic.name() + ".");
+        }
+        reload();
+        push(uuid);
+        return new Result(true, style == null ? cosmetic.name() + " looks like it did in the shop again."
+                : "Saved how " + cosmetic.name() + " looks.", -1);
+    }
+
     /** What a player has, in shop order, for their profile. */
     public List<OwnedCosmetic> owned(UUID uuid) throws SQLException {
         List<OwnedCosmetic> owned = new java.util.ArrayList<>(plugin.database().ownedCosmetics(uuid));
@@ -221,8 +260,8 @@ public final class Cosmetics {
     // ---- The settings owner ----
 
     /** Adds ({@code id} 0) or changes a cosmetic. Throws IllegalArgumentException saying what's wrong. */
-    public Cosmetic save(long id, String kind, String name, String value, long price, boolean forSale, String actor)
-            throws SQLException {
+    public Cosmetic save(long id, String kind, String name, String value, ParticleStyle style, long price,
+                         boolean forSale, String actor) throws SQLException {
         Cosmetic old = id == 0 ? null : catalog.get(id);
         if (id != 0 && old == null) {
             throw new IllegalArgumentException("That cosmetic doesn't exist any more.");
@@ -248,9 +287,9 @@ public final class Cosmetics {
                 }
                 yield text;
             }
-            case TRAIL -> {
+            case TRAIL, AURA -> {
                 if (!PARTICLES.contains(value)) {
-                    throw new IllegalArgumentException("Pick a particle for the trail.");
+                    throw new IllegalArgumentException("Pick a particle.");
                 }
                 yield value;
             }
@@ -261,12 +300,13 @@ public final class Cosmetics {
                 && catalog.values().stream().anyMatch(c -> c.kind().equals(KEEP_INVENTORY))) {
             throw new IllegalArgumentException("There's already a KeepInventory item; change that one.");
         }
-        long saved = plugin.database().saveCosmetic(new Cosmetic(id, k, n, v, price, forSale, old == null ? 0 : old.sort()));
+        String s = particles(k) && style != null ? style.encode() : old == null ? null : old.style();
+        long saved = plugin.database().saveCosmetic(new Cosmetic(id, k, n, v, s, price, forSale, old == null ? 0 : old.sort()));
         reload();
         Cosmetic now = catalog.get(saved);
         plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, (old == null ? "added cosmetic " : "changed cosmetic ")
                 + describe(now) + ": " + config().credits(price) + (forSale ? "" : ", not for sale"), actor);
-        if (old != null && !old.value().equals(v)) {
+        if (old != null && (!old.value().equals(v) || !java.util.Objects.equals(old.style(), s))) {
             pushEveryoneUsing(saved);
         }
         return now;
@@ -309,8 +349,8 @@ public final class Cosmetics {
         Files.createDirectories(cardDirectory);
         String file = "card-" + id + "-" + image.hash() + "." + image.extension();
         Files.write(cardDirectory.resolve(file), image.bytes());
-        plugin.database().saveCosmetic(new Cosmetic(id, card.kind(), card.name(), file, card.price(), card.forSale(),
-                card.sort()));
+        plugin.database().saveCosmetic(new Cosmetic(id, card.kind(), card.name(), file, card.style(), card.price(),
+                card.forSale(), card.sort()));
         if (!card.value().equals(file)) {
             deleteCardFile(card.value());
         }
@@ -373,15 +413,16 @@ public final class Cosmetics {
         return equipped.entrySet().stream().filter(e -> {
             Equipped q = e.getValue();
             return q.prefix() != null && q.prefix().id() == id || q.trail() != null && q.trail().id() == id
-                    || q.card() != null && q.card().id() == id;
+                    || q.aura() != null && q.aura().id() == id || q.card() != null && q.card().id() == id;
         }).map(Map.Entry::getKey).toList();
     }
 
-    /** "prefix Tycoon", "trail Hearts", "profile card Sunset", "KeepInventory". */
+    /** "prefix Tycoon", "trail Hearts", "aura Heart halo", "profile card Sunset", "KeepInventory". */
     static String describe(Cosmetic c) {
         return switch (c.kind()) {
             case PREFIX -> "prefix " + c.name();
             case TRAIL -> "trail " + c.name();
+            case AURA -> "aura " + c.name();
             case CARD -> "profile card " + c.name();
             default -> c.name();
         };
@@ -398,7 +439,9 @@ public final class Cosmetics {
         UUID uuid = connection.getPlayer().getUniqueId();
         Equipped e = config().fadEnabled() ? equipped(uuid) : Equipped.NONE;
         community.bridge().cosmetics(connection, uuid, e.prefix() == null ? "" : e.prefix().value(),
-                e.trail() == null ? "" : e.trail().value(), config().fadEnabled() ? keepInventoryFrom(uuid) : 0);
+                e.trail() == null ? "" : e.trail().value(), e.trail() == null ? "" : e.trailStyle().encode(),
+                e.aura() == null ? "" : e.aura().value(), e.aura() == null ? "" : e.auraStyle().encode(),
+                config().fadEnabled() ? keepInventoryFrom(uuid) : 0);
     }
 
     private void pushEveryoneUsing(long id) {

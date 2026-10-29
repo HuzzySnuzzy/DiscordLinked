@@ -1192,26 +1192,24 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .cos-preview.chat.small { font-size: 11px; white-space: nowrap; overflow: hidden; }
 .chat-name { color: #fff; }
 .chat-msg { color: #c9cdd8; }
-.cos-preview.trail { justify-content: center; background: radial-gradient(circle at 50% 120%, #2f3b62, #121726 70%); }
-.cos-preview.trail .head { position: relative; z-index: 1; margin-top: 24px; }
-.cos-preview.trail.small .head { margin-top: 12px; }
-.sparks { position: absolute; inset: 0; pointer-events: none; }
-.sparks i {
-  position: absolute; left: 50%; bottom: 6px; font-style: normal; font-size: 13px; opacity: 0;
-  animation: spark-rise 2.6s linear infinite;
+/* Trails and auras, to scale: 1 block = 28px (16px when small), feet 5px (3px) from the bottom. */
+.cos-preview.particles { background: radial-gradient(circle at 50% 120%, #2f3b62, #121726 70%); }
+.pbody { position: absolute; left: 50%; bottom: 5px; transform: translateX(-50%); z-index: 1; display: grid; justify-items: center; }
+.cos-preview.particles .head { width: 14px; height: 14px; border-radius: 3px; order: -1; }
+.cos-preview.particles .head-blank { font-size: 9px; }
+.ptorso { width: 14px; height: 36px; border-radius: 4px 4px 2px 2px; background: rgba(255, 255, 255, .13); }
+.cos-preview.particles.small .pbody { bottom: 3px; }
+.cos-preview.particles.small .head { width: 8px; height: 8px; border-radius: 2px; }
+.cos-preview.particles.small .ptorso { width: 8px; height: 20px; }
+.pfield { position: absolute; left: 50%; bottom: 5px; width: 0; height: 0; pointer-events: none; }
+.cos-preview.particles.small .pfield { bottom: 3px; }
+.pfield i {
+  position: absolute; left: 0; top: 0; margin: -.5em 0 0 -.5em; width: 1em; height: 1em; line-height: 1em;
+  text-align: center; font-style: normal; font-size: 11px; transition: none;
 }
-.small .sparks i { font-size: 10px; }
-.sparks i:nth-child(1) { --x: -30px; animation-delay: 0s; }
-.sparks i:nth-child(2) { --x: 22px; animation-delay: .45s; }
-.sparks i:nth-child(3) { --x: -8px; animation-delay: .9s; }
-.sparks i:nth-child(4) { --x: 36px; animation-delay: 1.3s; }
-.sparks i:nth-child(5) { --x: -42px; animation-delay: 1.75s; }
-.sparks i:nth-child(6) { --x: 8px; animation-delay: 2.15s; }
-@keyframes spark-rise {
-  0% { opacity: 0; transform: translate(calc(-50% + var(--x)), 0) scale(.6); }
-  15% { opacity: 1; }
-  100% { opacity: 0; transform: translate(calc(-50% + var(--x) * 1.4), -58px) scale(1.15); }
-}
+.small .pfield i { font-size: 8px; }
+.pfield.colored i { font-size: 9px; text-shadow: 0 0 4px currentColor; }
+.small .pfield.colored i { font-size: 7px; }
 .cos-preview.cardp .name { font-weight: 700; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .75); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cardp-empty { position: absolute; right: 12px; font-size: 12px; }
 .cos-preview.keepinv { justify-content: center; font-size: 26px; background: linear-gradient(135deg, #1d5a42, #123327); }
@@ -1257,10 +1255,18 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 #cosmetic-value { display: grid; gap: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sparks i { animation: none; opacity: .8; transform: translate(calc(-50% + var(--x)), -20px); }
   .cos-tile, .podium-place { transition: none; }
   .cos-tile:hover, .podium-place:hover { transform: none; }
 }
 
 /* Players list: people who only use the website (Discord, no linked Minecraft account). */
 .prow .head-none { border: 1px dashed var(--glass-border); background: none; }
+
+/* Look and colour menus for trails and auras, in their row in Your unlocks. */
+.style-editor { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.style-editor select { width: auto; max-width: 190px; padding-top: 6px; padding-bottom: 6px; font-size: 13px; }
+.style-color { display: flex; gap: 6px; align-items: center; }
+.style-color input[type=color] { width: 34px; height: 30px; padding: 2px; border-radius: 9px; flex: none; }
+@media (max-width: 560px) {
+  .unlock .style-editor { order: 5; flex-basis: 100%; justify-content: flex-start; }
+}
