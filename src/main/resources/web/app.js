@@ -892,7 +892,7 @@ function unlocksSection(p, cos) {
     let look = null;
     if (styled && self) {
       // Their own look for it: saved as soon as a menu changes.
-      look = styleEditor(item.myStyle, async (style) => {
+      look = styleEditor(item.myStyle, item.style, async (style) => {
         try {
           toast((await api('/api/cosmetics/style', { id: item.id, style })).message);
         } catch (e) {
@@ -2811,13 +2811,16 @@ function particlePreview(item, style, head, small) {
  * animation, grouped by shape) and the colour (a custom one adds a colour picker). Owning the particle means owning
  * every look. {@code onChange} gets the new style.
  */
-function styleEditor(style, onChange) {
+function styleEditor(style, fallback, onChange) {
   const current = { ...style };
+  const lookName = (shape, animation) => `${styleLabel(STYLE_SHAPES, shape)} · ${styleLabel(STYLE_ANIMATIONS, animation).replace(/ \(.*\)/, '')}`;
+  // "Default" is the particle's own look; picking it with the particle's own colour clears what they picked.
   const look = el('select', { 'aria-label': 'Look', title: 'Shape and animation' },
+    el('option', { value: '' }, `Default (${lookName(fallback.shape, fallback.animation)})`),
     STYLE_SHAPES.map(([shape, shapeName]) => el('optgroup', { label: shapeName },
-      STYLE_ANIMATIONS.map(([animation, animationName]) => el('option', { value: `${shape};${animation}` },
-        `${shapeName} · ${animationName.replace(/ \(.*\)/, '')}`)))));
-  look.value = `${current.shape};${current.animation}`;
+      STYLE_ANIMATIONS.map(([animation]) => el('option', { value: `${shape};${animation}` }, lookName(shape, animation))))));
+  const isDefault = current.shape === fallback.shape && current.animation === fallback.animation;
+  look.value = isDefault ? '' : `${current.shape};${current.animation}`;
   const known = STYLE_COLORS.some(([k]) => k === current.color);
   const color = el('select', { 'aria-label': 'Colour' }, STYLE_COLORS.map(([k, text]) => el('option', { value: k }, text)));
   color.value = known ? current.color : 'custom';
@@ -2825,9 +2828,9 @@ function styleEditor(style, onChange) {
   picker.hidden = color.value !== 'custom';
   const changed = () => {
     picker.hidden = color.value !== 'custom';
-    [current.shape, current.animation] = look.value.split(';');
+    [current.shape, current.animation] = look.value ? look.value.split(';') : [fallback.shape, fallback.animation];
     current.color = color.value === 'custom' ? picker.value.toLowerCase() : color.value;
-    onChange({ ...current });
+    onChange(!look.value && !current.color ? null : { ...current });
   };
   [look, color, picker].forEach((box) => box.addEventListener('change', changed));
   return el('div', { class: 'style-editor' }, look, el('span', { class: 'style-color' }, color, picker));

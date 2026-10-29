@@ -157,7 +157,7 @@ DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers (0.20.0 for auras and 
   …). **Auras**: particles around them while they stand still (shown after half a second without moving).
   Nothing shows while they're in spectator mode, invisible or vanished.
 - Trails and auras are bought per particle type, and buying one gives every look of it: next to it under **Your
-  unlocks**, one menu picks the look (cloud, ring at the feet, halo, orbit, helix or wings, each still,
+  unlocks**, one menu picks the look (**Default**, the particle's own look, or cloud, ring at the feet, halo, orbit, helix or wings, each still,
   spinning, pulsing (wings flap) or rising) and one the colour (the particle's own, rainbow, a preset or any
   custom colour; a colour draws the particles as coloured dust). Changes show in game straight away, and the
   previews on the website use the same shapes. `cosmetics.trail-interval-ticks` (how often they're drawn,
@@ -421,8 +421,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.20.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.20.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.20.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.20.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.20.1.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.20.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup
