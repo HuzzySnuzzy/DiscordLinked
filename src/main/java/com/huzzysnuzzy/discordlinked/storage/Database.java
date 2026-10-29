@@ -330,6 +330,10 @@ public final class Database implements AutoCloseable {
         } else if (newStyles) {
             seedAuras(); // upgrading from 0.18: standing-still particles are new
         }
+        if (marketState("seeded-colour-particles").isEmpty()) { // new in 0.20.2
+            seedColourParticles();
+            setMarketState("seeded-colour-particles", "1");
+        }
     }
 
     /** A first set so the shop isn't empty; the settings owner can change or delete all of them. */
@@ -380,6 +384,26 @@ public final class Database implements AutoCloseable {
         };
         try (PreparedStatement ps = connection.prepareStatement("INSERT INTO cosmetics (kind, name, value, style, price, "
                 + "for_sale, sort, created_at) VALUES ('aura', ?, ?, ?, ?, 1, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?)")) {
+            for (Object[] row : defaults) {
+                ps.setString(1, (String) row[0]);
+                ps.setString(2, (String) row[1]);
+                ps.setString(3, (String) row[2]);
+                ps.setLong(4, ((Integer) row[3]).longValue());
+                ps.setLong(5, Instant.now().toEpochMilli());
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /** The particles that take a colour (players pick it), as a trail and as an aura. */
+    private void seedColourParticles() throws SQLException {
+        Object[][] defaults = {
+                {"trail", "Coloured dust", "dust", 300},
+                {"aura", "Coloured dust", "dust", 350},
+                {"aura", "Potion swirls", "entity_effect", 350},
+        };
+        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO cosmetics (kind, name, value, price, for_sale, "
+                + "sort, created_at) VALUES (?, ?, ?, ?, 1, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?)")) {
             for (Object[] row : defaults) {
                 ps.setString(1, (String) row[0]);
                 ps.setString(2, (String) row[1]);

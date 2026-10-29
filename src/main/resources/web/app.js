@@ -892,7 +892,7 @@ function unlocksSection(p, cos) {
     let look = null;
     if (styled && self) {
       // Their own look for it: saved as soon as a menu changes.
-      look = styleEditor(item.myStyle, item.style, async (style) => {
+      look = styleEditor(item.myStyle, item.style, item.colorable, async (style) => {
         try {
           toast((await api('/api/cosmetics/style', { id: item.id, style })).message);
         } catch (e) {
@@ -2651,7 +2651,7 @@ $('shop-item-cancel').addEventListener('click', () => $('shop-item-dialog').clos
 
 /** Trail particles: [name, emoji for the preview]. */
 const PARTICLES = {
-  heart: ['Hearts', '❤️'], flame: ['Flames', '🔥'], small_flame: ['Small flames', '🕯️'], soul_fire_flame: ['Soul fire', '💙'],
+  dust: ['Coloured dust', '🎨'], entity_effect: ['Potion swirls', '🌀'], heart: ['Hearts', '❤️'], flame: ['Flames', '🔥'], small_flame: ['Small flames', '🕯️'], soul_fire_flame: ['Soul fire', '💙'],
   note: ['Music notes', '🎵'], end_rod: ['Sparkles', '✨'], cherry_leaves: ['Cherry petals', '🌸'], pale_oak_leaves: ['Pale leaves', '🍂'],
   snowflake: ['Snowflakes', '❄️'], enchant: ['Magic runes', '🔮'], happy_villager: ['Happy sparks', '💚'],
   angry_villager: ['Angry clouds', '💢'], glow: ['Glow', '🌟'], totem_of_undying: ['Totem', '💛'], portal: ['Portal', '🟣'],
@@ -2663,6 +2663,8 @@ const PARTICLES = {
   glow_squid_ink: ['Glow ink', '💎'], squid_ink: ['Ink', '⚫'], egg_crack: ['Egg crack', '🥚'],
   trial_spawner_detection: ['Trial flames', '🔥'], ominous_spawning: ['Ominous', '🕸️'], dust_plume: ['Dust', '💨'],
 };
+/** Particles Minecraft can colour; every other one always looks like itself. */
+const COLORABLE_PARTICLES = new Set(['dust', 'entity_effect']);
 const particleName = (key) => PARTICLES[key]?.[0] || titleCase(key);
 const DEFAULT_PRICES = { prefix: 200, trail: 300, aura: 350, card: 250, keepinv: 750 };
 
@@ -2789,9 +2791,9 @@ function tickParticlePreviews() {
 /** A head with a trail's or aura's particles around it, moving like in game. */
 function particlePreview(item, style, head, small) {
   const icon = PARTICLES[item.value]?.[1] || '✦';
-  const colored = !!style.color;
+  const colored = COLORABLE_PARTICLES.has(item.value);
   const field = el('span', { class: `pfield ${colored ? 'colored' : ''}`, 'aria-hidden': 'true' });
-  if (colored && style.color !== 'rainbow') field.style.color = style.color;
+  if (colored && style.color !== 'rainbow') field.style.color = style.color || '#ffffff';
   // Drawn to scale (a player is 1.8 blocks tall): the head on a faint body, the particles around them.
   const root = el('div', { class: `cos-preview particles ${small ? 'small' : ''}`, title: [particleName(item.value), styleText(style)].filter(Boolean).join(' · ') },
     el('span', { class: 'pbody', 'aria-hidden': 'true' }, el('span', { class: 'ptorso' }), head), field);
@@ -2811,7 +2813,7 @@ function particlePreview(item, style, head, small) {
  * animation, grouped by shape) and the colour (a custom one adds a colour picker). Owning the particle means owning
  * every look. {@code onChange} gets the new style.
  */
-function styleEditor(style, fallback, onChange) {
+function styleEditor(style, fallback, colorable, onChange) {
   const current = { ...style };
   const lookName = (shape, animation) => `${styleLabel(STYLE_SHAPES, shape)} · ${styleLabel(STYLE_ANIMATIONS, animation).replace(/ \(.*\)/, '')}`;
   // "Default" is the particle's own look; picking it with the particle's own colour clears what they picked.
@@ -2822,7 +2824,7 @@ function styleEditor(style, fallback, onChange) {
   const isDefault = current.shape === fallback.shape && current.animation === fallback.animation;
   look.value = isDefault ? '' : `${current.shape};${current.animation}`;
   const known = STYLE_COLORS.some(([k]) => k === current.color);
-  const color = el('select', { 'aria-label': 'Colour' }, STYLE_COLORS.map(([k, text]) => el('option', { value: k }, text)));
+  const color = el('select', { 'aria-label': 'Colour' }, STYLE_COLORS.map(([k, text]) => el('option', { value: k }, k ? text : 'White')));
   color.value = known ? current.color : 'custom';
   const picker = el('input', { type: 'color', 'aria-label': 'Custom colour', value: /^#[0-9a-f]{6}$/i.test(current.color) ? current.color : '#ff88cc' });
   picker.hidden = color.value !== 'custom';
@@ -2833,7 +2835,8 @@ function styleEditor(style, fallback, onChange) {
     onChange(!look.value && !current.color ? null : { ...current });
   };
   [look, color, picker].forEach((box) => box.addEventListener('change', changed));
-  return el('div', { class: 'style-editor' }, look, el('span', { class: 'style-color' }, color, picker));
+  // Only particles Minecraft can colour (dust, potion swirls) get the colour menu.
+  return el('div', { class: 'style-editor' }, look, colorable && el('span', { class: 'style-color' }, color, picker));
 }
 
 const cos = { data: null, edit: false };
@@ -2945,7 +2948,7 @@ function buyCosmetic(item) {
     text: [`${credits(item.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`,
       item.kind === 'keepinv' ? keepInventoryText(d.keepInventoryDelay)
         : `It's switched on straight away; switch it off any time under Your unlocks on your profile${
-          item.kind === 'trail' || item.kind === 'aura' ? ', where you also pick its look (halo, wings, helix…) and colour' : ''}.`],
+          item.kind === 'trail' || item.kind === 'aura' ? `, where you also pick its look (halo, wings, helix…)${item.colorable ? ' and colour' : ''}` : ''}.`],
     confirmLabel: item.price ? `Buy for ${credits(item.price, d.currency)}` : 'Get it',
     onConfirm: async () => {
       const result = await api('/api/cosmetics/buy', { id: item.id });
@@ -3005,7 +3008,7 @@ function cosmeticDialog(item, kind = item?.kind) {
     };
     select.addEventListener('change', show);
     box.replaceChildren(el('label', { class: 'reason' }, 'Particle', select), preview,
-      el('p', { class: 'muted' }, 'Whoever buys it gets every look: they pick the shape, animation and colour under Your unlocks.'));
+      el('p', { class: 'muted' }, 'Whoever buys it gets every look: they pick the shape and animation (and for coloured dust and potion swirls, the colour) under Your unlocks.'));
     show();
     value = () => select.value;
   } else if (kind === 'card') {

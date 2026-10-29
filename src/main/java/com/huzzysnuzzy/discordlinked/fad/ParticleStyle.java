@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
 /**
  * How a trail or standing-still particle effect looks: its shape, how it moves and an optional colour. Stored as
  * {@code shape;animation;colour} (colour empty = the particle's own, {@code rainbow}, or {@code #rrggbb}).
- * DiscordLinkedFAD draws it; a colour turns the particles into coloured dust.
+ * DiscordLinkedFAD draws it. Only particles Minecraft can colour ({@link Cosmetics#COLORABLE}) use the colour.
  */
 public record ParticleStyle(String shape, String animation, String color) {
 

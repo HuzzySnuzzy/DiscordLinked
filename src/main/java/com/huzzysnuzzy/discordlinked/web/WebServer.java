@@ -1444,6 +1444,7 @@ public final class WebServer {
                 .put("value", c.kind().equals(Cosmetics.CARD) ? null : c.value())
                 .put("card", Cosmetics.cardUrl(c))
                 .put("style", styleJson(c.kind(), Cosmetics.style(c)))
+                .put("colorable", Cosmetics.colorable(c))
                 .put("price", c.price())
                 .put("forSale", c.forSale());
     }

@@ -179,21 +179,26 @@ final class Cosmetics implements Listener {
 
     private void draw(Player player, Location feet, Effect effect, long tick) {
         ParticleShapes.Style style = effect.style();
-        String color = style.color();
-        boolean dust = !color.isEmpty();
+        Particle particle = effect.particle();
         for (ParticleShapes.Point point : ParticleShapes.points(style, tick, player.getBodyYaw(), plugin.settings().trailParticles)) {
             Location at = feet.clone().add(point.x(), point.y(), point.z());
-            if (dust) {
-                feet.getWorld().spawnParticle(Particle.DUST, at, 1, 0, 0, 0, 0,
-                        new Particle.DustOptions(dustColor(color, tick, point.index()), 0.9f));
+            // Only dust and potion swirls take a colour; every other particle looks like itself.
+            if (particle == Particle.DUST) {
+                feet.getWorld().spawnParticle(particle, at, 1, 0, 0, 0, 0,
+                        new Particle.DustOptions(color(style.color(), tick, point.index()), 0.9f));
+            } else if (particle == Particle.ENTITY_EFFECT) {
+                feet.getWorld().spawnParticle(particle, at, 1, 0, 0, 0, 0, color(style.color(), tick, point.index()));
             } else {
-                feet.getWorld().spawnParticle(effect.particle(), at, 1, 0, 0, 0, 0);
+                feet.getWorld().spawnParticle(particle, at, 1, 0, 0, 0, 0);
             }
         }
     }
 
-    /** "#rrggbb", or "rainbow": colours running along the shape and changing over time. */
-    private static Color dustColor(String color, long tick, int index) {
+    /** "#rrggbb", "rainbow" (colours running along the shape and changing over time), or "" (white). */
+    private static Color color(String color, long tick, int index) {
+        if (color.isEmpty()) {
+            return Color.WHITE;
+        }
         if (color.equals("rainbow")) {
             float hue = ((tick * 0.02f) + index * 0.07f) % 1f;
             return Color.fromRGB(java.awt.Color.HSBtoRGB(hue, 0.85f, 1f) & 0xFFFFFF);
@@ -205,14 +210,18 @@ final class Cosmetics implements Listener {
         }
     }
 
-    /** A particle that needs no extra data, or null (no trail, or one this Minecraft version doesn't have). */
+    /**
+     * A particle that needs no extra data (or a colour: dust and potion swirls), or null (none, or one this Minecraft
+     * version doesn't have).
+     */
     private Particle particle(String key) {
         if (key.isEmpty()) {
             return null;
         }
         NamespacedKey namespaced = NamespacedKey.fromString(key);
         Particle particle = namespaced == null ? null : Registry.PARTICLE_TYPE.get(namespaced);
-        if (particle == null || particle.getDataType() != Void.class) {
+        if (particle == null || particle.getDataType() != Void.class && particle != Particle.DUST
+                && particle != Particle.ENTITY_EFFECT) {
             plugin.getLogger().warning("The particle '" + key + "' doesn't exist on this server's Minecraft "
                     + "version (or needs extra data), so it isn't shown.");
             return null;

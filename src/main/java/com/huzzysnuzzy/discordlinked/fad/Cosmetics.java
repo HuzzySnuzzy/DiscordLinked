@@ -45,15 +45,18 @@ public final class Cosmetics {
     public static final List<String> KINDS = List.of(PREFIX, TRAIL, AURA, CARD, KEEP_INVENTORY);
 
     /**
-     * Particles a trail or aura can use: ones that need no extra data, in every version DiscordLinkedFAD runs on.
-     * (With a colour picked they're drawn as coloured dust instead.)
+     * Particles a trail or aura can use, in every version DiscordLinkedFAD runs on. Only the {@link #COLORABLE} ones
+     * take a colour; the rest always look like themselves.
      */
-    public static final List<String> PARTICLES = List.of("heart", "flame", "small_flame", "soul_fire_flame", "note",
+    public static final List<String> PARTICLES = List.of("dust", "entity_effect", "heart", "flame", "small_flame", "soul_fire_flame", "note",
             "end_rod", "cherry_leaves", "pale_oak_leaves", "snowflake", "enchant", "happy_villager", "angry_villager",
             "glow", "totem_of_undying", "portal", "reverse_portal", "witch", "electric_spark", "wax_on", "wax_off",
             "scrape", "bubble_pop", "cloud", "crit", "enchanted_hit", "dripping_honey", "falling_nectar",
             "falling_spore_blossom", "sculk_soul", "soul", "white_ash", "composter", "firework", "nautilus", "dolphin",
             "glow_squid_ink", "squid_ink", "egg_crack", "trial_spawner_detection", "ominous_spawning", "dust_plume");
+
+    /** Particles Minecraft can colour: dust, and potion swirls. */
+    public static final java.util.Set<String> COLORABLE = java.util.Set.of("dust", "entity_effect");
 
     private static final Pattern COLOR_CODES = Pattern.compile("&(#[0-9a-fA-F]{6}|[0-9a-fk-orA-FK-OR])");
     private static final long MAX_PRICE = 1_000_000_000L;
@@ -120,14 +123,24 @@ public final class Cosmetics {
         equipped = inUse;
     }
 
+    /** Whether a trail's or aura's particle can be coloured. */
+    public static boolean colorable(Cosmetic c) {
+        return COLORABLE.contains(c.value());
+    }
+
     /** A trail's or aura's own look (as the settings owner made it). */
     public static ParticleStyle style(Cosmetic c) {
-        return ParticleStyle.parse(c.style(), ParticleStyle.defaultFor(c.kind()));
+        return withoutColor(c, ParticleStyle.parse(c.style(), ParticleStyle.defaultFor(c.kind())));
     }
 
     /** The look a player uses: what they picked, else the item's own. */
     public static ParticleStyle style(Cosmetic c, OwnedCosmetic owned) {
-        return ParticleStyle.parse(owned == null ? null : owned.style(), style(c));
+        return withoutColor(c, ParticleStyle.parse(owned == null ? null : owned.style(), style(c)));
+    }
+
+    /** Particles that can't be coloured always look like themselves (whatever was saved before). */
+    private static ParticleStyle withoutColor(Cosmetic c, ParticleStyle style) {
+        return colorable(c) || style.color().isEmpty() ? style : new ParticleStyle(style.shape(), style.animation(), "");
     }
 
     private static boolean particles(String kind) {
@@ -238,6 +251,9 @@ public final class Cosmetics {
         Cosmetic cosmetic = catalog.get(id);
         if (cosmetic == null || !particles(cosmetic.kind())) {
             return Result.fail("That can't be styled.");
+        }
+        if (style != null && !style.color().isEmpty() && !colorable(cosmetic)) {
+            return Result.fail(cosmetic.name() + " can't be coloured.");
         }
         if (!plugin.database().setOwnedStyle(uuid, id, style == null ? null : style.encode())) {
             return Result.fail("You don't have " + cosmetic.name() + ".");

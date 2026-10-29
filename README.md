@@ -158,8 +158,9 @@ DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers (0.20.0 for auras and 
   Nothing shows while they're in spectator mode, invisible or vanished.
 - Trails and auras are bought per particle type, and buying one gives every look of it: next to it under **Your
   unlocks**, one menu picks the look (**Default**, the particle's own look, or cloud, ring at the feet, halo, orbit, helix or wings, each still,
-  spinning, pulsing (wings flap) or rising) and one the colour (the particle's own, rainbow, a preset or any
-  custom colour; a colour draws the particles as coloured dust). Changes show in game straight away, and the
+  spinning, pulsing (wings flap) or rising). Particles Minecraft can colour, **Coloured dust** and **Potion
+  swirls**, also get a colour menu (white, rainbow, a preset or any custom colour); every other particle always
+  keeps its own colour. Changes show in game straight away, and the
   previews on the website use the same shapes. `cosmetics.trail-interval-ticks` (how often they're drawn,
   default 2) and `cosmetics.trail-particles` (how many particles a cloud has) are in DiscordLinkedFAD's config.yml.
 - **Profile cards**: a picture behind the player's name in the Players list, fading out to the right, and at
@@ -171,7 +172,7 @@ DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers (0.20.0 for auras and 
   players while it's on (hits, arrows, tridents, their pets, fire, harmful potions). It starts working
   `keep-inventory-delay-minutes` after it's switched on (default 5), so it can't be switched on in the middle
   of a fight.
-- The shop starts with a few prefixes, eight trails, six auras and KeepInventory; they're only examples. In **Edit**
+- The shop starts with a few prefixes, nine trails, eight auras (including coloured dust and potion swirls) and KeepInventory; they're only examples. In **Edit**
   (Shop → Cosmetics → **Edit cosmetics**, or **Edit cosmetics** in Settings → Shop) the settings owner adds
   new ones, changes names, prefix texts, trail particles and prices, takes things off sale (owners keep them)
   or deletes them (everyone who paid gets their credits back). A player's profile has **Give for free** and **Take away** for
@@ -421,8 +422,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.20.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.20.1.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.20.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.20.2.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.20.2.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.20.2.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup
