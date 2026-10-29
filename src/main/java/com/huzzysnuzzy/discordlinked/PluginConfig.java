@@ -73,7 +73,9 @@ public record PluginConfig(
         boolean messageLogEnabled,
         boolean cosmeticsEnabled,
         int keepInventoryDelayMinutes,
-        int messageLogRetentionDays
+        int messageLogRetentionDays,
+        boolean groupsEnabled,
+        int groupMaxMembers
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -144,7 +146,9 @@ public record PluginConfig(
                 parseBoolean(props, "message-log-enabled"),
                 parseBoolean(props, "cosmetics-enabled"),
                 Math.max(0, Integer.parseInt(props.getProperty("keep-inventory-delay-minutes").trim())),
-                Integer.parseInt(props.getProperty("message-log-retention-days").trim())
+                Integer.parseInt(props.getProperty("message-log-retention-days").trim()),
+                parseBoolean(props, "groups-enabled"),
+                Math.max(0, Integer.parseInt(props.getProperty("group-max-members").trim()))
         );
     }
 

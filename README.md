@@ -141,6 +141,24 @@ its own leaderboard, made for people building farms and factories. Needs Discord
 - If another plugin (like EssentialsX) already has `/sell` or `/worth`, rename DiscordLinkedFAD's commands in
   its config.yml, or use `/discordlinkedfad:sell`.
 
+**Groups: sharing microcredits.** Players team up on the website (Community → **Groups**):
+
+- Anyone linked can make a group and name it anything (up to 32 characters; names are unique). A player is in
+  one group at most.
+- The leader invites players by Minecraft name; they're told in game and accept or decline on the website.
+  `group-max-members` (default 10, 0 = no limit) caps the size.
+- Members share one balance: everything they earn by selling goes into the group, and any member can exchange
+  it for credits (in game or on the website). Their own microcredits move into the group when they join.
+- The leader sees the **group log**: who sold, exchanged, joined and left, with each change and the balance
+  after it. The leader can also rename the group, hand the lead to someone else, remove members and end it.
+- Money moves fairly: leaving, or being removed, takes an equal share out (balance ÷ members). Ending a group
+  splits the whole balance equally across its members (anything that doesn't divide evenly goes to the leader).
+- On the microcredit leaderboard (website, `/mct` in game and in Discord) a group is one place, with its
+  members' heads. Profiles show "shared in <group>" under their microcredits.
+- Admins see every group's log and can **take a group down** (with a reason): it ends and its balance is
+  split equally across the members, who are told why. Everything is in the Logs (**Groups** filter).
+- `groups-enabled=false` stops new groups and members; existing groups keep their balance.
+
 **Cosmetics.** Shop → **Cosmetics** on the website sells things that aren't items, for credits only. They're
 bought once and kept; players switch them on and off under **Your unlocks** on their own profile (click your
 name in the top bar). One of each kind is on at a time, and a new purchase is switched on straight away. Needs
@@ -187,7 +205,7 @@ while they're logged in.
 - **Everyone in your Discord server** (`web-member-access=true`, the default) gets the community view:
   **Home** (who's online and on which server, member and staff counts, newest members, recently online),
   **Players** (the list and simple profiles: Minecraft and Discord identity, member since, online or last seen,
-  credits, playtime and advancements), **Community** (leaderboards and interactions) and the **Shop** (items,
+  credits, playtime and advancements), **Community** (leaderboards, groups and interactions) and the **Shop** (items,
   cosmetics, and selling & exchanging), the last two when DiscordLinkedFAD's features are on. Nothing administrative: no IPs, notes, suspensions, inventories,
   logs, AFK time or credit history. The server enforces this, not just the page.
 - **Admins** (`admin-role-id`) get the admin view below. The **On duty** switch in the top bar (on by
@@ -422,8 +440,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.20.2.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.20.2.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.20.2.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.21.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.21.0.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.21.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

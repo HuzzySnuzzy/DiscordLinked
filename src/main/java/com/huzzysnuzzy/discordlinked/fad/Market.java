@@ -5,7 +5,7 @@ import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
 import com.huzzysnuzzy.discordlinked.storage.CreditAccount;
 import com.huzzysnuzzy.discordlinked.storage.Database;
-import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
+import com.huzzysnuzzy.discordlinked.storage.MicroBoardRow;
 import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ServerConnection;
@@ -304,20 +304,35 @@ public final class Market {
         return "earned".equals(config().microLeaderboard());
     }
 
-    public List<LeaderboardRow> top(int limit) throws SQLException {
-        return plugin.database().leaderboard(byEarned() ? "microEarned" : "micro", limit).stream()
-                .filter(row -> (byEarned() ? row.microEarned() : row.micro()) > 0).toList();
+    /** The best places: players on their own and groups as one. */
+    public List<MicroBoardRow> top(int limit) throws SQLException {
+        List<MicroBoardRow> board = plugin.database().microBoard(byEarned());
+        return board.subList(0, Math.min(limit, board.size()));
     }
 
+    /** A player's place (their group's, if they're in one), or 0 if they're not on the board. */
     public long rank(UUID uuid) throws SQLException {
-        return plugin.database().microRank(uuid, byEarned());
+        List<MicroBoardRow> board = plugin.database().microBoard(byEarned());
+        for (int i = 0; i < board.size(); i++) {
+            MicroBoardRow row = board.get(i);
+            if (row.group() == null ? row.uuid().equals(uuid)
+                    : row.group().members().stream().anyMatch(m -> m.uuid().equals(uuid))) {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /** How a place is named in chat: the player, or the group with how many are in it. */
+    static String placeName(MicroBoardRow row) {
+        return row.group() == null ? row.name() : row.name() + " (" + row.group().members().size() + " players)";
     }
 
     /** /mct in game: the top 10 and where the player stands. */
     void topFromGame(Player player) {
         PluginConfig c = config();
         try {
-            List<LeaderboardRow> top = top(TOP_SIZE);
+            List<MicroBoardRow> top = top(TOP_SIZE);
             if (top.isEmpty()) {
                 player.sendMessage(plugin.messages().minecraft("minecraft.market.top-empty", "currency", c.microNamePlural()));
                 return;
@@ -325,10 +340,10 @@ public final class Market {
             player.sendMessage(plugin.messages().minecraft("minecraft.market.top-header", "currency", c.microNamePlural(),
                     "ranking", byEarned() ? "earned in total" : "held"));
             for (int i = 0; i < top.size(); i++) {
-                LeaderboardRow row = top.get(i);
+                MicroBoardRow row = top.get(i);
                 player.sendMessage(plugin.messages().minecraft(i < 3 ? "minecraft.market.top-line-" + (i + 1)
-                                : "minecraft.market.top-line", "rank", String.valueOf(i + 1), "player", row.name(),
-                        "balance", c.micro(byEarned() ? row.microEarned() : row.micro())));
+                                : "minecraft.market.top-line", "rank", String.valueOf(i + 1), "player", placeName(row),
+                        "balance", c.micro(row.value())));
             }
             Optional<CreditAccount> me = plugin.database().creditAccount(player.getUniqueId());
             long rank = rank(player.getUniqueId());

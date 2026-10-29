@@ -4,6 +4,7 @@ import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
 import com.huzzysnuzzy.discordlinked.storage.CreditAccount;
 import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
+import com.huzzysnuzzy.discordlinked.storage.MicroBoardRow;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.entities.Member;
@@ -223,14 +224,14 @@ public final class FadDiscord {
             return;
         }
         String ranking = market.byEarned() ? "earned in total" : "held";
-        List<LeaderboardRow> top = market.top(10);
+        List<MicroBoardRow> top = market.top(10);
         StringBuilder body = new StringBuilder();
         for (int i = 0; i < top.size(); i++) {
-            LeaderboardRow row = top.get(i);
+            MicroBoardRow row = top.get(i);
             String medal = Market.medal(i + 1);
             body.append(msg("discord.market.top-line", "rank", String.valueOf(i + 1),
-                    "medal", medal.isEmpty() ? "**" + (i + 1) + ".**" : medal, "player", row.name(),
-                    "balance", c.micro(market.byEarned() ? row.microEarned() : row.micro()))).append('\n');
+                    "medal", medal.isEmpty() ? "**" + (i + 1) + ".**" : medal, "player", Market.placeName(row),
+                    "balance", c.micro(row.value()))).append('\n');
         }
         User user = event.getOption("player", event.getUser(), OptionMapping::getAsUser);
         Optional<LinkedAccount> link = plugin.database().findByDiscordId(user.getIdLong());

@@ -11,6 +11,7 @@ import com.huzzysnuzzy.discordlinked.discord.MessageLog;
 import com.huzzysnuzzy.discordlinked.fad.CardImages;
 import com.huzzysnuzzy.discordlinked.fad.Cosmetics;
 import com.huzzysnuzzy.discordlinked.fad.FadActions;
+import com.huzzysnuzzy.discordlinked.fad.Groups;
 import com.huzzysnuzzy.discordlinked.fad.Market;
 import com.huzzysnuzzy.discordlinked.fad.ParticleStyle;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
@@ -27,6 +28,10 @@ import com.huzzysnuzzy.discordlinked.storage.InventorySnapshotRecord;
 import com.huzzysnuzzy.discordlinked.storage.KnownPlayer;
 import com.huzzysnuzzy.discordlinked.storage.LeaderboardRow;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
+import com.huzzysnuzzy.discordlinked.storage.MicroBoardRow;
+import com.huzzysnuzzy.discordlinked.storage.PlayerGroup;
+import com.huzzysnuzzy.discordlinked.storage.GroupInvite;
+import com.huzzysnuzzy.discordlinked.storage.GroupLogEntry;
 import com.huzzysnuzzy.discordlinked.storage.OwnedCosmetic;
 import com.huzzysnuzzy.discordlinked.storage.PendingRestore;
 import com.huzzysnuzzy.discordlinked.storage.PlayerIp;
@@ -92,12 +97,14 @@ public final class WebServer {
             "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty",
             "GET /api/shop", "POST /api/shop/checkout", "GET /api/market", "POST /api/market/exchange",
             "GET /api/leaderboard", "GET /api/cosmetics", "POST /api/cosmetics/buy", "POST /api/cosmetics/equip",
-            "POST /api/cosmetics/style");
+            "POST /api/cosmetics/style", "GET /api/groups", "POST /api/groups/create", "POST /api/groups/invite",
+            "POST /api/groups/cancel-invite", "POST /api/groups/accept", "POST /api/groups/decline", "POST /api/groups/leave",
+            "POST /api/groups/remove", "POST /api/groups/leader", "POST /api/groups/rename", "POST /api/groups/end");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
             EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
             EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST, EventTypes.SHOP_PURCHASE, EventTypes.SALE,
-            EventTypes.EXCHANGE, EventTypes.COSMETIC);
+            EventTypes.EXCHANGE, EventTypes.COSMETIC, EventTypes.GROUP);
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final long MAX_CREDIT_ADJUSTMENT = 1_000_000_000L;
     private static final int MAX_EXPORT_ROWS = 50_000;
@@ -135,7 +142,8 @@ public final class WebServer {
             Map.entry("deaths", Set.of(EventTypes.DEATH)),
             Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)),
             Map.entry("community", Set.of(EventTypes.INTERACTION, EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST,
-                    EventTypes.SHOP_PURCHASE, EventTypes.SALE, EventTypes.EXCHANGE, EventTypes.COSMETIC)),
+                    EventTypes.SHOP_PURCHASE, EventTypes.SALE, EventTypes.EXCHANGE, EventTypes.COSMETIC, EventTypes.GROUP)),
+            Map.entry("groups", Set.of(EventTypes.GROUP)),
             Map.entry("shop", Set.of(EventTypes.SHOP_PURCHASE, EventTypes.COSMETIC)),
             Map.entry("market", Set.of(EventTypes.SALE, EventTypes.EXCHANGE)),
             Map.entry("cosmetics", Set.of(EventTypes.COSMETIC)));
@@ -561,6 +569,12 @@ public final class WebServer {
                     cosmeticForSelf(ex, path, session);
             case "POST /api/cosmetics/save", "POST /api/cosmetics/delete", "POST /api/cosmetics/card",
                  "POST /api/cosmetics/give", "POST /api/cosmetics/revoke" -> cosmeticForOwner(ex, path, session);
+            case "GET /api/groups" -> sendJson(ex, 200, groupsJson(session));
+            case "GET /api/groups/log" -> groupLogForStaff(ex, query(ex));
+            case "POST /api/groups/create", "POST /api/groups/invite", "POST /api/groups/cancel-invite",
+                 "POST /api/groups/accept", "POST /api/groups/decline", "POST /api/groups/leave", "POST /api/groups/remove",
+                 "POST /api/groups/leader", "POST /api/groups/rename", "POST /api/groups/end", "POST /api/groups/takedown" ->
+                    groupAction(ex, path, session);
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
             case "GET /api/shop" -> sendJson(ex, 200, shop(session));
             case "POST /api/shop/checkout" -> shopCheckout(ex, session);
@@ -1136,6 +1150,8 @@ public final class WebServer {
                 .put("micro", account.map(CreditAccount::micro).orElse(0L))
                 .put("microEarned", account.map(CreditAccount::microEarned).orElse(0L))
                 .put("microRank", plugin.community().market().rank(uuid))
+                .put("group", plugin.database().groupOf(uuid).map(g -> DataObject.empty().put("id", g.id())
+                        .put("name", g.name()).put("members", g.members().size())).orElse(null))
                 .put("microCurrency", microCurrency())
                 .put("microTransactions", microTransactions);
     }
@@ -1364,6 +1380,9 @@ public final class WebServer {
         List<Board> boards = boards();
         String key = query.getOrDefault("board", "credits");
         Board board = boards.stream().filter(b -> b.key().equals(key)).findFirst().orElse(boards.get(0));
+        if (board.key().equals("micro")) {
+            return microLeaderboard(boards, board, session);
+        }
         List<UUID> order = new ArrayList<>();
         Map<UUID, String> names = new HashMap<>();
         Map<UUID, Long> values = new HashMap<>();
@@ -1387,14 +1406,8 @@ public final class WebServer {
                         values.put(e.getKey(), (long) e.getValue().currentOn(today));
                     });
         } else {
-            Market market = plugin.community().market();
-            String sort = switch (board.key()) {
-                case "micro" -> market.byEarned() ? "microEarned" : "micro";
-                default -> board.key();
-            };
-            for (LeaderboardRow row : plugin.database().leaderboard(sort, 10_000)) {
+            for (LeaderboardRow row : plugin.database().leaderboard(board.key(), 10_000)) {
                 long value = switch (board.key()) {
-                    case "micro" -> market.byEarned() ? row.microEarned() : row.micro();
                     case "earned" -> row.earned();
                     case "playtime" -> row.activeSeconds();
                     case "advancements" -> row.advancements();
@@ -1425,13 +1438,60 @@ public final class WebServer {
                 .put("board", board.key())
                 .put("label", board.label())
                 .put("unit", board.unit())
-                .put("ranking", board.key().equals("micro") && plugin.community().market().byEarned() ? "earned" : "held")
+                .put("ranking", "held")
                 .put("currency", currency())
                 .put("microCurrency", microCurrency())
                 .put("total", order.size())
                 .put("rows", rows)
                 .put("me", own == null ? null : DataObject.empty().put("uuid", own.uuid().toString())
                         .put("name", own.minecraftName()).put("rank", rank + 1).put("value", rank < 0 ? 0 : values.get(own.uuid())));
+    }
+
+    /** The microcredit leaderboard: players on their own and each group as one place (with its members). */
+    private DataObject microLeaderboard(List<Board> boards, Board board, Sessions.Session session) throws SQLException {
+        Market market = plugin.community().market();
+        List<MicroBoardRow> board0 = plugin.database().microBoard(market.byEarned());
+        LinkedAccount own = ownAccount(session);
+        int rank = -1;
+        DataArray rows = DataArray.empty();
+        for (int i = 0; i < board0.size(); i++) {
+            MicroBoardRow row = board0.get(i);
+            boolean mine = own != null && (row.group() == null ? row.uuid().equals(own.uuid())
+                    : row.group().members().stream().anyMatch(m -> m.uuid().equals(own.uuid())));
+            if (mine) {
+                rank = i;
+            }
+            if (i >= LEADERBOARD_SIZE) {
+                continue;
+            }
+            DataObject json = DataObject.empty().put("uuid", row.uuid().toString()).put("name", row.name())
+                    .put("value", row.value()).put("online", plugin.proxy().getPlayer(row.uuid()).isPresent())
+                    .put("card", row.group() == null ? plugin.community().cosmetics().cardUrl(row.uuid()) : null);
+            if (row.group() != null) {
+                DataArray members = DataArray.empty();
+                row.group().members().forEach(m -> members.add(DataObject.empty().put("uuid", m.uuid().toString())
+                        .put("name", m.name()).put("online", plugin.proxy().getPlayer(m.uuid()).isPresent())));
+                json.put("group", DataObject.empty().put("id", row.group().id()).put("members", members));
+            }
+            rows.add(json);
+        }
+        DataArray list = DataArray.empty();
+        boards.forEach(b -> list.add(DataObject.empty().put("key", b.key()).put("label", b.label())));
+        MicroBoardRow me = rank < 0 ? null : board0.get(rank);
+        return DataObject.empty()
+                .put("enabled", plugin.config().fadEnabled())
+                .put("boards", list)
+                .put("board", board.key())
+                .put("label", board.label())
+                .put("unit", board.unit())
+                .put("ranking", market.byEarned() ? "earned" : "held")
+                .put("currency", currency())
+                .put("microCurrency", microCurrency())
+                .put("total", board0.size())
+                .put("rows", rows)
+                .put("me", own == null ? null : DataObject.empty().put("uuid", own.uuid().toString())
+                        .put("name", me != null && me.group() != null ? me.name() : own.minecraftName())
+                        .put("rank", rank + 1).put("value", me == null ? 0 : me.value()));
     }
 
     // ---- Cosmetics ----
@@ -1615,6 +1675,128 @@ public final class WebServer {
         } catch (IllegalArgumentException e) {
             sendJson(ex, 400, error(e.getMessage()));
         }
+    }
+
+    // ---- Groups ----
+
+    private static final int GROUP_LOG_SIZE = 200;
+
+    private DataObject groupJson(PlayerGroup g, Integer rank) {
+        DataArray members = DataArray.empty();
+        for (PlayerGroup.Member m : g.members()) {
+            members.add(DataObject.empty().put("uuid", m.uuid().toString()).put("name", m.name())
+                    .put("leader", g.isLeader(m.uuid())).put("joinedAt", m.joinedAt().toEpochMilli())
+                    .put("online", plugin.proxy().getPlayer(m.uuid()).isPresent()).put("microEarned", m.microEarned()));
+        }
+        return DataObject.empty().put("id", g.id()).put("name", g.name()).put("leader", g.leader().toString())
+                .put("balance", g.balance()).put("createdAt", g.createdAt().toEpochMilli()).put("rank", rank)
+                .put("members", members);
+    }
+
+    private DataArray groupLogJson(long group) throws SQLException {
+        DataArray log = DataArray.empty();
+        for (GroupLogEntry e : plugin.database().groupLog(group, GROUP_LOG_SIZE)) {
+            log.add(DataObject.empty().put("time", e.time().toEpochMilli()).put("uuid", e.uuid() == null ? null : e.uuid().toString())
+                    .put("name", e.name()).put("kind", e.kind()).put("amount", e.amount()).put("balance", e.balance())
+                    .put("detail", e.detail()));
+        }
+        return log;
+    }
+
+    /** Every group, the viewer's own (with the log and open invitations for its leader) and invitations to them. */
+    private DataObject groupsJson(Sessions.Session session) throws SQLException {
+        Groups groups = plugin.community().groups();
+        LinkedAccount me = ownAccount(session);
+        List<MicroBoardRow> board = plugin.database().microBoard(plugin.community().market().byEarned());
+        Map<Long, Integer> ranks = new HashMap<>();
+        for (int i = 0; i < board.size(); i++) {
+            if (board.get(i).group() != null) {
+                ranks.put(board.get(i).group().id(), i + 1);
+            }
+        }
+        DataArray all = DataArray.empty();
+        PlayerGroup mine = null;
+        for (PlayerGroup g : groups.all()) {
+            all.add(groupJson(g, ranks.get(g.id())));
+            if (me != null && g.members().stream().anyMatch(m -> m.uuid().equals(me.uuid()))) {
+                mine = g;
+            }
+        }
+        DataObject mineJson = null;
+        if (mine != null) {
+            boolean leader = mine.isLeader(me.uuid());
+            mineJson = groupJson(mine, ranks.get(mine.id())).put("isLeader", leader);
+            if (leader) {
+                DataArray pending = DataArray.empty();
+                for (GroupInvite invite : plugin.database().groupInvites(null, mine.id())) {
+                    pending.add(DataObject.empty().put("uuid", invite.uuid().toString()).put("name", invite.name())
+                            .put("time", invite.createdAt().toEpochMilli()));
+                }
+                mineJson.put("invites", pending).put("log", groupLogJson(mine.id()));
+            }
+        }
+        DataArray invites = DataArray.empty();
+        if (me != null && mine == null) {
+            for (GroupInvite invite : plugin.database().groupInvites(me.uuid(), null)) {
+                invites.add(DataObject.empty().put("id", invite.groupId()).put("name", invite.groupName())
+                        .put("by", invite.invitedBy()).put("time", invite.createdAt().toEpochMilli()));
+            }
+        }
+        return DataObject.empty()
+                .put("open", groups.open())
+                .put("linked", me != null)
+                .put("maxMembers", plugin.config().groupMaxMembers())
+                .put("ranking", plugin.community().market().byEarned() ? "earned" : "held")
+                .put("microCurrency", microCurrency())
+                .put("mine", mineJson)
+                .put("invites", invites)
+                .put("groups", all);
+    }
+
+    /** Staff can read any group's log. */
+    private void groupLogForStaff(HttpExchange ex, Map<String, String> query) throws IOException, SQLException {
+        long id = parseLong(query.get("id"));
+        sendJson(ex, 200, DataObject.empty().put("log", groupLogJson(id)));
+    }
+
+    private void groupAction(HttpExchange ex, String path, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Groups groups = plugin.community().groups();
+        String actor = session.user.actor() + " (website)";
+        if (path.equals("/api/groups/takedown")) {
+            if (!session.staff()) {
+                sendJson(ex, 403, error("Only admins can take groups down."));
+                return;
+            }
+            Groups.Result result = groups.takeDown(body.getLong("id", 0), body.getString("reason", ""), actor);
+            sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
+                    .put("error", result.ok() ? null : result.message()));
+            return;
+        }
+        LinkedAccount me = ownAccount(session);
+        if (me == null) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        UUID uuid = parseUuid(body.getString("uuid", ""));
+        long id = body.getLong("id", 0);
+        Groups.Result result = switch (path) {
+            case "/api/groups/create" -> groups.create(me, body.getString("name", ""), actor);
+            case "/api/groups/invite" -> groups.invite(me, body.getString("name", ""), actor);
+            case "/api/groups/cancel-invite" -> groups.cancelInvite(me, uuid);
+            case "/api/groups/accept" -> groups.accept(me, id, actor);
+            case "/api/groups/decline" -> groups.decline(me, id);
+            case "/api/groups/leave" -> groups.leave(me, actor);
+            case "/api/groups/remove" -> groups.remove(me, uuid, actor);
+            case "/api/groups/leader" -> groups.makeLeader(me, uuid, actor);
+            case "/api/groups/rename" -> groups.rename(me, body.getString("name", ""), actor);
+            default -> groups.end(me, actor);
+        };
+        sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
+                .put("error", result.ok() ? null : result.message()));
     }
 
     /** A profile card picture. Only for people logged in to the website. */

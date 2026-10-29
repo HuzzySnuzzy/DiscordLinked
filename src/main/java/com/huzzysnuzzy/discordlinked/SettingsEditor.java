@@ -154,6 +154,10 @@ public final class SettingsEditor {
                     "With dropping prices: hours for a dropped price to recover halfway.", 1, 10_000),
             bool("market-weekly-post", "Market", "Weekly top sellers on Discord",
                     "Every Monday, post last week's top sellers to the interactions channel.", false),
+            bool("groups-enabled", "Market", "Groups",
+                    "Players can make groups that share their microcredits and show as one on the leaderboard. Off: no "
+                            + "new groups or members; existing groups keep their balance.", false),
+            number("group-max-members", "Market", "Most members in a group", "0 = no limit.", 0, 1000),
 
             bool("web-enabled", "Website", "Website enabled",
                     "Turning this off also turns off this page; re-enable it in config.properties.", true),

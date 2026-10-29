@@ -35,6 +35,7 @@ const EVENT_LABELS = {
   SALE: ['Sale', 'good'],
   EXCHANGE: ['Exchange', 'info'],
   COSMETIC: ['Cosmetic', 'warn'],
+  GROUP: ['Group', 'info'],
 };
 
 // ---- Helpers ----
@@ -1395,7 +1396,7 @@ const stat = (label, value, title) => el('div', { class: 'stat', title },
 
 const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
 const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop', DAILY: 'Daily reward',
-  SALE: 'Sold', EXCHANGE: 'Exchange', COSMETIC: 'Cosmetics' };
+  SALE: 'Sold', EXCHANGE: 'Exchange', COSMETIC: 'Cosmetics', GROUP: 'Group' };
 
 function creditsDialog(p, community) {
   const currency = community.currency;
@@ -1425,7 +1426,8 @@ function communitySection(p, c) {
       stat('Advancements', c.advancements.length.toLocaleString()),
       stat('Interactions', `${c.given.toLocaleString()} given · ${c.received.toLocaleString()} received`),
       c.market && stat(c.microRank ? `${c.microCurrency.many} · rank #${c.microRank}` : c.microCurrency.many,
-        micro(c.micro, c.microCurrency)),
+        c.group ? el('span', {}, micro(c.micro, c.microCurrency), el('a', { class: 'stat-sub', href: '#/community/groups' },
+          `shared in ${c.group.name} (${c.group.members} players)`)) : micro(c.micro, c.microCurrency)),
       c.market && stat('Earned by selling', micro(c.microEarned, c.microCurrency))),
     c.favourites.length > 0 && el('div', { class: 'others' },
       el('span', { class: 'muted' }, 'Favourite interactions:'),
@@ -1488,15 +1490,20 @@ const MEDALS = ['🥇', '🥈', '🥉'];
 const communityState = { board: stored('dl-board') || 'credits', stats: null, data: null, filter: '' };
 
 async function loadCommunity() {
-  const interactions = currentRoute().sub === 'interactions';
-  document.querySelectorAll('#community-subtabs a').forEach((a) => a.classList.toggle('active', a.dataset.sub === (interactions ? 'interactions' : '')));
-  $('community-leaderboards').hidden = interactions;
+  const sub = ['interactions', 'groups'].includes(currentRoute().sub) ? currentRoute().sub : '';
+  const interactions = sub === 'interactions';
+  const groups = sub === 'groups';
+  document.querySelectorAll('#community-subtabs a').forEach((a) => a.classList.toggle('active', a.dataset.sub === sub));
+  $('community-leaderboards').hidden = !!sub;
   $('community-interactions').hidden = !interactions;
+  $('community-groups').hidden = !groups;
   try {
-    const [stats, data] = await Promise.all([api('/api/community'),
-      interactions ? null : api(`/api/leaderboard?board=${encodeURIComponent(communityState.board)}`)]);
+    const [stats, data, groupData] = await Promise.all([api('/api/community'),
+      sub ? null : api(`/api/leaderboard?board=${encodeURIComponent(communityState.board)}`),
+      groups ? api('/api/groups') : null]);
     communityState.stats = stats;
     if (data) communityState.data = data;
+    if (groupData) groupState.data = groupData;
   } catch (e) {
     $('community-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
     return;
@@ -1508,9 +1515,11 @@ async function loadCommunity() {
   if (!d.enabled) {
     $('community-leaderboards').hidden = true;
     $('community-interactions').hidden = true;
+    $('community-groups').hidden = true;
     return;
   }
   if (interactions) renderInteractions();
+  else if (groups) renderGroups();
   else {
     renderCommunityStats();
     renderBoard();
@@ -1561,7 +1570,6 @@ function renderBoard() {
       loadBoard();
     },
   }, b.label)));
-  const myUuid = state.me.minecraftUuid;
   const filter = el('input', { type: 'search', placeholder: 'Find a player…', 'aria-label': 'Find a player on this board' });
   filter.value = communityState.filter;
   const body = el('div');
@@ -1574,21 +1582,25 @@ function renderBoard() {
       return;
     }
     if (q) {
-      const matches = ranked.filter(([row]) => row.name.toLowerCase().includes(q));
-      body.replaceChildren(matches.length ? el('div', { class: 'board-rows' }, matches.map(([row, rank]) => boardRow(d, row, rank, myUuid)))
+      const matches = ranked.filter(([row]) => [row.name, ...(row.group?.members || []).map((m) => m.name)]
+        .some((name) => name.toLowerCase().includes(q)));
+      body.replaceChildren(matches.length ? el('div', { class: 'board-rows' }, matches.map(([row, rank]) => boardRow(d, row, rank)))
         : el('p', { class: 'muted board-empty' }, 'Nobody by that name on this board.'));
       return;
     }
     body.replaceChildren(...[
-      el('div', { class: 'podium' }, ranked.slice(0, 3).map(([row, rank]) => podiumPlace(d, row, rank, myUuid))),
-      ranked.length > 3 && el('div', { class: 'board-rows' }, ranked.slice(3).map(([row, rank]) => boardRow(d, row, rank, myUuid)))]
+      el('div', { class: 'podium' }, ranked.slice(0, 3).map(([row, rank]) => podiumPlace(d, row, rank))),
+      ranked.length > 3 && el('div', { class: 'board-rows' }, ranked.slice(3).map(([row, rank]) => boardRow(d, row, rank)))]
       .filter(Boolean));
   };
   filter.addEventListener('input', fill);
   fill();
   const me = d.me;
+  const myGroup = me && me.rank && d.rows[me.rank - 1]?.group;
   const standing = me && (me.rank
-    ? el('a', { class: 'board-me', href: playerHref(me.uuid) }, `You're #${me.rank.toLocaleString()} with ${boardValue(d, me.value)}`)
+    ? el('a', { class: 'board-me', href: myGroup ? '#/community/groups' : playerHref(me.uuid) }, myGroup
+      ? `Your group ${me.name} is #${me.rank.toLocaleString()} with ${boardValue(d, me.value)}`
+      : `You're #${me.rank.toLocaleString()} with ${boardValue(d, me.value)}`)
     : el('span', { class: 'board-me muted' }, 'You\'re not on this board yet.'));
   $('community-board').replaceChildren(...[
     el('div', { class: 'board-head' },
@@ -1597,26 +1609,41 @@ function renderBoard() {
       standing, filter),
     body,
     d.total > d.rows.length && el('p', { class: 'muted board-more' },
-      `Showing the top ${d.rows.length} of ${d.total.toLocaleString()} players.`)].filter(Boolean));
+      `Showing the top ${d.rows.length} of ${d.total.toLocaleString()} ${d.board === 'micro' ? 'players and groups' : 'players'}.`)].filter(Boolean));
 }
 
-function podiumPlace(d, row, rank, myUuid) {
-  return el('a', { class: `podium-place place-${rank} ${row.card ? 'has-card' : ''} ${row.uuid === myUuid ? 'is-me' : ''}`, href: playerHref(row.uuid) },
+/** Whose place a board row is: a player, or a group (its members' heads, linking to the Groups tab). */
+function boardEntry(d, row, rank, size) {
+  const isMe = d.me && d.me.rank === rank;
+  if (!row.group) {
+    return { isMe, href: playerHref(row.uuid), heads: el('img', { class: 'head', src: headUrl(row.uuid, size), alt: '', loading: 'lazy' }),
+      name: el('span', { class: 'name' }, row.name), online: row.online };
+  }
+  const members = row.group.members;
+  return { isMe, href: '#/community/groups',
+    heads: el('span', { class: 'group-heads', title: members.map((m) => m.name).join(', ') },
+      members.slice(0, 3).map((m) => el('img', { class: 'head', src: headUrl(m.uuid, size), alt: '', loading: 'lazy' }))),
+    name: el('span', { class: 'name' }, row.name, ' ', el('span', { class: 'group-tag' }, `${members.length} player${members.length === 1 ? '' : 's'}`)),
+    online: members.some((m) => m.online) };
+}
+
+function podiumPlace(d, row, rank) {
+  const e = boardEntry(d, row, rank, 96);
+  return el('a', { class: `podium-place place-${rank} ${row.card ? 'has-card' : ''} ${row.group ? 'is-group' : ''} ${e.isMe ? 'is-me' : ''}`, href: e.href },
     row.card && cardBackdrop(row.card),
     el('span', { class: 'podium-medal', 'aria-label': `#${rank}` }, MEDALS[rank - 1]),
-    el('img', { class: 'head', src: headUrl(row.uuid, 96), alt: '', loading: 'lazy' }),
-    el('span', { class: 'name' }, row.name),
+    e.heads, e.name,
     el('span', { class: 'podium-value' }, boardValue(d, row.value)),
-    row.online && el('span', { class: 'pill online' }, 'Online'));
+    e.online && el('span', { class: 'pill online' }, 'Online'));
 }
 
-function boardRow(d, row, rank, myUuid) {
-  return el('a', { class: `lrow ${row.card ? 'has-card' : ''} ${row.uuid === myUuid ? 'is-me' : ''}`, href: playerHref(row.uuid) },
+function boardRow(d, row, rank) {
+  const e = boardEntry(d, row, rank, 48);
+  return el('a', { class: `lrow ${row.card ? 'has-card' : ''} ${row.group ? 'is-group' : ''} ${e.isMe ? 'is-me' : ''}`, href: e.href },
     row.card && cardBackdrop(row.card),
     el('span', { class: 'lrow-rank' }, rank <= 3 ? MEDALS[rank - 1] : `#${rank}`),
-    el('img', { class: 'head', src: headUrl(row.uuid, 48), alt: '', loading: 'lazy' }),
-    el('span', { class: 'name' }, row.name),
-    row.online && el('span', { class: 'pill online' }, 'Online'),
+    e.heads, e.name,
+    e.online && el('span', { class: 'pill online' }, 'Online'),
     el('span', { class: 'lrow-value' }, boardValue(d, row.value)));
 }
 
@@ -1657,6 +1684,148 @@ function renderInteractions() {
     state.me.isOwner && el('p', { class: 'muted' }, `Rename ${d.currency.many} or change what players earn in `,
       el('a', { href: '#/settings' }, 'Settings'), '.'));
   $('community-interactions').replaceChildren(el('div', { class: 'grid' }, recent, el('div', { class: 'stack' }, actions, earning)));
+}
+
+// ---- Community → Groups: players sharing their microcredits ----
+
+const groupState = { data: null, logOpen: new Set() };
+const GROUP_LOG_KINDS = { CREATE: 'Made', JOIN: 'Joined', LEAVE: 'Left', REMOVED: 'Removed', SALE: 'Sold', EXCHANGE: 'Exchanged',
+  RENAME: 'Renamed', LEADER: 'New leader', GROUP: 'Moved' };
+
+/** Runs a group action, shows its message and reloads the tab. */
+async function groupAction(path, body = {}) {
+  try {
+    toast((await api(`/api/groups/${path}`, body)).message);
+  } catch (e) {
+    toast(e.message);
+  }
+  await loadCommunity();
+}
+
+function groupLogTable(log, cur) {
+  if (!log.length) return el('p', { class: 'muted' }, 'Nothing yet.');
+  return el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+    el('thead', {}, el('tr', {}, ['Time', 'Who', 'What', 'Change', 'Balance'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, log.map((e) => el('tr', {},
+      el('td', { title: formatTime(e.time) }, timeAgo(e.time)),
+      el('td', {}, e.uuid ? el('a', { class: 'name', href: playerHref(e.uuid) }, e.name) : e.name || '—'),
+      el('td', {}, el('span', { class: 'badge' }, GROUP_LOG_KINDS[e.kind] || e.kind), ' ', el('span', { class: 'muted' }, e.detail || '')),
+      el('td', { class: `nowrap ${e.amount > 0 ? 'credit-plus' : e.amount < 0 ? 'credit-minus' : 'muted'}` },
+        e.amount ? `${e.amount > 0 ? '+' : '−'}${micro(Math.abs(e.amount), cur)}` : '—'),
+      el('td', {}, micro(e.balance, cur)))))));
+}
+
+function memberHeads(members, size = 32) {
+  return el('span', { class: 'group-heads' }, members.slice(0, 5).map((m) =>
+    el('img', { class: 'head', src: headUrl(m.uuid, size), alt: '', title: m.name, loading: 'lazy' })));
+}
+
+function renderGroups() {
+  const d = groupState.data;
+  const cur = d.microCurrency;
+  const parts = [];
+  const rules = el('p', { class: 'muted group-rules' }, `Members share their ${cur.many}: whatever they earn by selling goes into the `
+    + `group, any member can exchange it, and the leader sees who earned and spent what. Joining brings your ${cur.many} in; `
+    + 'leaving (or being removed) takes an equal share out; if the group ends, it\'s split equally. You can be in one group.');
+  const mine = d.mine;
+  if (!d.linked) {
+    parts.push(el('div', { class: 'card panel' }, el('h2', {}, 'Your group'),
+      el('p', { class: 'muted' }, 'Link your Minecraft account to make or join a group (/link in Discord).'), rules));
+  } else if (!mine) {
+    const name = el('input', { type: 'text', maxlength: '32', placeholder: 'Group name', 'aria-label': 'Group name', required: true });
+    const create = el('form', { class: 'group-create', onsubmit: (e) => { e.preventDefault(); groupAction('create', { name: name.value }); } },
+      name, el('button', { class: 'btn', type: 'submit', disabled: !d.open }, 'Make a group'));
+    parts.push(el('div', { class: 'card panel' }, el('h2', {}, 'Your group'),
+      d.invites.length > 0 && el('div', { class: 'group-invites' }, d.invites.map((i) => el('div', { class: 'group-invite' },
+        el('span', {}, el('b', {}, i.by), ' invited you to ', el('b', {}, i.name), el('span', { class: 'muted' }, ` · ${timeAgo(i.time)}`)),
+        el('span', { class: 'actions' },
+          el('button', { class: 'btn btn-small', type: 'button', disabled: !d.open, onclick: () => confirmDialog({
+            title: `Join ${i.name}?`, text: `Your ${cur.many} go into the group and you share everything you earn from now on.`,
+            confirmLabel: 'Join', onConfirm: () => groupAction('accept', { id: i.id }) }) }, 'Join'),
+          el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => groupAction('decline', { id: i.id }) }, 'Decline'))))),
+      d.open ? create : el('p', { class: 'muted' }, 'Groups are switched off right now.'), rules));
+  } else {
+    const leader = mine.isLeader;
+    const members = el('div', { class: 'group-members' }, mine.members.map((m) => el('div', { class: 'group-member' },
+      el('img', { class: 'head', src: headUrl(m.uuid, 48), alt: '', loading: 'lazy' }),
+      el('div', { class: 'group-member-text' },
+        el('a', { class: 'name', href: playerHref(m.uuid) }, m.name),
+        el('div', { class: 'muted' }, [m.leader ? 'Leader' : 'Member', `joined ${shortDate(m.joinedAt)}`,
+          m.online ? 'online' : ''].filter(Boolean).join(' · '))),
+      leader && !m.leader && el('span', { class: 'actions' },
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
+          title: `Make ${m.name} the leader?`, text: 'They can then invite and remove members, rename or end the group, and see the log. You stay a member.',
+          confirmLabel: 'Make leader', onConfirm: () => groupAction('leader', { uuid: m.uuid }) }) }, 'Make leader'),
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
+          title: `Remove ${m.name}?`, text: `They leave with an equal share: ${micro(Math.floor(mine.balance / mine.members.length), cur)}.`,
+          confirmLabel: 'Remove', confirmClass: 'btn-danger', onConfirm: () => groupAction('remove', { uuid: m.uuid }) }) }, 'Remove')))));
+    const invite = leader && (() => {
+      const who = el('input', { type: 'text', placeholder: 'Minecraft name', 'aria-label': 'Player to invite', required: true, list: 'group-invite-names' });
+      return el('form', { class: 'group-create', onsubmit: (e) => { e.preventDefault(); groupAction('invite', { name: who.value }); } },
+        who, el('button', { class: 'btn btn-small', type: 'submit', disabled: !d.open }, 'Invite'));
+    })();
+    const pending = leader && mine.invites.length > 0 && el('div', { class: 'group-pending muted' }, 'Invited: ',
+      mine.invites.map((i) => el('span', { class: 'chip' }, i.name, ' ',
+        el('button', { class: 'chip-x', type: 'button', title: 'Take back the invitation', 'aria-label': `Take back ${i.name}'s invitation`,
+          onclick: () => groupAction('cancel-invite', { uuid: i.uuid }) }, '×'))));
+    const rename = leader && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => openDialog({
+      title: 'Rename the group', text: 'Up to 32 characters. Names are unique.', label: 'Name', value: mine.name, maxLength: 32,
+      confirmLabel: 'Rename', onConfirm: async ({ reason }) => { await api('/api/groups/rename', { name: reason }); toast('Renamed'); loadCommunity(); } }) }, 'Rename');
+    const share = Math.floor(mine.balance / mine.members.length);
+    const leave = leader
+      ? el('button', { class: 'btn btn-danger btn-small', type: 'button', onclick: () => confirmDialog({
+        title: `End ${mine.name}?`, text: `Its ${micro(mine.balance, cur)} are split equally across the ${mine.members.length} member${mine.members.length === 1 ? '' : 's'} (about ${micro(share, cur)} each).`,
+        confirmLabel: 'End the group', confirmClass: 'btn-danger', onConfirm: () => groupAction('end') }) }, 'End the group')
+      : el('button', { class: 'btn btn-danger btn-small', type: 'button', onclick: () => confirmDialog({
+        title: `Leave ${mine.name}?`, text: `You take an equal share with you: ${micro(share, cur)}.`,
+        confirmLabel: 'Leave', confirmClass: 'btn-danger', onConfirm: () => groupAction('leave') }) }, 'Leave');
+    parts.push(el('div', { class: 'card panel group-mine' },
+      el('div', { class: 'group-title' }, el('h2', {}, mine.name), mine.rank && el('span', { class: 'badge good' }, `#${mine.rank} on the leaderboard`),
+        el('span', { class: 'actions' }, rename, leave)),
+      el('div', { class: 'stats-grid' },
+        el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, 'Shared balance'), el('div', { class: 'stat-value' }, micro(mine.balance, cur))),
+        el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, 'Members'), el('div', { class: 'stat-value' },
+          `${mine.members.length}${d.maxMembers ? ` / ${d.maxMembers}` : ''}`))),
+      members, invite, pending, rules));
+    if (leader) {
+      parts.push(el('h2', { class: 'section-title' }, 'Group log'),
+        el('div', { class: 'card panel' }, el('p', { class: 'muted' }, 'Who earned, spent, joined and left. Only you, as the leader, see this.'),
+          groupLogTable(mine.log, cur)));
+    }
+  }
+  const staff = isStaff();
+  parts.push(el('h2', { class: 'section-title' }, `All groups (${d.groups.length})`),
+    d.groups.length ? el('div', { class: 'group-grid' }, d.groups.map((g) => {
+      const log = el('div', { class: 'group-log', hidden: !groupState.logOpen.has(g.id) });
+      const loadLog = async () => {
+        log.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
+        try {
+          log.replaceChildren(groupLogTable((await api(`/api/groups/log?id=${g.id}`)).log, cur));
+        } catch (e) {
+          log.replaceChildren(el('p', { class: 'muted' }, e.message));
+        }
+      };
+      if (groupState.logOpen.has(g.id)) loadLog();
+      const leaderName = g.members.find((m) => m.leader)?.name || '?';
+      return el('div', { class: `card panel group-card ${mine && mine.id === g.id ? 'is-me' : ''}` },
+        el('div', { class: 'group-title' }, el('h3', {}, g.name), g.rank && el('span', { class: 'badge' }, `#${g.rank}`)),
+        el('div', { class: 'group-card-row' }, memberHeads(g.members),
+          el('span', { class: 'muted' }, `${g.members.length} player${g.members.length === 1 ? '' : 's'} · led by ${leaderName}`)),
+        el('div', { class: 'group-card-row' }, el('b', {}, micro(g.balance, cur)), el('span', { class: 'muted' }, ' shared')),
+        el('div', { class: 'muted group-names' }, g.members.map((m) => m.name).join(', ')),
+        staff && el('div', { class: 'actions' },
+          el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => {
+            if (groupState.logOpen.has(g.id)) groupState.logOpen.delete(g.id); else groupState.logOpen.add(g.id);
+            log.hidden = !groupState.logOpen.has(g.id);
+            if (!log.hidden) loadLog();
+          } }, 'Log'),
+          el('button', { class: 'btn btn-danger btn-small', type: 'button', onclick: () => openDialog({
+            title: `Take down ${g.name}?`, text: `The group ends and its ${micro(g.balance, cur)} are split equally across its ${g.members.length} member${g.members.length === 1 ? '' : 's'}. Members are told why.`,
+            confirmLabel: 'Take down', confirmClass: 'btn-danger',
+            onConfirm: async ({ reason }) => { toast((await api('/api/groups/takedown', { id: g.id, reason })).message); loadCommunity(); } }) }, 'Take down')),
+        staff && log);
+    })) : el('p', { class: 'muted' }, 'No groups yet.'));
+  $('community-groups').replaceChildren(...parts.filter(Boolean));
 }
 
 // ---- Moderate page ----
@@ -3534,7 +3703,7 @@ const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK
   'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED', 'ADVANCEMENT',
   'CREDITS_ADJUST', 'COSMETIC']);
 const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'SHOP_PURCHASE', 'SALE', 'EXCHANGE',
-  'COSMETIC', 'JOIN', 'LEAVE']);
+  'COSMETIC', 'GROUP', 'JOIN', 'LEAVE']);
 const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'SALE', 'EXCHANGE', 'COSMETIC', 'ADVANCEMENT', 'JOIN',
   'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE']);
 const pendingRefresh = {};

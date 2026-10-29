@@ -45,7 +45,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.20.2";
+    public static final String VERSION = "0.21.0";
 
     private final ProxyServer proxy;
     private final Logger logger;

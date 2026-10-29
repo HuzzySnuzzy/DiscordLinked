@@ -321,6 +321,44 @@ public final class Database implements AutoCloseable {
                         first_login INTEGER NOT NULL,
                         last_login  INTEGER NOT NULL
                     )""");
+            // Added in 0.21.0: groups of players sharing their microcredits.
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS player_groups (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name        TEXT NOT NULL,
+                        leader_uuid TEXT NOT NULL,
+                        balance     INTEGER NOT NULL DEFAULT 0,
+                        created_at  INTEGER NOT NULL
+                    )""");
+            st.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_player_groups_name ON player_groups (name COLLATE NOCASE)");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS group_members (
+                        minecraft_uuid TEXT PRIMARY KEY,
+                        group_id       INTEGER NOT NULL,
+                        joined_at      INTEGER NOT NULL
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members (group_id)");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS group_invites (
+                        group_id       INTEGER NOT NULL,
+                        minecraft_uuid TEXT NOT NULL,
+                        invited_by     TEXT NOT NULL,
+                        created_at     INTEGER NOT NULL,
+                        PRIMARY KEY (group_id, minecraft_uuid)
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS group_log (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        group_id       INTEGER NOT NULL,
+                        created_at     INTEGER NOT NULL,
+                        minecraft_uuid TEXT,
+                        name           TEXT,
+                        kind           TEXT NOT NULL,
+                        amount         INTEGER NOT NULL,
+                        balance        INTEGER NOT NULL,
+                        detail         TEXT
+                    )""");
+            st.execute("CREATE INDEX IF NOT EXISTS idx_group_log_group ON group_log (group_id, id)");
         }
         boolean newStyles = addColumnIfMissing("cosmetics", "style", "TEXT");
         addColumnIfMissing("cosmetic_owned", "style", "TEXT");
@@ -1408,13 +1446,18 @@ public final class Database implements AutoCloseable {
         }
     }
 
+    /** A player's account. For a group member, {@code micro} is their group's balance (they share it). */
     public synchronized Optional<CreditAccount> creditAccount(UUID uuid) throws SQLException {
-        return findCreditAccount("SELECT * FROM fad_accounts WHERE minecraft_uuid = ?", uuid.toString());
+        return findCreditAccount(ACCOUNT_SELECT + "WHERE a.minecraft_uuid = ?", uuid.toString());
     }
 
     public synchronized Optional<CreditAccount> creditAccountByName(String name) throws SQLException {
-        return findCreditAccount("SELECT * FROM fad_accounts WHERE minecraft_name = ? COLLATE NOCASE", name);
+        return findCreditAccount(ACCOUNT_SELECT + "WHERE a.minecraft_name = ? COLLATE NOCASE", name);
     }
+
+    private static final String ACCOUNT_SELECT = "SELECT a.*, COALESCE((SELECT g.balance FROM group_members m "
+            + "JOIN player_groups g ON g.id = m.group_id WHERE m.minecraft_uuid = a.minecraft_uuid), a.micro) AS micro_held "
+            + "FROM fad_accounts a ";
 
     private Optional<CreditAccount> findCreditAccount(String sql, String param) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -1422,7 +1465,7 @@ public final class Database implements AutoCloseable {
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? Optional.of(new CreditAccount(UUID.fromString(rs.getString("minecraft_uuid")),
                         rs.getString("minecraft_name"), rs.getLong("credits"), rs.getLong("earned"),
-                        rs.getLong("active_seconds"), rs.getLong("afk_seconds"), rs.getLong("micro"),
+                        rs.getLong("active_seconds"), rs.getLong("afk_seconds"), rs.getLong("micro_held"),
                         rs.getLong("micro_earned"))) : Optional.empty();
             }
         }
@@ -1602,7 +1645,7 @@ public final class Database implements AutoCloseable {
             totals.put("credits", rs.getLong(2));
             totals.put("earned", rs.getLong(3));
             totals.put("activeSeconds", rs.getLong(4));
-            totals.put("micro", rs.getLong(5));
+            totals.put("micro", rs.getLong(5) + groupBalances());
             totals.put("microEarned", rs.getLong(6));
         }
         try (Statement st = connection.createStatement();
@@ -2034,6 +2077,386 @@ public final class Database implements AutoCloseable {
         }
     }
 
+    // ---- Groups: players sharing their microcredits ----
+
+    private Long groupIdOf(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT group_id FROM group_members WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        }
+    }
+
+    private long groupBalance(long group) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT balance FROM player_groups WHERE id = ?")) {
+            ps.setLong(1, group);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    private long groupBalances() throws SQLException {
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COALESCE(SUM(balance), 0) FROM player_groups")) {
+            return rs.next() ? rs.getLong(1) : 0;
+        }
+    }
+
+    private void addToGroup(long group, long amount) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE player_groups SET balance = balance + ? WHERE id = ?")) {
+            ps.setLong(1, amount);
+            ps.setLong(2, group);
+            ps.executeUpdate();
+        }
+    }
+
+    private void insertGroupLog(long group, UUID uuid, String name, String kind, long amount, long balance, String detail)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO group_log (group_id, created_at, "
+                + "minecraft_uuid, name, kind, amount, balance, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setLong(1, group);
+            ps.setLong(2, Instant.now().toEpochMilli());
+            ps.setString(3, uuid == null ? null : uuid.toString());
+            ps.setString(4, name);
+            ps.setString(5, kind);
+            ps.setLong(6, amount);
+            ps.setLong(7, balance);
+            ps.setString(8, detail);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A personal microcredit entry for money moving between a player and their group (not "earned"). */
+    private long movePersonalMicro(UUID uuid, long amount, String detail, String actor) throws SQLException {
+        long balance = microBalance(uuid) + amount;
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE fad_accounts SET micro = ? WHERE minecraft_uuid = ?")) {
+            ps.setLong(1, balance);
+            ps.setString(2, uuid.toString());
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO micro_transactions (minecraft_uuid, amount, balance, kind, detail, actor, created_at) "
+                        + "VALUES (?, ?, ?, 'GROUP', ?, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, amount);
+            ps.setLong(3, balance);
+            ps.setString(4, detail);
+            ps.setString(5, actor);
+            ps.setLong(6, Instant.now().toEpochMilli());
+            ps.executeUpdate();
+        }
+        return balance;
+    }
+
+    /** Every group with its members, biggest balance first. */
+    public synchronized List<PlayerGroup> groups() throws SQLException {
+        Map<Long, List<PlayerGroup.Member>> members = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT m.group_id, m.minecraft_uuid, m.joined_at, COALESCE(a.minecraft_name, "
+                     + "l.minecraft_name, '?') AS name, COALESCE(a.micro_earned, 0) AS earned FROM group_members m "
+                     + "LEFT JOIN fad_accounts a ON a.minecraft_uuid = m.minecraft_uuid "
+                     + "LEFT JOIN linked_accounts l ON l.minecraft_uuid = m.minecraft_uuid ORDER BY m.joined_at")) {
+            while (rs.next()) {
+                members.computeIfAbsent(rs.getLong("group_id"), id -> new ArrayList<>()).add(new PlayerGroup.Member(
+                        UUID.fromString(rs.getString("minecraft_uuid")), rs.getString("name"),
+                        Instant.ofEpochMilli(rs.getLong("joined_at")), rs.getLong("earned")));
+            }
+        }
+        List<PlayerGroup> groups = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM player_groups ORDER BY balance DESC, name COLLATE NOCASE")) {
+            while (rs.next()) {
+                long id = rs.getLong("id");
+                groups.add(new PlayerGroup(id, rs.getString("name"), UUID.fromString(rs.getString("leader_uuid")),
+                        rs.getLong("balance"), Instant.ofEpochMilli(rs.getLong("created_at")),
+                        List.copyOf(members.getOrDefault(id, List.of()))));
+            }
+        }
+        return groups;
+    }
+
+    public synchronized Optional<PlayerGroup> group(long id) throws SQLException {
+        return groups().stream().filter(g -> g.id() == id).findFirst();
+    }
+
+    public synchronized Optional<PlayerGroup> groupOf(UUID uuid) throws SQLException {
+        Long id = groupIdOf(uuid);
+        return id == null ? Optional.empty() : group(id);
+    }
+
+    public synchronized boolean groupNameTaken(String name, long exceptId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM player_groups WHERE name = ? COLLATE NOCASE AND id <> ?")) {
+            ps.setString(1, name);
+            ps.setLong(2, exceptId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    /**
+     * Makes a group led by the player, moving their microcredits into it. Returns its id, or -1 if they're already
+     * in a group.
+     */
+    public synchronized long createGroup(UUID leader, String leaderName, String name) throws SQLException {
+        return transaction(() -> {
+            if (groupIdOf(leader) != null) {
+                return -1L;
+            }
+            long id;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO player_groups (name, leader_uuid, created_at) VALUES (?, ?, ?) RETURNING id")) {
+                ps.setString(1, name);
+                ps.setString(2, leader.toString());
+                ps.setLong(3, Instant.now().toEpochMilli());
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    id = rs.getLong(1);
+                }
+            }
+            insertGroupLog(id, leader, leaderName, "CREATE", 0, 0, "made the group " + name);
+            join(id, leader, leaderName);
+            return id;
+        });
+    }
+
+    /** Adds a member, moving their own microcredits into the group. */
+    private void join(long group, UUID uuid, String name) throws SQLException {
+        ensureCreditAccount(uuid, name);
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO group_members (minecraft_uuid, group_id, joined_at) VALUES (?, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setLong(2, group);
+            ps.setLong(3, Instant.now().toEpochMilli());
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM group_invites WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            ps.executeUpdate();
+        }
+        long own = microBalance(uuid);
+        if (own > 0) {
+            movePersonalMicro(uuid, -own, "Brought into the group", null);
+            addToGroup(group, own);
+        }
+        insertGroupLog(group, uuid, name, "JOIN", own, groupBalance(group), own > 0 ? "joined and brought their microcredits"
+                : "joined");
+    }
+
+    /** False if they're in a group already or already invited. */
+    public synchronized boolean inviteToGroup(long group, UUID uuid, String invitedBy) throws SQLException {
+        if (groupIdOf(uuid) != null) {
+            return false;
+        }
+        try (PreparedStatement ps = connection.prepareStatement("INSERT OR IGNORE INTO group_invites (group_id, "
+                + "minecraft_uuid, invited_by, created_at) VALUES (?, ?, ?, ?)")) {
+            ps.setLong(1, group);
+            ps.setString(2, uuid.toString());
+            ps.setString(3, invitedBy);
+            ps.setLong(4, Instant.now().toEpochMilli());
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /** Invitations to a player ({@code uuid}), or to a group ({@code group}); pass null for the other. */
+    public synchronized List<GroupInvite> groupInvites(UUID uuid, Long group) throws SQLException {
+        String where = uuid != null ? "i.minecraft_uuid = ?" : "i.group_id = ?";
+        try (PreparedStatement ps = connection.prepareStatement("SELECT i.*, g.name AS group_name, COALESCE(a.minecraft_name, "
+                + "l.minecraft_name, '?') AS name FROM group_invites i JOIN player_groups g ON g.id = i.group_id "
+                + "LEFT JOIN fad_accounts a ON a.minecraft_uuid = i.minecraft_uuid "
+                + "LEFT JOIN linked_accounts l ON l.minecraft_uuid = i.minecraft_uuid WHERE " + where + " ORDER BY i.created_at")) {
+            if (uuid != null) {
+                ps.setString(1, uuid.toString());
+            } else {
+                ps.setLong(1, group);
+            }
+            List<GroupInvite> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new GroupInvite(rs.getLong("group_id"), rs.getString("group_name"),
+                            UUID.fromString(rs.getString("minecraft_uuid")), rs.getString("name"),
+                            rs.getString("invited_by"), Instant.ofEpochMilli(rs.getLong("created_at"))));
+                }
+            }
+            return list;
+        }
+    }
+
+    public synchronized boolean deleteGroupInvite(long group, UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM group_invites WHERE group_id = ? AND minecraft_uuid = ?")) {
+            ps.setLong(1, group);
+            ps.setString(2, uuid.toString());
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /** Joins a group they were invited to. False if there's no such invitation or they're in a group already. */
+    public synchronized boolean acceptGroupInvite(long group, UUID uuid, String name) throws SQLException {
+        return transaction(() -> {
+            if (groupIdOf(uuid) != null || !deleteGroupInvite(group, uuid)) {
+                return false;
+            }
+            join(group, uuid, name);
+            return true;
+        });
+    }
+
+    /**
+     * Takes a member out of their group with an equal share of its balance ({@code balance / members}); returns the
+     * share, or -1 if they aren't in that group. {@code kind}: LEAVE or REMOVED.
+     */
+    public synchronized long leaveGroup(long group, UUID uuid, String name, String kind, String detail, String actor)
+            throws SQLException {
+        return transaction(() -> {
+            Long current = groupIdOf(uuid);
+            if (current == null || current != group) {
+                return -1L;
+            }
+            long members = memberCount(group);
+            long share = members <= 0 ? 0 : groupBalance(group) / members;
+            removeMember(group, uuid, name, share, kind, detail, actor);
+            return share;
+        });
+    }
+
+    private long memberCount(long group) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM group_members WHERE group_id = ?")) {
+            ps.setLong(1, group);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    private void removeMember(long group, UUID uuid, String name, long share, String kind, String detail, String actor)
+            throws SQLException {
+        if (share > 0) {
+            addToGroup(group, -share);
+            movePersonalMicro(uuid, share, "Share of the group's balance", actor);
+        }
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM group_members WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            ps.executeUpdate();
+        }
+        insertGroupLog(group, uuid, name, kind, -share, groupBalance(group), detail);
+    }
+
+    /** One member's share when a group is split up. */
+    public record GroupShare(UUID uuid, String name, long amount) {
+    }
+
+    /**
+     * Ends a group: its balance is split equally across the members (what doesn't divide evenly goes to the leader)
+     * and it's gone. Returns the shares, or null if there's no such group.
+     */
+    public synchronized List<GroupShare> disbandGroup(long group, String detail, String actor) throws SQLException {
+        return transaction(() -> {
+            Optional<PlayerGroup> found = group(group);
+            if (found.isEmpty()) {
+                return null;
+            }
+            PlayerGroup g = found.get();
+            List<GroupShare> shares = new ArrayList<>();
+            int count = g.members().size();
+            long each = count == 0 ? 0 : g.balance() / count;
+            long rest = g.balance() - each * count;
+            for (PlayerGroup.Member m : g.members()) {
+                long amount = each + (g.isLeader(m.uuid()) ? rest : 0);
+                if (amount > 0) {
+                    movePersonalMicro(m.uuid(), amount, "Share when " + g.name() + " ended", actor);
+                }
+                shares.add(new GroupShare(m.uuid(), m.name(), amount));
+            }
+            for (String table : List.of("group_members", "group_invites", "group_log")) {
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM " + table + " WHERE group_id = ?")) {
+                    ps.setLong(1, group);
+                    ps.executeUpdate();
+                }
+            }
+            try (PreparedStatement ps = connection.prepareStatement("DELETE FROM player_groups WHERE id = ?")) {
+                ps.setLong(1, group);
+                ps.executeUpdate();
+            }
+            return shares;
+        });
+    }
+
+    public synchronized void renameGroup(long group, String name, UUID by, String byName, String oldName) throws SQLException {
+        transaction(() -> {
+            try (PreparedStatement ps = connection.prepareStatement("UPDATE player_groups SET name = ? WHERE id = ?")) {
+                ps.setString(1, name);
+                ps.setLong(2, group);
+                ps.executeUpdate();
+            }
+            insertGroupLog(group, by, byName, "RENAME", 0, groupBalance(group), "renamed it from " + oldName + " to " + name);
+            return null;
+        });
+    }
+
+    public synchronized void setGroupLeader(long group, UUID leader, String leaderName, UUID by, String byName)
+            throws SQLException {
+        transaction(() -> {
+            try (PreparedStatement ps = connection.prepareStatement("UPDATE player_groups SET leader_uuid = ? WHERE id = ?")) {
+                ps.setString(1, leader.toString());
+                ps.setLong(2, group);
+                ps.executeUpdate();
+            }
+            insertGroupLog(group, by, byName, "LEADER", 0, groupBalance(group), "made " + leaderName + " the leader");
+            return null;
+        });
+    }
+
+    /** A group's log, newest first. */
+    public synchronized List<GroupLogEntry> groupLog(long group, int limit) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT * FROM group_log WHERE group_id = ? ORDER BY id DESC LIMIT ?")) {
+            ps.setLong(1, group);
+            ps.setInt(2, limit);
+            List<GroupLogEntry> list = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String uuid = rs.getString("minecraft_uuid");
+                    list.add(new GroupLogEntry(rs.getLong("id"), Instant.ofEpochMilli(rs.getLong("created_at")),
+                            uuid == null ? null : UUID.fromString(uuid), rs.getString("name"), rs.getString("kind"),
+                            rs.getLong("amount"), rs.getLong("balance"), rs.getString("detail")));
+                }
+            }
+            return list;
+        }
+    }
+
+    /**
+     * The microcredit leaderboard: players on their own, and each group as one place (its shared balance, or with
+     * {@code earned} what its members earned together). Best first; nobody with 0.
+     */
+    public synchronized List<MicroBoardRow> microBoard(boolean earned) throws SQLException {
+        List<MicroBoardRow> rows = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT minecraft_uuid, minecraft_name, micro, micro_earned FROM fad_accounts a "
+                     + "WHERE NOT EXISTS (SELECT 1 FROM group_members m WHERE m.minecraft_uuid = a.minecraft_uuid)")) {
+            while (rs.next()) {
+                long value = rs.getLong(earned ? "micro_earned" : "micro");
+                if (value > 0) {
+                    rows.add(new MicroBoardRow(UUID.fromString(rs.getString("minecraft_uuid")), rs.getString("minecraft_name"),
+                            value, null));
+                }
+            }
+        }
+        for (PlayerGroup g : groups()) {
+            long value = earned ? g.microEarned() : g.balance();
+            if (value > 0) {
+                rows.add(new MicroBoardRow(g.leader(), g.name(), value, g));
+            }
+        }
+        rows.sort(java.util.Comparator.comparingLong(MicroBoardRow::value).reversed()
+                .thenComparing(MicroBoardRow::name, String.CASE_INSENSITIVE_ORDER));
+        return rows;
+    }
+
     // ---- Market: microcredits from selling items ----
 
     /**
@@ -2045,19 +2468,28 @@ public final class Database implements AutoCloseable {
         return transaction(() -> changeMicro(uuid, name, amount, kind, detail, actor, countsAsEarned));
     }
 
+    /**
+     * Changes a player's microcredits. A group member's go to (or come from) their group's shared balance instead,
+     * and the change is written to the group's log too. Returns the new balance, or -1 if there isn't enough.
+     */
     private long changeMicro(UUID uuid, String name, long amount, String kind, String detail, String actor,
                              boolean countsAsEarned) throws SQLException {
         ensureCreditAccount(uuid, name);
-        long balance = microBalance(uuid) + amount;
+        Long group = groupIdOf(uuid);
+        long balance = (group == null ? microBalance(uuid) : groupBalance(group)) + amount;
         if (balance < 0) {
             return -1L;
         }
         try (PreparedStatement ps = connection.prepareStatement(
                 "UPDATE fad_accounts SET micro = micro + ?, micro_earned = micro_earned + ? WHERE minecraft_uuid = ?")) {
-            ps.setLong(1, amount);
+            ps.setLong(1, group == null ? amount : 0);
             ps.setLong(2, countsAsEarned ? Math.max(0, amount) : 0);
             ps.setString(3, uuid.toString());
             ps.executeUpdate();
+        }
+        if (group != null) {
+            addToGroup(group, amount);
+            insertGroupLog(group, uuid, name, kind, amount, balance, detail);
         }
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO micro_transactions (minecraft_uuid, amount, balance, kind, detail, actor, created_at) "
@@ -2105,19 +2537,6 @@ public final class Database implements AutoCloseable {
             insertCreditTransaction(uuid, credits, balance, "EXCHANGE", detail, actor, Instant.now());
             return new Exchange(microLeft, balance);
         });
-    }
-
-    /** 1 for the player with the most microcredits (or most earned, with {@code earned}); 0 without an account. */
-    public synchronized long microRank(UUID uuid, boolean earned) throws SQLException {
-        String column = earned ? "micro_earned" : "micro";
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT CASE WHEN a." + column + " > 0 THEN 1 + (SELECT COUNT(*) FROM fad_accounts o WHERE o." + column
-                        + " > a." + column + ") ELSE 0 END FROM fad_accounts a WHERE a.minecraft_uuid = ?")) {
-            ps.setString(1, uuid.toString());
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0;
-            }
-        }
     }
 
     public synchronized List<CreditTransaction> microTransactions(UUID uuid, int limit) throws SQLException {

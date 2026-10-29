@@ -48,6 +48,7 @@ public final class Community {
     private final Shop shop;
     private final Market market;
     private final Cosmetics cosmetics;
+    private final Groups groups;
     /** Players their server reported as AFK. Cleared when they switch server or leave. */
     private final Set<UUID> afk = ConcurrentHashMap.newKeySet();
     /** Servers running DiscordLinkedFAD: name -> version. */
@@ -61,6 +62,7 @@ public final class Community {
         this.shop = new Shop(plugin, this);
         this.market = new Market(plugin, this);
         this.cosmetics = new Cosmetics(plugin, this);
+        this.groups = new Groups(plugin);
     }
 
     public void start() {
@@ -90,6 +92,10 @@ public final class Community {
 
     public Market market() {
         return market;
+    }
+
+    public Groups groups() {
+        return groups;
     }
 
     public Cosmetics cosmetics() {

@@ -120,6 +120,7 @@ public final class AuditLog {
         public static final String EXCHANGE = "EXCHANGE";
         /** A cosmetic bought, given, taken away or refunded; KeepInventory switched on or off. */
         public static final String COSMETIC = "COSMETIC";
+        public static final String GROUP = "GROUP";
 
         private EventTypes() {
         }
