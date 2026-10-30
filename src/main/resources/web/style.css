@@ -799,7 +799,9 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .duty.off .duty-text { color: var(--muted); }
 .duty:not(.off) .duty-text { color: var(--gold); }
 
-.home-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 8px; }
+/* Four tiles in one row, or two by two: never three and a straggler. */
+.home-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 8px; }
+@media (max-width: 860px) { .home-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .stat-card { padding: 16px 18px; }
 .stat-card .stat-value { font-size: 28px; }
 .people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
@@ -1205,18 +1207,20 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 }
 .podium-place:hover { background: var(--glass-strong); transform: translateY(-2px); }
 .podium-place .card-backdrop {
-  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .85) 45%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .85) 45%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, rgba(0, 0, 0, .55) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 55%, rgba(0, 0, 0, .55) 100%);
 }
 .podium-place .name { font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .podium-place .head { width: 56px; height: 56px; border-radius: 12px; }
 .podium-medal { font-size: 28px; line-height: 1; }
 .podium-value { font-weight: 700; color: var(--gold); font-size: 14px; }
-/* First place in the middle and tallest, like a real podium. */
-.place-1 { order: 2; padding-top: 22px; border-color: rgba(255, 196, 0, .55); box-shadow: 0 0 0 1px rgba(255, 196, 0, .25), 0 10px 30px rgba(255, 196, 0, .12); }
+.podium-place.has-card .podium-value { color: #ffd166; text-shadow: 0 1px 3px rgba(0, 0, 0, .75); }
+/* First place in the middle and tallest, like a real podium, even when it's the only one. */
+.podium-place { grid-row: 1; }
+.place-1 { grid-column: 2; padding-top: 22px; border-color: rgba(255, 196, 0, .55); box-shadow: 0 0 0 1px rgba(255, 196, 0, .25), 0 10px 30px rgba(255, 196, 0, .12); }
 .place-1 .head { width: 68px; height: 68px; }
-.place-2 { order: 1; border-color: rgba(192, 200, 208, .55); }
-.place-3 { order: 3; border-color: rgba(205, 127, 50, .55); }
+.place-2 { grid-column: 1; border-color: rgba(192, 200, 208, .55); }
+.place-3 { grid-column: 3; border-color: rgba(205, 127, 50, .55); }
 .board-rows { display: grid; gap: 3px; }
 .lrow {
   display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 12px; color: inherit; text-decoration: none;
@@ -1235,6 +1239,12 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .podium-place .head { width: 44px; height: 44px; }
   .place-1 .head { width: 52px; height: 52px; }
   .podium-value { font-size: 12px; }
+  /* Narrow places: names wrap instead of being cut off, and a group's "2 players" goes on its own line. */
+  .podium-place .name { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; font-size: 13px; }
+  .podium-place .group-tag { display: block; width: max-content; margin: 2px auto 0; }
+  /* The board chips scroll sideways in one row, with room around them for the focus ring. */
+  .board-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px; margin: -4px -4px 8px; }
+  .board-chip { flex: none; white-space: nowrap; }
   .board-head input[type=search] { width: 100%; }
   .lrow .pill { display: none; }
 }
@@ -1249,7 +1259,7 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .cos-intro { margin-bottom: 12px; }
 #shop-cosmetics > .card.panel { margin-bottom: 12px; }
 .cos-section .section-title { margin-top: 18px; }
-.cos-help { margin: -4px 0 10px; }
+.cos-help, .section-help { margin: -4px 0 10px; }
 .cos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .cos-tile { padding: 12px; display: grid; gap: 10px; align-content: start; transition: transform .4s var(--spring), box-shadow .3s var(--soft); }
 .cos-tile:hover { transform: translateY(-2px); }
@@ -1359,7 +1369,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 .group-tag { font-size: 11px; vertical-align: middle; }
 .group-rules { font-size: 13px; margin: 12px 0 0; }
 .group-create { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.group-create input { flex: 1 1 200px; border-radius: 999px; padding-left: 14px; }
+.group-create input { flex: 1 1 200px; min-width: 0; max-width: 360px; border-radius: 999px; padding-left: 14px; }
 .group-invites { display: grid; gap: 8px; margin-bottom: 8px; }
 .group-invite { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 10px 12px;
   border-radius: 14px; background: var(--glass-soft); }
@@ -1382,8 +1392,11 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 .group-card { display: grid; gap: 8px; align-content: start; }
 .group-card.is-me { box-shadow: inset 0 0 0 2px var(--accent), var(--glass-shadow); }
 .group-card-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.group-names { font-size: 12px; }
-.group-log { grid-column: 1 / -1; }
+/* Who's in it sits beside their heads, wrapping there, unless the heads leave too little room. */
+.group-card-row .group-heads + .muted { flex: 1 1 200px; }
+.group-card, .group-log { min-width: 0; }
+/* A card with its log open takes the whole row, so the table has room (and scrolls inside the card if it still doesn't fit). */
+.group-card:has(.group-log:not([hidden])) { grid-column: 1 / -1; }
 @media (max-width: 560px) {
   .group-member { flex-wrap: wrap; }
   .group-member .actions { flex-basis: 100%; }

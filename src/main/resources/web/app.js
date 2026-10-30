@@ -1589,14 +1589,17 @@ function renderCommunityStats() {
     stat(`Players with ${d.currency.many}`, t.players.toLocaleString())].filter(Boolean));
 }
 
-/** A leaderboard value in its own unit: credits, microcredits, playtime, days or a plain count. */
+/** A leaderboard value in its own unit: credits, microcredits, playtime, days or a count of things. */
 function boardValue(d, value) {
   switch (d.unit) {
     case 'credits': return credits(value, d.currency);
     case 'micro': return micro(value, d.microCurrency);
     case 'seconds': return playtime(value);
     case 'days': return `${value.toLocaleString()} day${value === 1 ? '' : 's'}`;
-    default: return value.toLocaleString();
+    default: {
+      const noun = { advancements: 'advancement', given: 'interaction', received: 'interaction' }[d.board];
+      return noun ? `${value.toLocaleString()} ${noun}${value === 1 ? '' : 's'}` : value.toLocaleString();
+    }
   }
 }
 
@@ -1611,6 +1614,13 @@ function renderBoard() {
       loadBoard();
     },
   }, b.label)));
+  // On phones the chips scroll sideways: bring the chosen one into view without scrolling the page (it refreshes every minute).
+  const chips = $('community-boards');
+  const active = chips.querySelector('.active');
+  if (active && chips.scrollWidth > chips.clientWidth) {
+    chips.scrollLeft += active.getBoundingClientRect().left - chips.getBoundingClientRect().left
+      - (chips.clientWidth - active.offsetWidth) / 2;
+  }
   const filter = el('input', { type: 'search', placeholder: 'Find a player…', 'aria-label': 'Find a player on this board' });
   filter.value = communityState.filter;
   const body = el('div');
@@ -1647,7 +1657,7 @@ function renderBoard() {
     el('div', { class: 'board-head' },
       el('h2', {}, d.label, d.board === 'micro' && el('span', { class: 'muted board-note' },
         d.ranking === 'earned' ? 'earned by selling, in total' : 'held right now')),
-      standing, filter),
+      d.rows.length > 0 && [standing, filter]), // an empty board only says so
     body,
     d.total > d.rows.length && el('p', { class: 'muted board-more' },
       `Showing the top ${d.rows.length} of ${d.total.toLocaleString()} ${d.board === 'micro' ? 'players and groups' : 'players'}.`)].filter(Boolean));
@@ -1698,29 +1708,30 @@ function renderInteractions() {
       el('p', {}, i.text),
       el('div', { class: 'meta' },
         person(i.actor, i.actorUuid), i.target ? [' → ', person(i.target, i.targetUuid)] : '',
-        ` · /${i.action} · `, i.source === 'discord' ? 'Discord' : i.source, ' · ',
+        ` · /${i.action} · `, ({ discord: 'Discord', minecraft: 'Minecraft' })[i.source] || i.source, ' · ',
         el('span', { title: formatTime(i.time) }, timeAgo(i.time))))))
       : el('p', { class: 'muted' }, 'No interactions yet.'));
-  const actions = el('div', { class: 'card panel' },
-    el('h2', {}, withCount('Interaction commands', d.actions.length)),
+  const servers = d.servers.map((x) => `${x.name} (${x.version})`).join(', ');
+  // Members only see the commands once DiscordLinkedFAD has sent them; staff are told how to get there.
+  const actions = (d.synced || isStaff()) && el('div', { class: 'card panel' },
+    el('h2', {}, d.synced ? withCount('Interaction commands', d.actions.length) : 'Interaction commands'),
     d.synced
       ? el('div', { class: 'others' }, d.actions.map((a) => el('span', {
         class: 'chip', title: `${a.description} · ${a.lines} lines · ${a.target === 'required' ? 'needs a player' : a.target === 'optional' ? 'player optional' : 'no player'}`,
       }, `/${a.name} · ${a.uses.toLocaleString()}`)))
-      : el('p', { class: 'muted' }, isStaff()
-        ? 'None yet. Put DiscordLinkedFAD on your Minecraft servers; its interactions show up here once a player joins one of them.'
-        : 'None yet.'),
+      : el('p', { class: 'muted' }, d.servers.length
+        ? `DiscordLinkedFAD is running on ${servers}; its commands show up here once a player joins.`
+        : 'Put DiscordLinkedFAD on your Minecraft servers; its interactions show up here once a player joins one of them.'),
     d.synced && el('p', { class: 'muted' }, d.discordCommands
       ? 'These also work as slash commands in Discord (e.g. /hug @someone).'
       : isStaff() && 'Slash commands for these are turned off in Settings.'),
-    d.servers.length > 0 && el('p', { class: 'muted' }, 'DiscordLinkedFAD is running on ',
-      d.servers.map((x) => `${x.name} (${x.version})`).join(', '), '.'),
+    d.synced && d.servers.length > 0 && el('p', { class: 'muted' }, `DiscordLinkedFAD is running on ${servers}.`),
     isStaff() && el('p', { class: 'muted' }, 'The lines, sounds and commands are set in DiscordLinkedFAD\'s config.yml on each server.'));
   const earning = el('div', { class: 'card panel' },
     el('h2', {}, `How to earn ${d.currency.many}`),
     el('ul', { class: 'market-how' },
       el('li', {}, `${credits(r.playtimeAmount, d.currency)} for every ${r.playtimeMinutes} minutes of active play`),
-      el('li', {}, `${r.task} / ${r.goal} / ${r.challenge} for each new advancement (task / goal / challenge)`),
+      el('li', {}, `${r.task} / ${r.goal} / ${credits(r.challenge, d.currency)} for each new advancement (task / goal / challenge)`),
       el('li', {}, 'A daily reward for your first join of the day, more the longer your streak')),
     state.me.isOwner && el('p', { class: 'muted' }, `Rename ${d.currency.many} or change what players earn in `,
       el('a', { href: '#/settings' }, 'Settings'), '.'));
@@ -1743,6 +1754,14 @@ async function groupAction(path, body = {}) {
   await loadCommunity();
 }
 
+/** What happened: a badge and the details, or just the details when they start with the badge's word ("Joined and brought…"). */
+function groupLogWhat(e) {
+  const kind = GROUP_LOG_KINDS[e.kind] || e.kind;
+  const d = e.detail || '';
+  if (d && d.toLowerCase().startsWith(kind.toLowerCase())) return d[0].toUpperCase() + d.slice(1);
+  return [el('span', { class: 'badge' }, kind), ' ', el('span', { class: 'muted' }, d)];
+}
+
 function groupLogTable(log, cur) {
   if (!log.length) return el('p', { class: 'muted' }, 'Nothing yet.');
   return el('div', { class: 'table-wrap' }, el('table', { class: 'table table-cards' },
@@ -1750,7 +1769,7 @@ function groupLogTable(log, cur) {
     el('tbody', {}, log.map((e) => el('tr', {},
       el('td', { class: 'nowrap muted', title: formatTime(e.time) }, timeAgo(e.time)),
       el('td', {}, e.uuid ? el('a', { class: 'name', href: playerHref(e.uuid) }, e.name) : e.name || '—'),
-      el('td', { class: 'detail' }, el('span', { class: 'badge' }, GROUP_LOG_KINDS[e.kind] || e.kind), ' ', el('span', { class: 'muted' }, e.detail || '')),
+      el('td', { class: 'detail' }, groupLogWhat(e)),
       el('td', { class: `nowrap ${e.amount > 0 ? 'credit-plus' : e.amount < 0 ? 'credit-minus' : 'muted'}` },
         e.amount ? `${e.amount > 0 ? '+' : '−'}${micro(Math.abs(e.amount), cur)}` : '—'),
       el('td', { class: 'nowrap' }, micro(e.balance, cur)))))));
@@ -1791,8 +1810,8 @@ function renderGroups() {
       el('img', { class: 'head', src: headUrl(m.uuid, 48), alt: '', loading: 'lazy' }),
       el('div', { class: 'group-member-text' },
         el('a', { class: 'name', href: playerHref(m.uuid) }, m.name),
-        el('div', { class: 'muted' }, [m.leader ? 'Leader' : 'Member', `joined ${shortDate(m.joinedAt)}`,
-          m.online ? 'online' : ''].filter(Boolean).join(' · '))),
+        m.online && [' ', el('span', { class: 'pill online' }, 'Online')],
+        el('div', { class: 'muted' }, `${m.leader ? 'Leader' : 'Member'} · joined ${shortDate(m.joinedAt)}`)),
       leader && !m.leader && el('span', { class: 'actions' },
         el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
           title: `Make ${m.name} the leader?`, text: 'They can then invite and remove members, rename or end the group, and see the log. You stay a member.',
@@ -1829,8 +1848,8 @@ function renderGroups() {
       members, invite, pending, rules));
     if (leader) {
       parts.push(el('h2', { class: 'section-title' }, 'Group log'),
-        el('div', { class: 'card panel' }, el('p', { class: 'muted' }, 'Who earned, spent, joined and left. Only you, as the leader, see this.'),
-          groupLogTable(mine.log, cur)));
+        el('p', { class: 'muted section-help' }, 'Who earned, spent, joined and left. Only you, as the leader, see this.'),
+        groupLogTable(mine.log, cur));
     }
   }
   const staff = isStaff();
@@ -1846,19 +1865,23 @@ function renderGroups() {
         }
       };
       if (groupState.logOpen.has(g.id)) loadLog();
-      const leaderName = g.members.find((m) => m.leader)?.name || '?';
+      const open = groupState.logOpen.has(g.id);
+      const logBtn = el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-expanded': String(open), onclick: () => {
+        if (groupState.logOpen.has(g.id)) groupState.logOpen.delete(g.id); else groupState.logOpen.add(g.id);
+        log.hidden = !groupState.logOpen.has(g.id);
+        if (!log.hidden) loadLog();
+        logBtn.textContent = log.hidden ? 'Log' : 'Hide log';
+        logBtn.setAttribute('aria-expanded', String(!log.hidden));
+      } }, open ? 'Hide log' : 'Log');
       return el('div', { class: `card panel group-card ${mine && mine.id === g.id ? 'is-me' : ''}` },
-        el('div', { class: 'group-title' }, el('h3', {}, g.name), g.rank && el('span', { class: 'badge' }, `#${g.rank}`)),
+        el('div', { class: 'group-title' }, el('h3', {}, g.name),
+          g.rank && el('span', { class: 'badge good', title: `#${g.rank} on the ${cur.many} leaderboard` }, `#${g.rank}`)),
         el('div', { class: 'group-card-row' }, memberHeads(g.members),
-          el('span', { class: 'muted' }, `${g.members.length} player${g.members.length === 1 ? '' : 's'} · led by ${leaderName}`)),
+          el('span', { class: 'muted' }, `${g.members.length} player${g.members.length === 1 ? '' : 's'}: `
+            + g.members.map((m) => (m.leader ? `${m.name} (leader)` : m.name)).join(', '))),
         el('div', { class: 'group-card-row' }, el('b', {}, micro(g.balance, cur)), el('span', { class: 'muted' }, ' shared')),
-        el('div', { class: 'muted group-names' }, g.members.map((m) => m.name).join(', ')),
         staff && el('div', { class: 'actions' },
-          el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => {
-            if (groupState.logOpen.has(g.id)) groupState.logOpen.delete(g.id); else groupState.logOpen.add(g.id);
-            log.hidden = !groupState.logOpen.has(g.id);
-            if (!log.hidden) loadLog();
-          } }, 'Log'),
+          logBtn,
           el('button', { class: 'btn btn-danger btn-small', type: 'button', onclick: () => openDialog({
             title: `Take down ${g.name}?`, text: `The group ends and its ${micro(g.balance, cur)} are split equally across its ${g.members.length} member${g.members.length === 1 ? '' : 's'}. Members are told why.`,
             confirmLabel: 'Take down', confirmClass: 'btn-danger',
@@ -3635,15 +3658,14 @@ async function loadHome() {
     toast(e.message);
     return;
   }
-  const stat = (label, value, extra) => el('div', { class: 'card stat-card' },
-    el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value), extra);
+  // The bigger dashboard tiles; who is online is the section right below, so it has no tile of its own.
+  const homeStat = (label, value, title) => el('div', { class: 'card stat-card', title },
+    el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
   $('home-stats').replaceChildren(
-    stat('Online now', data.onlineCount),
-    stat('Players', data.playerCount.toLocaleString()),
-    stat('Linked members', data.linkedCount),
-    stat('Staff online', data.staffOnline),
-    stat('Servers', data.servers.length,
-      data.servers.length > 0 && el('div', { class: 'stat-sub' }, data.servers.map((s) => `${s.name} ${s.players}`).join(' · '))));
+    homeStat('Minecraft players', data.playerCount.toLocaleString(), 'Everyone who has joined one of the servers'),
+    homeStat('Linked members', data.linkedCount),
+    homeStat('Staff online', data.staffOnline),
+    homeStat('Servers online', data.servers.length, data.servers.map((s) => `${s.name}: ${s.players}`).join(' · ') || null));
   $('home-online-count').textContent = `(${data.onlineCount})`;
   $('home-online').replaceChildren(...data.online.map(onlineCard));
   $('home-online-empty').hidden = data.online.length > 0;
@@ -3652,7 +3674,7 @@ async function loadHome() {
     : [el('p', { class: 'muted' }, 'No members yet.')]));
   $('home-recent').replaceChildren(...(data.recent.length
     ? data.recent.map((p) => personRow(p, `Seen ${timeAgo(p.lastSeen)}`))
-    : [el('p', { class: 'muted' }, 'Nobody yet.')]));
+    : [el('p', { class: 'muted' }, 'Nobody has been online yet.')]));
 }
 
 /** The simple profile everyone can see: who they are, their Discord, and whether they're on. */
