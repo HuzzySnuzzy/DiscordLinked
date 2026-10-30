@@ -318,6 +318,7 @@ function openDialog({ title, text, confirmLabel, confirmClass, duration, amount,
   confirm.className = `btn ${confirmClass || ''}`;
   confirm.disabled = false;
   dialogHandler = onConfirm;
+  dialogOpener = document.activeElement;
   $('action-dialog').showModal();
   (amount ? $('dialog-amount') : reason).focus();
 }
@@ -379,6 +380,20 @@ function closeDialog(dialog = $('action-dialog')) {
   }, 180);
 }
 
+// The page may have been rebuilt while a dialog was open: focus the new copy of the button that opened it (found
+// by its label, inside the same data-key row when it was in one), so focus doesn't drop back to the top of the page.
+let dialogOpener = null;
+document.querySelectorAll('dialog').forEach((d) => d.addEventListener('close', () => {
+  const a = dialogOpener;
+  dialogOpener = null;
+  if (!a || a.isConnected) return;
+  const key = a.closest('[data-key]')?.dataset.key;
+  const label = (n) => n.getAttribute('aria-label') || n.textContent;
+  const scopes = key ? [...document.querySelectorAll(`[data-key="${CSS.escape(key)}"]`)] : [document];
+  const matches = scopes.flatMap((s) => [...s.querySelectorAll(a.tagName)]).filter((n) => label(n) === label(a) && n.getClientRects().length);
+  if (matches.length === 1) matches[0].focus();
+}));
+
 // ---- Confirm dialog: a yes/no question, e.g. before buying something ----
 
 let confirmHandler = null;
@@ -392,6 +407,7 @@ function confirmDialog({ title, text, confirmLabel = 'OK', confirmClass = '', on
   ok.className = `btn ${confirmClass}`;
   ok.disabled = false;
   confirmHandler = onConfirm;
+  dialogOpener = document.activeElement;
   $('confirm-dialog').showModal();
   // A red button is for something that can't be undone, so a stray Enter cancels instead.
   (String(confirmClass).includes('btn-danger') ? $('confirm-cancel') : ok).focus();
@@ -618,7 +634,8 @@ function playerRow(p) {
   const status = [...statusPills(p), streakChip(p.streak, p.bestStreak)];
   if (staff && p.suspension) {
     status.push(el('div', { class: 'suspension-note' },
-      `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by ${p.suspension.createdBy}`));
+      `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by `,
+      el('span', { title: p.suspension.createdBy }, actorLabel(p.suspension.createdBy))));
   }
   if (staff && p.linked && p.inGuild === false) status.push(el('div', { class: 'suspension-note' }, 'Not in the Discord server'));
   if (p.discordOnly) {
@@ -668,7 +685,9 @@ function logParams(uuid) {
 }
 
 async function loadLogs(reset) {
-  if (state.logsLoading) return;
+  // A new filter or search replaces a request that's still loading; only "Load more" waits for it.
+  if (state.logsLoading && !reset) return;
+  const seq = state.logsSeq = (state.logsSeq || 0) + 1;
   state.logsLoading = true;
   const params = logParams();
   if (!reset && state.logsBefore) params.set('before', state.logsBefore);
@@ -681,6 +700,7 @@ async function loadLogs(reset) {
   }
   try {
     const data = await api(`/api/logs?${params}`);
+    if (seq !== state.logsSeq) return; // the filter or search changed meanwhile
     const rows = data.entries.map((entry) => logRow(entry, true));
     if (reset) $('logs-body').replaceChildren(...rows);
     else $('logs-body').append(...rows);
@@ -690,13 +710,14 @@ async function loadLogs(reset) {
     $('logs-empty').textContent = $('logs-filter').value !== 'all' || $('logs-search').value.trim()
       ? 'No log entries match this filter.' : 'Nothing logged yet.';
   } catch (e) {
+    if (seq !== state.logsSeq) return;
     if (!first) toast(e.message);
     else {
       body.replaceChildren(el('tr', {}, el('td', { colspan: 5, class: 'empty', role: 'alert' },
         e.message, ' ', retryButton(() => loadLogs(true)))));
     }
   } finally {
-    state.logsLoading = false;
+    if (seq === state.logsSeq) state.logsLoading = false;
   }
 }
 
@@ -1446,7 +1467,8 @@ function renderGlobalResults(query) {
     ? globalResults.map((p, i) => el('a', {
       // Not tab stops: the arrow keys move through the list, and Tab leaves the search.
       class: 'search-result', href: playerHref(p.uuid), role: 'option', id: `gs-${i}`, tabindex: '-1',
-      onclick: closeGlobalSearch, onmouseenter: () => setGlobalActive(i),
+      // mousemove, not mouseenter: scrolling the list with the arrow keys mustn't hand the highlight to the row under the pointer.
+      onclick: closeGlobalSearch, onmousemove: () => { if (globalActive !== i) setGlobalActive(i); },
     },
     el('img', { class: 'head', src: headUrl(p.uuid, 56), alt: '' }),
     el('div', { class: 'grow' },
@@ -1694,7 +1716,7 @@ function renderCommunityStats() {
     stat('Active playtime', playtime(t.activeSeconds)),
     stat('Advancements', t.advancements.toLocaleString()),
     stat('Interactions', [t.interactions.toLocaleString(), el('span', { class: 'stat-sub' }, `${t.interactionsToday.toLocaleString()} today`)]),
-    stat(`Players with ${d.currency.many}`, t.players.toLocaleString())].filter(Boolean));
+    stat(`${d.currency.one} holders`, t.players.toLocaleString(), `Players with ${d.currency.many}`)].filter(Boolean));
 }
 
 /** A leaderboard value in its own unit: credits, microcredits, playtime, days or a count of things. */
@@ -2510,6 +2532,12 @@ async function saveSettings() {
       applyMode();
     }
     for (const key of Object.keys(settingsEdits)) delete settingsEdits[key];
+    // Handed Settings to someone else: the page is theirs now.
+    if (!state.me.isOwner) {
+      updateSettingsBar();
+      location.hash = homeHash();
+      return;
+    }
     await loadSettings();
   } catch (e) {
     toast(e.message);
@@ -3856,7 +3884,8 @@ function renderMarketList() {
       el('div', { class: 'market-item-text' },
         el('span', { class: 'market-item-name' }, shopName(item.id)),
         el('span', { class: 'muted' }, `${formatMicro(item.now, cur)} each`
-          + (item.stack > 1 ? ` · ${formatMicro(item.now * item.stack, cur)} ${perStackLabel(item)}` : ''))),
+          // Shorter than perStackLabel, so a row of this four-column list stays on two lines.
+          + (item.stack > 1 ? ` · ${formatMicro(item.now * item.stack, cur)} for ${item.stack}` : ''))),
       dropped && el('span', { class: 'badge warn', title: `Normally ${formatMicro(item.normal, cur)} each` },
         `${Math.round(item.now * 100 / item.normal)}%`));
   }) : [el('p', { class: 'muted shop-empty' }, query ? 'No items match.' : 'Nothing sells here.')]));
