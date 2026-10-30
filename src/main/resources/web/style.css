@@ -113,6 +113,12 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
 .table tr:last-child td { border-bottom: none; }
 .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .empty { text-align: center; color: var(--muted); padding: 32px; margin: 0; }
+/* A loading note or error in a grid spans every column. */
+.plist > .empty, .mod-grid > .empty, .home-stats > .empty { grid-column: 1 / -1; }
+/* While a page has only a loading note or an error to show, its empty sections stay out of sight. */
+#home-stats:has(> .empty) ~ *,
+#shop-items:has(> #shop-notice > [role="alert"]) > .shop-window,
+#shop-sell:has(> #market-notice > [role="alert"]) > :not(#market-notice) { display: none; }
 .more { text-align: center; margin-top: 16px; }
 
 .identity { display: flex; align-items: center; gap: 10px; min-width: 200px; }
@@ -162,6 +168,7 @@ dialog p { margin: 0; }
 .duration label, .reason { display: grid; gap: 4px; font-weight: 600; font-size: 13px; flex: 1; }
 .duration input { width: 100%; }
 textarea { resize: vertical; width: 100%; }
+textarea.single-line { resize: none; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .error { color: var(--danger); font-weight: 600; }
 
@@ -759,8 +766,10 @@ dialog.closing::backdrop { opacity: 0; transition: opacity .18s; }
 
 /* Shimmer while something loads. */
 @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+/* The text itself is the gradient: muted, with a lighter band sweeping across it. */
 .shimmer {
-  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .22) 50%, transparent 70%) 0 0 / 200% 100%;
+  color: transparent;
+  background: linear-gradient(100deg, var(--muted) 40%, var(--text) 50%, var(--muted) 60%) 0 0 / 200% 100%;
   -webkit-background-clip: text; background-clip: text;
   animation: shimmer 1.4s linear infinite;
 }
@@ -878,6 +887,7 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   display: grid; grid-template-columns: repeat(9, var(--slot)); gap: 4px; padding: 10px; width: max-content; max-width: 100%;
   border-radius: 14px; background: rgba(139, 94, 52, .14); border: 1px solid rgba(139, 94, 52, .35);
 }
+.shop-chest:empty { display: none; }
 .chest-slot.drop { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .shop-checkout { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
 .shop-total { margin-right: auto; }
@@ -1192,6 +1202,7 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .profile.has-card .info > .copy { background: rgba(6, 8, 18, .45); border-radius: 6px; padding: 5px 6px; margin: 0; justify-self: start; }
 
 /* ---- Community: stats, leaderboards ---- */
+#community-notice > * { margin-bottom: 14px; }
 .stats-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .stats-strip .stat { background-color: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 /* On phones the Community numbers scroll sideways in one row, so the leaderboard starts on the first screen. */

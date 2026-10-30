@@ -71,6 +71,43 @@ const withCount = (text, n) => el('span', {}, text, ' ', el('span', { class: 'co
 /** An empty section's message, in a card like the sections that have content. */
 const emptyCard = (text) => el('div', { class: 'card panel' }, el('p', { class: 'muted' }, text));
 
+/** Shown while a page loads for the first time (later refreshes keep what's on screen). */
+const loadingNote = () => el('p', { class: 'empty shimmer', role: 'status' }, 'Loading…');
+
+const retryButton = (retry) => el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => retry() }, 'Try again');
+
+/** A first load that failed: the error and a way to try again, in place of the content (a card unless it's in one). */
+function loadError(container, e, retry) {
+  container.replaceChildren(el('div', { class: container.closest('.card, .table-wrap') ? 'empty' : 'empty card', role: 'alert' },
+    e.message, ' ', retryButton(retry)));
+}
+
+/** Whether a container shows real content, not just a loading note or an error. */
+const showsContent = (node) => node.children.length > 0 && !node.querySelector(':scope > [role="status"], :scope > [role="alert"]');
+
+/**
+ * Re-renders part of a page without losing keyboard focus: if the focused control was replaced, its new copy gets
+ * focus back. It's found by its label, inside the same data-key row when it's in one (or by its place in that row
+ * when its label changed, e.g. Use → Stop using).
+ */
+function keepFocus(container, render) {
+  const a = document.activeElement;
+  if (!a || !container.contains(a)) return render();
+  const row = a.closest('[data-key]');
+  const key = row && container.contains(row) ? row.dataset.key : null;
+  const label = (n) => n.getAttribute('aria-label') || n.textContent;
+  const text = label(a);
+  const index = key ? [...row.querySelectorAll(a.tagName)].indexOf(a) : -1;
+  const out = render();
+  if (!container.contains(document.activeElement)) {
+    const scope = key ? container.querySelector(`[data-key="${CSS.escape(key)}"]`) : container;
+    const options = scope ? [...scope.querySelectorAll(a.tagName)] : [];
+    const next = row === a ? scope : options.find((n) => label(n) === text) || options[index];
+    next?.focus({ preventScroll: true });
+  }
+  return out;
+}
+
 async function api(path, body) {
   const options = { credentials: 'same-origin', headers: {} };
   if (body !== undefined) {
@@ -267,7 +304,9 @@ function openDialog({ title, text, confirmLabel, confirmClass, duration, amount,
   const reason = $('dialog-reason');
   reason.value = value || '';
   reason.maxLength = maxLength || 500;
-  reason.rows = maxLength > 500 ? 5 : 3;
+  // A short value (a group name) gets one line, where Enter saves, instead of the resizable box.
+  reason.rows = maxLength && maxLength <= 64 ? 1 : maxLength > 500 ? 5 : 3;
+  reason.classList.toggle('single-line', reason.rows === 1);
   $('dialog-error').hidden = true;
   const confirm = $('dialog-confirm');
   confirm.textContent = confirmLabel;
@@ -314,6 +353,12 @@ $('action-form').addEventListener('submit', async (event) => {
   }
 });
 $('dialog-cancel').addEventListener('click', () => closeDialog());
+$('dialog-reason').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing && e.target.rows === 1) {
+    e.preventDefault();
+    $('action-form').requestSubmit();
+  }
+});
 
 /** Plays the closing animation, then closes. */
 function closeDialog(dialog = $('action-dialog')) {
@@ -343,7 +388,8 @@ function confirmDialog({ title, text, confirmLabel = 'OK', confirmClass = '', on
   ok.disabled = false;
   confirmHandler = onConfirm;
   $('confirm-dialog').showModal();
-  ok.focus();
+  // A red button is for something that can't be undone, so a stray Enter cancels instead.
+  (String(confirmClass).includes('btn-danger') ? $('confirm-cancel') : ok).focus();
 }
 
 $('confirm-form').addEventListener('submit', async (event) => {
@@ -506,11 +552,21 @@ function setupPlayerControls() {
 }
 
 async function loadPlayers() {
+  const list = $('players-list');
+  if (!state.members) {
+    // Not a list until there are rows to show.
+    list.removeAttribute('role');
+    list.hidden = false;
+    list.replaceChildren(loadingNote());
+    $('players-empty').hidden = true;
+    $('players-more').hidden = true;
+  }
   try {
     state.members = await api('/api/members');
     renderPlayers();
   } catch (e) {
-    toast(e.message);
+    if (state.members) toast(e.message);
+    else loadError(list, e, loadPlayers);
   }
 }
 
@@ -529,7 +585,8 @@ function renderPlayers() {
   const limit = state.playersLimit || 200;
   const list = $('players-list');
   list.classList.toggle('staff', staff);
-  list.replaceChildren(playerListHead(staff), ...rows.slice(0, limit).map(playerRow));
+  list.setAttribute('role', 'list');
+  keepFocus(list, () => list.replaceChildren(playerListHead(staff), ...rows.slice(0, limit).map(playerRow)));
   list.hidden = rows.length === 0;
   $('players-more').hidden = rows.length <= limit;
   $('players-more').textContent = `Show more (${(rows.length - limit).toLocaleString()} left)`;
@@ -561,7 +618,7 @@ function playerRow(p) {
   if (staff && p.linked && p.inGuild === false) status.push(el('div', { class: 'suspension-note' }, 'Not in the Discord server'));
   if (p.discordOnly) {
     // Logged in to the website with Discord but never linked Minecraft: no profile page or player actions.
-    return el('div', { class: 'prow', role: 'listitem' },
+    return el('div', { class: 'prow', role: 'listitem', 'data-key': p.uuid || p.discordId },
       el('div', { class: 'prow-id' },
         el('span', { class: 'head head-none', 'aria-hidden': 'true' }),
         el('div', { class: 'prow-name muted' }, 'No Minecraft account')),
@@ -572,7 +629,7 @@ function playerRow(p) {
       el('div', { class: 'prow-joined muted', title: formatTime(p.firstPlayed) },
         el('span', { class: 'prow-label' }, 'Member since '), shortDate(p.firstPlayed)));
   }
-  return el('div', { class: `prow ${p.card ? 'has-card' : ''}`, role: 'listitem' },
+  return el('div', { class: `prow ${p.card ? 'has-card' : ''}`, role: 'listitem', 'data-key': p.uuid || p.discordId },
     p.card && cardBackdrop(p.card),
     el('div', { class: 'prow-id' },
       el('a', { href: playerHref(p.uuid), tabindex: '-1', 'aria-hidden': 'true' },
@@ -610,6 +667,13 @@ async function loadLogs(reset) {
   state.logsLoading = true;
   const params = logParams();
   if (!reset && state.logsBefore) params.set('before', state.logsBefore);
+  const body = $('logs-body');
+  // Until the first rows arrive (td.empty is only the loading note or an error), say it's loading.
+  const first = !body.querySelector('td:not(.empty)');
+  if (first) {
+    body.replaceChildren(el('tr', {}, el('td', { colspan: 5, class: 'empty shimmer', role: 'status' }, 'Loading…')));
+    $('logs-empty').hidden = true;
+  }
   try {
     const data = await api(`/api/logs?${params}`);
     const rows = data.entries.map((entry) => logRow(entry, true));
@@ -621,7 +685,11 @@ async function loadLogs(reset) {
     $('logs-empty').textContent = $('logs-filter').value !== 'all' || $('logs-search').value.trim()
       ? 'No log entries match this filter.' : 'Nothing logged yet.';
   } catch (e) {
-    toast(e.message);
+    if (!first) toast(e.message);
+    else {
+      body.replaceChildren(el('tr', {}, el('td', { colspan: 5, class: 'empty', role: 'alert' },
+        e.message, ' ', retryButton(() => loadLogs(true)))));
+    }
   } finally {
     state.logsLoading = false;
   }
@@ -683,20 +751,23 @@ $('logs-sheets').addEventListener('click', (e) => exportSheets(e.currentTarget))
 
 async function loadPlayer(uuid) {
   const view = $('view-player');
-  if (!state.player || state.player.player.uuid !== uuid) view.replaceChildren(el('p', { class: 'empty shimmer' }, 'Loading…'));
+  const changed = !state.player || state.player.player.uuid !== uuid || !showsContent(view);
+  if (changed) view.replaceChildren(loadingNote());
+  // A live refresh of the same player keeps keyboard focus where it was.
+  const render = (fn) => (changed ? fn() : keepFocus(view, fn));
   try {
-    const changed = !state.player || state.player.player.uuid !== uuid;
     state.player = await api(`/api/player?uuid=${encodeURIComponent(uuid)}`);
     if (!isStaff()) {
-      renderPublicPlayer();
+      render(renderPublicPlayer);
       return;
     }
     if (changed) state.inventory = null;
-    renderPlayer();
+    render(renderPlayer);
     loadPlayerLogs(true);
     if (currentRoute().inventory && state.player.player.online && changed) loadInventory();
   } catch (e) {
-    view.replaceChildren(el('a', { class: 'back', href: homeHash() }, '← Back'), el('p', { class: 'empty' }, e.message));
+    if (!changed) toast(e.message);
+    else view.replaceChildren(el('a', { class: 'back', href: homeHash() }, '← Back'), el('p', { class: 'empty', role: 'alert' }, e.message));
   }
 }
 
@@ -937,7 +1008,7 @@ function unlocksSection(p, cos) {
     } else if (styled && styleText(item.myStyle)) {
       sub += ` · ${styleText(item.myStyle)}`;
     }
-    return el('div', { class: `unlock ${item.equipped ? 'on' : ''}` },
+    return el('div', { class: `unlock ${item.equipped ? 'on' : ''}`, 'data-key': item.id },
       cosmeticPreview(item, { name: p.minecraftName, uuid: p.uuid }, true),
       el('div', { class: 'unlock-text' }, el('div', { class: 'unlock-name' }, item.name), el('div', { class: 'muted' }, sub)),
       look,
@@ -1507,7 +1578,7 @@ function communitySection(p, c) {
         el('td', { class: 'nowrap' }, micro(t.balance, mc)),
         el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind, t.detail ? `: ${t.detail}` : '',
           t.actor ? ` — ${t.actor}` : ''))))))
-    : emptyCard(`Hasn't sold anything yet.`);
+    : emptyCard(`No ${mc.many} yet.`);
 
   const advancements = c.advancements.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
     el('thead', {}, el('tr', {}, ['Advancement', 'Type', 'Reward', 'Server', 'When'].map((h) => el('th', {}, h)))),
@@ -1520,7 +1591,7 @@ function communitySection(p, c) {
         el('td', {}, a.server),
         el('td', { class: 'nowrap muted' }, formatTime(a.earnedAt)));
     }))))
-    : emptyCard('No advancements made since DiscordLinkedFAD was installed.');
+    : emptyCard(staff ? 'No advancements since DiscordLinkedFAD was installed.' : 'No advancements yet.');
 
   return [
     el('h2', { class: 'section-title' }, `${currency.many} & interactions`,
@@ -1549,6 +1620,8 @@ async function loadCommunity() {
   $('community-leaderboards').hidden = !!sub;
   $('community-interactions').hidden = !interactions;
   $('community-groups').hidden = !groups;
+  const target = $(interactions ? 'community-interactions' : groups ? 'community-groups' : 'community-board');
+  if (!showsContent(target)) target.replaceChildren(loadingNote());
   try {
     const [stats, data, groupData] = await Promise.all([api('/api/community'),
       sub ? null : api(`/api/leaderboard?board=${encodeURIComponent(communityState.board)}`),
@@ -1557,7 +1630,8 @@ async function loadCommunity() {
     if (data) communityState.data = data;
     if (groupData) groupState.data = groupData;
   } catch (e) {
-    $('community-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    if (communityState.stats && showsContent(target)) toast(e.message);
+    else loadError(target, e, loadCommunity);
     return;
   }
   const d = communityState.stats;
@@ -1617,6 +1691,11 @@ function boardValue(d, value) {
 function renderBoard() {
   const d = communityState.data;
   if (!d) return;
+  keepFocus($('community-leaderboards'), () => fillBoard(d));
+}
+
+/** The board chips and the chosen board (renderBoard keeps focus while this replaces them). */
+function fillBoard(d) {
   $('community-boards').replaceChildren(...d.boards.map((b) => el('button', {
     class: `board-chip ${b.key === d.board ? 'active' : ''}`, type: 'button', 'aria-pressed': String(b.key === d.board),
     onclick: () => {
@@ -1660,7 +1739,7 @@ function renderBoard() {
   const me = d.me;
   const myGroup = me && me.rank && d.rows[me.rank - 1]?.group;
   const standing = me && (me.rank
-    ? el('a', { class: 'board-me', href: myGroup ? '#/community/groups' : playerHref(me.uuid) }, myGroup
+    ? el('a', { class: 'board-me', href: myGroup ? '#/community/groups' : playerHref(me.uuid), 'data-key': 'me' }, myGroup
       ? `Your group ${me.name} is #${me.rank.toLocaleString()} with ${boardValue(d, me.value)}`
       : `You're #${me.rank.toLocaleString()} with ${boardValue(d, me.value)}`)
     : el('span', { class: 'board-me muted' }, 'You\'re not on this board yet.'));
@@ -1678,11 +1757,11 @@ function renderBoard() {
 function boardEntry(d, row, rank, size) {
   const isMe = d.me && d.me.rank === rank;
   if (!row.group) {
-    return { isMe, href: playerHref(row.uuid), heads: el('img', { class: 'head', src: headUrl(row.uuid, size), alt: '', loading: 'lazy' }),
+    return { isMe, key: row.uuid, href: playerHref(row.uuid), heads: el('img', { class: 'head', src: headUrl(row.uuid, size), alt: '', loading: 'lazy' }),
       name: el('span', { class: 'name' }, row.name), online: row.online };
   }
   const members = row.group.members;
-  return { isMe, href: '#/community/groups',
+  return { isMe, key: `group-${row.group.id}`, href: '#/community/groups',
     heads: el('span', { class: 'group-heads', title: members.map((m) => m.name).join(', ') },
       members.slice(0, 3).map((m) => el('img', { class: 'head', src: headUrl(m.uuid, size), alt: '', loading: 'lazy' }))),
     name: el('span', { class: 'name' }, row.name, ' ', el('span', { class: 'badge group-tag' }, `${members.length} player${members.length === 1 ? '' : 's'}`)),
@@ -1691,7 +1770,8 @@ function boardEntry(d, row, rank, size) {
 
 function podiumPlace(d, row, rank) {
   const e = boardEntry(d, row, rank, 96);
-  return el('a', { class: `podium-place place-${rank} ${row.card ? 'has-card' : ''} ${row.group ? 'is-group' : ''} ${e.isMe ? 'is-me' : ''}`, href: e.href },
+  return el('a', { class: `podium-place place-${rank} ${row.card ? 'has-card' : ''} ${row.group ? 'is-group' : ''} ${e.isMe ? 'is-me' : ''}`,
+    href: e.href, 'data-key': e.key },
     row.card && cardBackdrop(row.card),
     el('span', { class: 'podium-medal', 'aria-label': `#${rank}` }, MEDALS[rank - 1]),
     e.heads, e.name,
@@ -1701,7 +1781,7 @@ function podiumPlace(d, row, rank) {
 
 function boardRow(d, row, rank) {
   const e = boardEntry(d, row, rank, 48);
-  return el('a', { class: `lrow ${row.card ? 'has-card' : ''} ${row.group ? 'is-group' : ''} ${e.isMe ? 'is-me' : ''}`, href: e.href },
+  return el('a', { class: `lrow ${row.card ? 'has-card' : ''} ${row.group ? 'is-group' : ''} ${e.isMe ? 'is-me' : ''}`, href: e.href, 'data-key': e.key },
     row.card && cardBackdrop(row.card),
     el('span', { class: 'lrow-rank' }, rank <= 3 ? MEDALS[rank - 1] : `#${rank}`),
     e.heads, e.name,
@@ -1746,7 +1826,8 @@ function renderInteractions() {
       el('li', {}, 'A daily reward for your first join of the day, more the longer your streak')),
     state.me.isOwner && el('p', { class: 'muted' }, `Rename ${d.currency.many} or change what players earn in `,
       el('a', { href: '#/settings' }, 'Settings'), '.'));
-  $('community-interactions').replaceChildren(el('div', { class: 'grid' }, recent, el('div', { class: 'stack' }, actions, earning)));
+  keepFocus($('community-interactions'), () => $('community-interactions')
+    .replaceChildren(el('div', { class: 'grid' }, recent, el('div', { class: 'stack' }, actions, earning))));
 }
 
 // ---- Community → Groups: players sharing their microcredits ----
@@ -1774,7 +1855,7 @@ function groupLogWhat(e) {
 }
 
 function groupLogTable(log, cur) {
-  if (!log.length) return el('p', { class: 'muted' }, 'Nothing yet.');
+  if (!log.length) return el('p', { class: 'muted' }, 'No group activity yet.');
   return el('div', { class: 'table-wrap' }, el('table', { class: 'table table-cards' },
     el('thead', {}, el('tr', {}, ['Time', 'Who', 'What', 'Change', 'Balance'].map((h) => el('th', {}, h)))),
     el('tbody', {}, log.map((e) => el('tr', {},
@@ -1807,7 +1888,7 @@ function renderGroups() {
     const create = el('form', { class: 'group-create', onsubmit: (e) => { e.preventDefault(); groupAction('create', { name: name.value }); } },
       name, el('button', { class: 'btn', type: 'submit', disabled: !d.open }, 'Make a group'));
     parts.push(el('div', { class: 'card panel' }, el('h2', {}, 'Your group'),
-      d.invites.length > 0 && el('div', { class: 'group-invites' }, d.invites.map((i) => el('div', { class: 'group-invite' },
+      d.invites.length > 0 && el('div', { class: 'group-invites' }, d.invites.map((i) => el('div', { class: 'group-invite', 'data-key': `invite-${i.id}` },
         el('span', {}, el('b', {}, i.by), ' invited you to ', el('b', {}, i.name), el('span', { class: 'muted' }, ` · ${timeAgo(i.time)}`)),
         el('span', { class: 'actions' },
           el('button', { class: 'btn btn-small', type: 'button', disabled: !d.open, onclick: () => confirmDialog({
@@ -1817,7 +1898,7 @@ function renderGroups() {
       d.open ? create : el('p', { class: 'muted' }, 'Groups are switched off right now.'), rules));
   } else {
     const leader = mine.isLeader;
-    const members = el('div', { class: 'group-members' }, mine.members.map((m) => el('div', { class: 'group-member' },
+    const members = el('div', { class: 'group-members' }, mine.members.map((m) => el('div', { class: 'group-member', 'data-key': m.uuid },
       el('img', { class: 'head', src: headUrl(m.uuid, 48), alt: '', loading: 'lazy' }),
       el('div', { class: 'group-member-text' },
         el('a', { class: 'name', href: playerHref(m.uuid) }, m.name),
@@ -1841,7 +1922,7 @@ function renderGroups() {
           onclick: () => groupAction('cancel-invite', { uuid: i.uuid }) }, '×'))));
     const rename = leader && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => openDialog({
       title: 'Rename the group', text: 'Up to 32 characters. Names are unique.', label: 'Name', value: mine.name, maxLength: 32,
-      confirmLabel: 'Rename', onConfirm: async ({ reason }) => { await api('/api/groups/rename', { name: reason }); toast('Renamed'); loadCommunity(); } }) }, 'Rename');
+      confirmLabel: 'Rename', onConfirm: async ({ reason }) => { await api('/api/groups/rename', { name: reason }); toast('Renamed'); } }) }, 'Rename');
     const share = Math.floor(mine.balance / mine.members.length);
     const leave = leader
       ? el('button', { class: 'btn btn-danger btn-small', type: 'button', onclick: () => confirmDialog({
@@ -1884,7 +1965,7 @@ function renderGroups() {
         logBtn.textContent = log.hidden ? 'Log' : 'Hide log';
         logBtn.setAttribute('aria-expanded', String(!log.hidden));
       } }, open ? 'Hide log' : 'Log');
-      return el('div', { class: `card panel group-card ${mine && mine.id === g.id ? 'is-me' : ''}` },
+      return el('div', { class: `card panel group-card ${mine && mine.id === g.id ? 'is-me' : ''}`, 'data-key': g.id },
         el('div', { class: 'group-title' }, el('h3', {}, g.name),
           g.rank && el('span', { class: 'badge good', title: `#${g.rank} on the ${cur.many} leaderboard` }, `#${g.rank}`)),
         el('div', { class: 'group-card-row' }, memberHeads(g.members),
@@ -1896,20 +1977,25 @@ function renderGroups() {
           el('button', { class: 'btn btn-danger btn-small', type: 'button', onclick: () => openDialog({
             title: `Take down ${g.name}?`, text: `The group ends and its ${micro(g.balance, cur)} are split equally across its ${g.members.length} member${g.members.length === 1 ? '' : 's'}. Members are told why.`,
             confirmLabel: 'Take down', confirmClass: 'btn-danger',
-            onConfirm: async ({ reason }) => { toast((await api('/api/groups/takedown', { id: g.id, reason })).message); loadCommunity(); } }) }, 'Take down')),
+            onConfirm: async ({ reason }) => { toast((await api('/api/groups/takedown', { id: g.id, reason })).message); } }) }, 'Take down')),
         staff && log);
     })) : el('p', { class: 'muted' }, 'No groups yet.'));
-  $('community-groups').replaceChildren(...parts.filter(Boolean));
+  keepFocus($('community-groups'), () => $('community-groups').replaceChildren(...parts.filter(Boolean)));
 }
 
 // ---- Moderate page ----
 
 async function loadModerate() {
+  if (!state.online) {
+    $('moderate-grid').replaceChildren(loadingNote());
+    $('moderate-empty').hidden = true;
+  }
   try {
     state.online = await api('/api/online');
     renderModerate();
   } catch (e) {
-    toast(e.message);
+    if (state.online) toast(e.message);
+    else loadError($('moderate-grid'), e, loadModerate);
   }
 }
 
@@ -1938,7 +2024,7 @@ function renderModerate() {
     .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
     .sort(SORTS['name-asc']);
   $('moderate-count').textContent = `(${data.players.length.toLocaleString()} online)`;
-  $('moderate-grid').replaceChildren(...players.map((p) => moderateCard(p, data.selfStatus === 'online')));
+  keepFocus($('moderate-grid'), () => $('moderate-grid').replaceChildren(...players.map((p) => moderateCard(p, data.selfStatus === 'online'))));
   const empty = $('moderate-empty');
   empty.textContent = data.players.length ? 'No players match your filter.' : 'Nobody is online right now.';
   empty.hidden = players.length > 0;
@@ -1948,7 +2034,7 @@ function moderateCard(p, canSpy) {
   const spyTitle = p.self ? "That's you" : canSpy ? `Spectate ${p.minecraftName}` : 'Join the server with your linked account first';
   const small = (cls, label, handler, extra = {}) =>
     el('button', { class: `btn ${cls} btn-small`, type: 'button', onclick: handler, ...extra }, label);
-  return el('div', { class: 'card mod-card' },
+  return el('div', { class: 'card mod-card', 'data-key': p.uuid },
     el('div', { class: 'mod-top' },
       // Same link as the name beside it, so only the name is announced and focusable.
       el('a', { href: playerHref(p.uuid), tabindex: '-1', 'aria-hidden': 'true' },
@@ -2017,6 +2103,7 @@ function lock() {
 
 function unlock() {
   state.spyEndedShown = false;
+  delete $('spy-card').dataset.session;
   $('spy-lock').hidden = true;
   $('topbar').inert = false;
   document.querySelector('main').inert = false;
@@ -2033,12 +2120,27 @@ function clock(seconds) {
 }
 
 function renderSpyLock(s) {
-  lock();
   const t = s.target;
   const starting = s.state === 'starting';
   const pct = s.distance >= 0 ? Math.min(100, (s.distance / s.maxDistance) * 100) : 0;
+  const card = $('spy-card');
+  const distance = s.distance >= 0 ? `${s.distance} / ${s.maxDistance}` : '…';
+  // This is polled every second: while only the clock and distance change, update just those, so the buttons
+  // keep focus and clicks.
+  const session = `${s.state}|${t.uuid}|${!!t.suspension}|${s.server}`;
+  if (card.dataset.session === session) {
+    card.querySelector('.spy-clock')?.replaceChildren(clock(s.seconds));
+    card.querySelector('.spy-distance')?.replaceChildren(distance);
+    card.querySelector('.meter')?.classList.toggle('danger', pct > 80);
+    const fill = card.querySelector('.meter-fill');
+    if (fill) fill.style.width = `${Math.round(pct)}%`;
+    return;
+  }
+  const wasHidden = $('spy-lock').hidden;
+  const hadFocus = card.contains(document.activeElement);
+  lock();
   const observed = `"(observed via spy for …)" is added to your reason automatically.`;
-  $('spy-card').replaceChildren(...[
+  keepFocus(card, () => card.replaceChildren(...[
     el('div', { class: 'spy-eyebrow' }, el('span', { class: `live-dot ${starting ? 'pending' : ''}` }),
       starting ? 'Starting spy session…' : 'Spy session running'),
     el('img', { class: 'head-large spy-head', src: headUrl(t.uuid, 192), alt: '' }),
@@ -2047,9 +2149,9 @@ function renderSpyLock(s) {
       ? `Moving you to ${s.server} and switching you to spectator…`
       : `You're spectating on ${s.server}. The website is locked until you end the session.`),
     !starting && el('div', { class: 'spy-stats' },
-      el('div', {}, el('div', { class: 'stat-label' }, 'Watching for'), el('div', { class: 'stat-value mono' }, clock(s.seconds))),
+      el('div', {}, el('div', { class: 'stat-label' }, 'Watching for'), el('div', { class: 'stat-value mono spy-clock' }, clock(s.seconds))),
       el('div', {}, el('div', { class: 'stat-label' }, 'Distance'),
-        el('div', { class: 'stat-value mono' }, s.distance >= 0 ? `${s.distance} / ${s.maxDistance}` : '…'),
+        el('div', { class: 'stat-value mono spy-distance' }, distance),
         el('div', { class: `meter ${pct > 80 ? 'danger' : ''}` }, el('i', { class: 'meter-fill', 'data-pct': Math.round(pct) })))),
     el('div', { class: 'actions spy-actions' },
       el('button', { class: 'btn btn-ghost', type: 'button', onclick: endSpy }, starting ? 'Cancel' : 'End session'),
@@ -2066,15 +2168,20 @@ function renderSpyLock(s) {
           confirmLabel: 'Suspend', confirmClass: 'btn-warning', duration: { days: 1, hours: 0 },
           onConfirm: ({ reason, days, hours }) => api('/api/spy/suspend', { reason, days, hours }),
         }),
-      }, 'Suspend'))].filter(Boolean));
+      }, 'Suspend'))].filter(Boolean)));
+  card.dataset.session = session;
   // CSP blocks inline styles, so the meter width is set through the CSSOM.
-  const fill = $('spy-card').querySelector('.meter-fill');
+  const fill = card.querySelector('.meter-fill');
   if (fill) fill.style.width = `${fill.dataset.pct}%`;
+  // Into the card when it opens, and back to its first button if the one you were on is gone (Cancel → End session).
+  if (wasHidden || (hadFocus && !card.contains(document.activeElement))) card.querySelector('button')?.focus();
 }
 
 function renderSpyEnded(ended) {
   lock();
   state.spyEndedShown = true;
+  delete $('spy-card').dataset.session;
+  const back = el('button', { class: 'btn', type: 'button', onclick: unlock }, 'Back to the website');
   $('spy-card').replaceChildren(
     el('div', { class: 'spy-eyebrow' }, el('span', { class: 'live-dot off' }), ended.failed ? "Spy session didn't start" : 'Spy session ended'),
     el('img', { class: 'head-large spy-head', src: headUrl(ended.uuid, 192), alt: '' }),
@@ -2083,7 +2190,8 @@ function renderSpyEnded(ended) {
     el('p', { class: 'muted' }, ended.failed ? 'Nothing was changed in game.' : "You've been put back where you were in game."),
     el('div', { class: 'actions spy-actions' },
       el('a', { class: 'btn btn-ghost', href: playerHref(ended.uuid), onclick: unlock }, 'Open player page'),
-      el('button', { class: 'btn', type: 'button', onclick: unlock }, 'Back to the website')));
+      back));
+  back.focus();
 }
 
 async function endSpy() {
@@ -2100,11 +2208,15 @@ async function endSpy() {
 const settingsEdits = {};
 
 async function loadSettings() {
+  if (!state.settings) $('settings-body').replaceChildren(loadingNote());
   try {
     state.settings = await api('/api/settings');
   } catch (e) {
-    $('settings-body').replaceChildren(el('p', { class: 'empty card' }, e.message));
-    $('settings-bar').hidden = true;
+    if (state.settings) toast(e.message);
+    else {
+      loadError($('settings-body'), e, loadSettings);
+      $('settings-bar').hidden = true;
+    }
     return;
   }
   // Unsaved edits survive a trip to another page or a live refresh; drop only the ones the server now matches.
@@ -2316,7 +2428,8 @@ function renderSettings() {
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'cleanup') }, 'Clean up now'),
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'compact') }, 'Compact database')));
 
-  $('settings-body').replaceChildren(el('div', { class: 'settings-grid' }, state.domain?.tunnel && domainCard(), ...groups, secrets, dataCard));
+  keepFocus($('settings-body'), () => $('settings-body')
+    .replaceChildren(el('div', { class: 'settings-grid' }, state.domain?.tunnel && domainCard(), ...groups, secrets, dataCard)));
   updateSettingsBar();
 }
 
@@ -2402,7 +2515,11 @@ async function loadShop() {
   try {
     data = await api('/api/shop');
   } catch (e) {
-    $('shop-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    if (shop.data) toast(e.message);
+    else {
+      loadError($('shop-notice'), e, loadShop);
+      $('shop-grid').replaceChildren();
+    }
     return;
   }
   const first = !shop.data;
@@ -2426,6 +2543,11 @@ function shopIcon(id) {
 }
 
 function renderShop() {
+  keepFocus($('shop-items'), fillShop);
+}
+
+/** The shop's notices, category tabs, items and chest (renderShop keeps focus while this replaces them). */
+function fillShop() {
   const d = shop.data;
   const b = d.buyer;
   $('shop-balance').textContent = b.linked ? `You have ${credits(b.balance, d.currency)}` : '';
@@ -2436,7 +2558,7 @@ function renderShop() {
       : 'The shop is closed right now.'));
   }
   if (d.manage) {
-    const toggle = el('button', { class: `btn btn-small ${shop.edit ? '' : 'btn-ghost'}`, type: 'button',
+    const toggle = el('button', { class: `btn btn-small ${shop.edit ? '' : 'btn-ghost'}`, type: 'button', 'data-key': 'edit',
       onclick: () => { shop.edit = !shop.edit; renderShop(); } }, shop.edit ? 'Done editing' : 'Edit items');
     notices.push(el('div', { class: 'card panel shop-manage' },
       el('span', {}, `Prices are at ${d.percent}% (change it in `, el('a', { href: '#/settings' }, 'Settings'), '). ',
@@ -2771,13 +2893,13 @@ document.addEventListener('contextmenu', (e) => {
 
 function renderChest() {
   const plan = dragPlan();
-  $('shop-chest').replaceChildren(...shop.chest.map((slot, i) => {
+  keepFocus($('shop-chest'), () => $('shop-chest').replaceChildren(...shop.chest.map((slot, i) => {
     const added = plan.get(i) || 0;
     const shown = added ? { id: shop.cursor.id, amount: (slot ? slot.amount : 0) + added } : slot;
     const item = shown && shop.byId.get(shown.id);
     const node = el('button', {
       class: `slot chest-slot ${shown ? '' : 'empty'} ${shop.drag?.slots.includes(i) ? 'planned' : ''}`, type: 'button',
-      'data-index': i, 'aria-label': shown ? `${shown.amount} × ${shopName(shown.id)}` : 'Empty slot',
+      'data-index': i, 'data-key': i, 'aria-label': shown ? `${shown.amount} × ${shopName(shown.id)}` : 'Empty slot',
     }, shown && shopIcon(shown.id), shown && shown.amount > 1 && el('span', { class: 'slot-count' }, shown.amount));
     node.addEventListener('pointerdown', (e) => chestPointerDown(e, i));
     if (slot) {
@@ -2803,7 +2925,7 @@ function renderChest() {
       }
     });
     return node;
-  }));
+  })));
   renderCursor();
   renderShopTotal();
 }
@@ -3155,7 +3277,8 @@ async function loadCosmetics() {
   try {
     cos.data = await api('/api/cosmetics');
   } catch (e) {
-    $('shop-cosmetics').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    if (cos.data) toast(e.message);
+    else loadError($('shop-cosmetics'), e, loadCosmetics);
     return;
   }
   renderCosmetics();
@@ -3180,7 +3303,7 @@ function renderCosmetics() {
     parts.push(el('div', { class: 'card panel shop-manage' },
       el('span', {}, cos.edit ? 'Click Edit on an item to change it, or add new ones. Profile cards take a picture you drop in.'
         : 'You can add, change and price cosmetics.'),
-      el('button', { class: `btn btn-small ${cos.edit ? '' : 'btn-ghost'}`, type: 'button',
+      el('button', { class: `btn btn-small ${cos.edit ? '' : 'btn-ghost'}`, type: 'button', 'data-key': 'edit',
         onclick: () => { cos.edit = !cos.edit; renderCosmetics(); } }, cos.edit ? 'Done editing' : 'Edit cosmetics')));
   }
   const editing = d.manage && cos.edit;
@@ -3194,7 +3317,7 @@ function renderCosmetics() {
       help && el('p', { class: 'muted cos-help' }, help),
       items.length ? el('div', { class: 'cos-grid' }, items.map(cosmeticTile)) : el('p', { class: 'muted' }, 'None yet.')));
   }
-  $('shop-cosmetics').replaceChildren(...parts);
+  keepFocus($('shop-cosmetics'), () => $('shop-cosmetics').replaceChildren(...parts));
 }
 
 function cosmeticTile(item) {
@@ -3214,7 +3337,7 @@ function cosmeticTile(item) {
       title: short ? needMore(item.price - b.balance, d.currency) : null,
       onclick: () => buyCosmetic(item) }, item.price ? `Buy · ${credits(item.price, d.currency)}` : 'Get for free');
   }
-  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${sellable ? '' : 'not-for-sale'}` },
+  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${sellable ? '' : 'not-for-sale'}`, 'data-key': item.id },
     cosmeticPreview(item, b.linked ? { name: b.name, uuid: b.uuid } : null),
     el('div', { class: 'cos-info' },
       el('div', { class: 'cos-name' }, item.name,
@@ -3398,10 +3521,12 @@ function loadShopView() {
 const msglog = { data: null, channel: null, messages: [], more: false, search: '', searchTimer: 0 };
 
 async function loadMessageLog() {
+  if (!msglog.data) $('msglog-view').replaceChildren(loadingNote());
   try {
     msglog.data = await api('/api/settings/messages');
   } catch (e) {
-    $('messages-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    if (msglog.data) toast(e.message);
+    else loadError($('msglog-view'), e, loadMessageLog);
     return;
   }
   const d = msglog.data;
@@ -3470,7 +3595,7 @@ function renderMessageChannels() {
         c.count > 0 && el('span', { class: 'muted msglog-count' }, c.count.toLocaleString()))));
     }
   }
-  $('msglog-channels').replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted' }, 'No channels match.')]));
+  keepFocus($('msglog-channels'), () => $('msglog-channels').replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted' }, 'No channels match.')])));
 }
 $('msglog-filter').addEventListener('input', () => { if (msglog.data) renderMessageChannels(); });
 
@@ -3585,7 +3710,11 @@ async function loadMarket() {
   try {
     data = await api('/api/market');
   } catch (e) {
-    $('market-notice').replaceChildren(el('p', { class: 'empty card' }, e.message));
+    if (market.data) toast(e.message);
+    else {
+      loadError($('market-notice'), e, loadMarket);
+      for (const id of ['market-exchange', 'market-how', 'market-list']) $(id).replaceChildren();
+    }
     return;
   }
   market.data = data;
@@ -3594,6 +3723,11 @@ async function loadMarket() {
 }
 
 function renderMarket() {
+  keepFocus($('shop-sell'), fillMarket);
+}
+
+/** The Sell & exchange tab's cards, category tabs and prices (renderMarket keeps focus while this replaces them). */
+function fillMarket() {
   const d = market.data;
   const cur = d.currency;
   const me = d.me;
@@ -3712,11 +3846,14 @@ function onlineCard(p) {
 }
 
 async function loadHome() {
+  const stats = $('home-stats');
+  if (!showsContent(stats)) stats.replaceChildren(loadingNote());
   let data;
   try {
     data = await api('/api/home');
   } catch (e) {
-    toast(e.message);
+    if (showsContent(stats)) toast(e.message);
+    else loadError(stats, e, loadHome);
     return;
   }
   // The bigger dashboard tiles; who is online is the section right below, so it has no tile of its own.

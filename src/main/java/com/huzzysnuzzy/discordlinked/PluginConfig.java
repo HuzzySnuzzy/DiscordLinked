@@ -203,9 +203,9 @@ public record PluginConfig(
         return fadChannelId != 0L ? fadChannelId : chatChannelId;
     }
 
-    /** "1 Credit", "5 Credits", "0 Credits". */
+    /** "1 Credit", "1,250 Credits", "0 Credits". */
     public String credits(long amount) {
-        return amount + " " + currency(amount);
+        return String.format(java.util.Locale.ROOT, "%,d", amount) + " " + currency(amount);
     }
 
     /** The credit name that fits the amount. */

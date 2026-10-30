@@ -171,7 +171,7 @@
             <div id="shop-tabs" class="shop-tabs" role="group" aria-label="Item categories"></div>
             <input id="shop-search" type="search" placeholder="Search items…" aria-label="Search items">
           </div>
-          <div id="shop-grid" class="shop-grid" role="group" aria-label="Items"></div>
+          <div id="shop-grid" class="shop-grid" role="group" aria-label="Items"><p class="empty shimmer shop-empty">Loading…</p></div>
           <div id="shop-info" class="shop-info" aria-live="polite"><span class="muted">Point at or tap an item to see its price.</span></div>
           <div class="shop-chest-head">
             <h2>Your order</h2>
@@ -186,19 +186,19 @@
           <div class="shop-checkout">
             <div id="shop-total" class="shop-total"></div>
             <select id="shop-gift" aria-label="Who the chest is for"><option value="">For me</option></select>
-            <button id="shop-clear" class="btn btn-ghost" type="button">Empty chest</button>
-            <button id="shop-buy" class="btn" type="button">Check out</button>
+            <button id="shop-clear" class="btn btn-ghost" type="button" disabled>Empty chest</button>
+            <button id="shop-buy" class="btn" type="button" disabled>Check out</button>
           </div>
         </div>
       </div>
 
-      <div id="shop-cosmetics" hidden></div>
+      <div id="shop-cosmetics" hidden><p class="empty shimmer">Loading…</p></div>
 
       <div id="shop-sell" hidden>
         <div id="market-notice"></div>
         <div class="grid">
-          <div class="card panel" id="market-exchange"></div>
-          <div class="card panel" id="market-how"></div>
+          <div class="card panel" id="market-exchange"><p class="empty shimmer">Loading…</p></div>
+          <div class="card panel" id="market-how"><p class="empty shimmer">Loading…</p></div>
         </div>
         <div class="card panel market-prices">
           <div class="market-prices-head">
@@ -211,7 +211,7 @@
             <input id="market-search" type="search" placeholder="Search items…" aria-label="Search sell prices">
           </div>
           <div id="market-tabs" class="shop-tabs" role="group" aria-label="Item categories"></div>
-          <div id="market-list" class="market-list"></div>
+          <div id="market-list" class="market-list"><p class="empty shimmer shop-empty">Loading…</p></div>
         </div>
       </div>
     </section>
@@ -228,7 +228,7 @@
     </section>
   </main>
 
-  <dialog id="action-dialog">
+  <dialog id="action-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-text">
     <form id="action-form">
       <h2 id="dialog-title"></h2>
       <p id="dialog-text" class="muted"></p>
@@ -243,7 +243,7 @@
         <textarea id="dialog-reason" required maxlength="500" rows="3"></textarea>
       </label>
       <label id="dialog-check-row" class="check-row" hidden><input type="checkbox" id="dialog-check"> <span id="dialog-check-label"></span></label>
-      <p id="dialog-error" class="error" hidden></p>
+      <p id="dialog-error" class="error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" id="dialog-cancel">Cancel</button>
         <button type="submit" class="btn" id="dialog-confirm">Confirm</button>
@@ -251,7 +251,7 @@
     </form>
   </dialog>
 
-  <dialog id="shop-item-dialog">
+  <dialog id="shop-item-dialog" aria-labelledby="shop-item-title" aria-describedby="shop-item-text">
     <form id="shop-item-form">
       <h2 id="shop-item-title"></h2>
       <p id="shop-item-text" class="muted"></p>
@@ -266,7 +266,7 @@
         </label>
         <p id="shop-item-sell-text" class="muted"></p>
       </div>
-      <p id="shop-item-error" class="error" hidden></p>
+      <p id="shop-item-error" class="error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" id="shop-item-cancel">Cancel</button>
         <button type="submit" class="btn" id="shop-item-save">Save</button>
@@ -274,11 +274,11 @@
     </form>
   </dialog>
 
-  <dialog id="confirm-dialog">
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
     <form id="confirm-form">
       <h2 id="confirm-title"></h2>
       <div id="confirm-text" class="muted"></div>
-      <p id="confirm-error" class="error" hidden></p>
+      <p id="confirm-error" class="error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" id="confirm-cancel">Cancel</button>
         <button type="submit" class="btn" id="confirm-ok">OK</button>
@@ -286,7 +286,7 @@
     </form>
   </dialog>
 
-  <dialog id="cosmetic-dialog" class="wide">
+  <dialog id="cosmetic-dialog" class="wide" aria-labelledby="cosmetic-title">
     <form id="cosmetic-form">
       <h2 id="cosmetic-title"></h2>
       <label class="reason">Name <input type="text" id="cosmetic-name" maxlength="32" required></label>
@@ -296,7 +296,7 @@
       </div>
       <label class="check-row"><input type="checkbox" id="cosmetic-for-sale"> For sale in the shop</label>
       <p class="muted" id="cosmetic-note"></p>
-      <p id="cosmetic-error" class="error" hidden></p>
+      <p id="cosmetic-error" class="error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-danger btn-small" id="cosmetic-delete">Delete</button>
         <span class="grow"></span>
