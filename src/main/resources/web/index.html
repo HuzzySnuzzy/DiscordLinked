@@ -171,16 +171,18 @@
             <div id="shop-tabs" class="shop-tabs" role="group" aria-label="Item categories"></div>
             <input id="shop-search" type="search" placeholder="Search items…" aria-label="Search items">
           </div>
-          <div id="shop-grid" class="shop-grid" role="list"></div>
-          <div id="shop-info" class="shop-info" aria-live="polite"></div>
+          <div id="shop-grid" class="shop-grid" role="group" aria-label="Items"></div>
+          <div id="shop-info" class="shop-info" aria-live="polite"><span class="muted">Point at or tap an item to see its price.</span></div>
           <div class="shop-chest-head">
             <h2>Your order</h2>
-            <span class="muted" id="shop-hint">Works like Minecraft: left-click an item to pick one up (again for more),
-              right-click for a stack, shift-click to send a stack to the chest. In the chest, left-click picks up or puts
-              down, right-click splits a stack or puts down one, drag across slots to spread it, double-click to gather,
-              shift-click to send a slot back. Esc puts back what you hold.</span>
+            <span class="muted" id="shop-hint"><span class="hint-mouse">Works like Minecraft: left-click an item to pick one
+              up (again for more), right-click for a stack, shift-click to send a stack to the chest. In the chest, left-click
+              picks up or puts down, right-click splits a stack or puts down one, drag across slots to spread it, double-click
+              to gather, shift-click to send a slot back. Esc puts back what you hold. Keyboard: arrow keys move between items,
+              Enter adds one, Delete empties a chest slot.</span><span class="hint-touch">Tap an item, then tap a chest slot to
+              put it down. +1 / +64 add it straight to the chest.</span></span>
           </div>
-          <div id="shop-chest" class="shop-chest" aria-label="Order chest"></div>
+          <div id="shop-chest" class="shop-chest" role="group" aria-label="Order chest"></div>
           <div class="shop-checkout">
             <div id="shop-total" class="shop-total"></div>
             <select id="shop-gift" aria-label="Who the chest is for"><option value="">For me</option></select>
@@ -290,7 +292,7 @@
       <label class="reason">Name <input type="text" id="cosmetic-name" maxlength="32" required></label>
       <div id="cosmetic-value"></div>
       <div class="duration">
-        <label>Price (credits) <input type="number" id="cosmetic-price" min="0" max="1000000000" step="1" required></label>
+        <label><span id="cosmetic-price-label">Price</span> <input type="number" id="cosmetic-price" min="0" max="1000000000" step="1" required></label>
       </div>
       <label class="check-row"><input type="checkbox" id="cosmetic-for-sale"> For sale in the shop</label>
       <p class="muted" id="cosmetic-note"></p>

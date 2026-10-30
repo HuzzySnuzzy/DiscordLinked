@@ -62,7 +62,7 @@ a { color: var(--link); }
   background: var(--btn-accent); color: var(--accent-text);
   font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; white-space: nowrap;
 }
-.btn:disabled { opacity: .6; cursor: wait; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
 .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
 .btn-ghost:hover { background: var(--surface-2); filter: none; }
 .btn-danger { background: var(--btn-danger); }
@@ -860,12 +860,17 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .shop-empty { grid-column: 1 / -1; padding: 12px; }
 .slot-text { font-size: 11px; font-weight: 800; color: var(--muted); }
 .shop-info { display: flex; align-items: center; gap: 10px; min-height: 48px; margin: 10px 0 4px; flex-wrap: wrap; }
-.shop-info:empty { min-height: 0; margin: 0; }
 .shop-info-icon img { width: 32px; height: 32px; image-rendering: pixelated; display: block; }
-.shop-info-text { display: grid; margin-right: auto; }
+.shop-info-text { display: grid; margin-right: auto; flex: 1 1 200px; min-width: 0; }
 .shop-chest-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 14px 0 8px; }
 .shop-chest-head h2 { font-size: 16px; margin: 0; }
 .shop-chest-head .muted { font-size: 12px; }
+/* The order hint: mouse and keyboard controls, or tapping on touch screens. */
+.hint-touch { display: none; }
+@media (hover: none) {
+  .hint-mouse { display: none; }
+  .hint-touch { display: inline; }
+}
 .shop-chest {
   display: grid; grid-template-columns: repeat(9, var(--slot)); gap: 4px; padding: 10px; width: max-content; max-width: 100%;
   border-radius: 14px; background: rgba(139, 94, 52, .14); border: 1px solid rgba(139, 94, 52, .35);
@@ -881,7 +886,7 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   #view-shop { --slot: calc((100vw - 32px - 32px - 20px - 32px) / 9); }
   .shop-tab span { display: none; }
   .shop-tab { padding: 5px; }
-  .shop-grid { max-height: 260px; }
+  .shop-grid { max-height: 260px; --slot: 40px; }
   .shop-checkout #shop-buy { flex: 1 1 100%; }
 }
 .shop-window { user-select: none; -webkit-user-select: none; }
@@ -1266,6 +1271,12 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .cos-tile.equipped { box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 2px var(--success), var(--glass-shadow); }
 .cos-tile.not-for-sale { opacity: .7; }
 .cos-tile > .btn { justify-self: start; }
+@media (max-width: 520px) {
+  .cos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .cos-tile { padding: 8px; gap: 8px; }
+  .cos-tile .chat-msg { display: none; }
+  .cos-tile > .btn { white-space: normal; }
+}
 .cos-name { font-weight: 700; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .cos-meta, .cos-desc { font-size: 12px; margin: 3px 0 0; }
 .cos-preview {
@@ -1341,6 +1352,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   border: 2px dashed var(--control-border); border-radius: 16px; background: var(--glass-soft); transition: border-color .2s, background-color .2s;
 }
 .dropzone.over, .dropzone:hover { border-color: var(--accent); background: var(--glass-strong); }
+.dropzone:focus-within { border-color: var(--accent); background: var(--glass-strong); outline: 2px solid var(--accent); outline-offset: 2px; }
 #cosmetic-value { display: grid; gap: 8px; }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1425,6 +1425,8 @@ document.addEventListener('click', (e) => {
 /** "1 Pawbuck", "1,250 Pawbucks". */
 const credits = (n, currency) => `${n.toLocaleString()} ${Math.abs(n) === 1 ? currency.one : currency.many}`;
 const signedCredits = (n, currency) => `${n > 0 ? '+' : '−'}${credits(Math.abs(n), currency)}`;
+/** Why a Buy button is off: "You need 148 more Pawbucks". */
+const needMore = (n, currency) => `You need ${n.toLocaleString()} more ${n === 1 ? currency.one : currency.many}`;
 
 /** Active playtime as hours, e.g. "76h 12m". */
 function playtime(seconds) {
@@ -2361,7 +2363,7 @@ const SHOP_TABS = [['Building Blocks', 'bricks'], ['Colored Blocks', 'cyan_wool'
 const creditFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 /** Prices are kept in hundredths of a credit. */
 const fromCents = (cents) => creditFormat.format(cents / 100);
-const shop = { data: null, tab: SHOP_TABS[0][0], chest: [], textures: new Map(), hovered: null, edit: false, busy: false };
+const shop = { data: null, tab: SHOP_TABS[0][0], chest: [], textures: new Map(), hovered: null, edit: false, busy: false, focusIndex: 0 };
 let shiftHeld = false;
 
 async function loadShop() {
@@ -2411,14 +2413,14 @@ function renderShop() {
       toggle));
   }
   if (!b.linked) notices.push(el('p', { class: 'card panel muted' }, 'Link your Minecraft account to buy things (/link in Discord).'));
-  else if (!b.online) notices.push(el('p', { class: 'card panel muted' }, `Join the Minecraft server to check out: the chest goes straight into ${b.name}'s inventory.`));
+  else if (!b.online) notices.push(el('p', { class: 'card panel muted' }, 'Join the Minecraft server to check out, or gift the chest to someone who is online.'));
   else if (!b.serverReady) notices.push(el('p', { class: 'card panel muted' }, `${b.server} can't deliver orders. Move to another server to check out.`));
   $('shop-notice').replaceChildren(...notices);
 
   const shopTab = $('shop-search').value.trim() ? null : shop.tab; // searching shows every category
   $('shop-tabs').replaceChildren(...SHOP_TABS.map(([tab, icon]) => el('button', {
     class: `shop-tab ${tab === shopTab ? 'active' : ''}`, type: 'button', 'aria-pressed': String(tab === shopTab),
-    title: tab, 'aria-label': tab, onclick: () => { shop.tab = tab; $('shop-search').value = ''; renderShop(); },
+    title: tab, 'aria-label': tab, onclick: () => { shop.tab = tab; shop.focusIndex = 0; $('shop-search').value = ''; renderShop(); },
   }, shopIcon(icon), el('span', {}, tab))));
   renderShopGrid();
   renderGiftChoice();
@@ -2430,19 +2432,27 @@ function renderShopGrid() {
   const items = shop.data.items.filter((item) => (query
     ? shopName(item.id).toLowerCase().includes(query) || item.id.includes(query.replace(/ /g, '_'))
     : item.tab === shop.tab));
-  $('shop-grid').replaceChildren(...(items.length ? items.map(shopItemNode)
+  $('shop-grid').replaceChildren(...(items.length ? items.map((item, i) => shopItemNode(item, i))
     : [el('p', { class: 'muted shop-empty' }, query ? 'No items match.' : 'Nothing for sale here.')]));
+  // One tab stop for the whole list; the arrow keys move between items.
+  if (items.length) $('shop-grid').children[Math.min(shop.focusIndex, items.length - 1)].tabIndex = 0;
 }
 
 /**
  * An item in the shop's creative-style list. Like Minecraft's creative tabs: left-click picks one up (again for
  * one more), right- or middle-click picks up a full stack, shift-click sends a stack straight to the chest.
  */
-function shopItemNode(item) {
+function shopItemNode(item, index) {
   const node = el('button', {
-    class: `slot shop-item ${item.disabled ? 'off' : ''} ${item.unavailable ? 'unavailable' : ''}`, type: 'button', role: 'listitem',
-    'aria-label': `${shopName(item.id)}, ${fromCents(item.price)} each`,
+    class: `slot shop-item ${item.disabled ? 'off' : ''} ${item.unavailable ? 'unavailable' : ''}`, type: 'button', tabindex: '-1',
+    'aria-label': `${shopName(item.id)}, ${fromCents(item.price)} ${shop.data.currency.many} each`,
   }, shopIcon(item.id));
+  node.addEventListener('focus', () => {
+    const last = $('shop-grid').querySelector('.shop-item[tabindex="0"]');
+    if (last && last !== node) last.tabIndex = -1;
+    node.tabIndex = 0;
+    shop.focusIndex = index;
+  });
   const show = () => {
     shop.hovered = item;
     if (!shop.cursor) showShopTooltip(node, item);
@@ -2486,7 +2496,7 @@ function pickFromShop(item, fullStack) {
   else setCursor({ id: item.id, amount: 1 });
 }
 
-const perStackLabel = (item) => (item.stack === 64 ? 'per 64 (stack)' : `per ${item.stack} (stack)`);
+const perStackLabel = (item) => `per stack of ${item.stack}`;
 
 function showShopTooltip(anchor, item) {
   tooltip ||= document.body.appendChild(el('div', { class: 'mc-tooltip', role: 'tooltip' }));
@@ -2516,15 +2526,16 @@ function showShopTooltip(anchor, item) {
 function renderShopInfo(item) {
   if (!item) return;
   const d = shop.data;
-  $('shop-info').replaceChildren(
+  $('shop-info').replaceChildren(...[
     el('span', { class: 'shop-info-icon' }, shopIcon(item.id)),
     el('div', { class: 'shop-info-text' },
       el('strong', {}, shopName(item.id)),
       el('span', { class: 'muted' }, `${fromCents(item.price)} ${d.currency.many} each`
-        + (item.stack > 1 ? ` · ${fromCents(item.price * item.stack)} ${perStackLabel(item)}` : ''))),
+        + (item.stack > 1 ? ` · ${fromCents(item.price * item.stack)} ${d.currency.many} ${perStackLabel(item)}` : ''))),
     !shop.edit && !item.disabled && el('div', { class: 'actions' },
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => addToChest(item, 1) }, '+1'),
-      item.stack > 1 && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => addToChest(item, item.stack) }, `+${item.stack}`)));
+      item.stack > 1 && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => addToChest(item, item.stack) }, `+${item.stack}`)),
+  ].filter(Boolean));
 }
 
 /** Fills matching stacks first, then empty slots. */
@@ -2573,7 +2584,7 @@ function renderCursor() {
     node.hidden = true;
     return;
   }
-  node.replaceChildren(shopIcon(shop.cursor.id), shown !== 1 && el('span', { class: 'slot-count' }, shown));
+  node.replaceChildren(...[shopIcon(shop.cursor.id), shown !== 1 && el('span', { class: 'slot-count' }, shown)].filter(Boolean));
   node.classList.toggle('spent', shown <= 0);
   node.hidden = false;
   moveCursor();
@@ -2796,13 +2807,13 @@ function renderShopTotal() {
     ? el('div', { class: 'muted shop-holding' }, `In your hand: ${shop.cursor.amount} × ${shopName(shop.cursor.id)}`
       + (lastPointerType === 'mouse' ? ' (Esc puts it back)' : ' (tap a slot to put it down)'))
     : null;
-  $('shop-total').replaceChildren(...(t.stacks
-    ? [el('span', { class: 'muted' }, `${t.stacks} stack${t.stacks === 1 ? '' : 's'} ${fromCents(t.items)} + chest ${fromCents(d.chestPrice)} = `),
-      el('strong', {}, credits(t.credits, d.currency))]
-    : [el('span', { class: 'muted' }, 'The chest is empty.')]), ...[held].filter(Boolean));
+  $('shop-total').replaceChildren(...[...(t.stacks
+    ? [el('span', { class: 'muted' }, `Items ${fromCents(t.items)} + chest ${fromCents(d.chestPrice)} = `),
+      el('strong', {}, credits(t.credits, d.currency)), t.cents % 100 && el('span', { class: 'muted' }, ' (rounded up)')]
+    : [el('span', { class: 'muted' }, 'The chest is empty.')]), held].filter(Boolean));
   const buy = $('shop-buy');
   const reason = !d.open ? 'The shop is closed' : !b.linked ? 'Link your Minecraft account first'
-    : !t.stacks ? 'Put something in the chest first' : t.credits > b.balance ? `You need ${credits(t.credits - b.balance, d.currency)} more`
+    : !t.stacks ? 'Put something in the chest first' : t.credits > b.balance ? needMore(t.credits - b.balance, d.currency)
       : giftTo ? '' : !b.online ? 'Join the Minecraft server to check out' : !b.serverReady ? `${b.server} can't deliver orders` : '';
   buy.disabled = !!reason || shop.busy;
   buy.title = reason;
@@ -2811,7 +2822,18 @@ function renderShopTotal() {
   $('shop-clear').disabled = !t.stacks;
 }
 
-$('shop-search').addEventListener('input', () => { renderShop(); });
+$('shop-search').addEventListener('input', () => { shop.focusIndex = 0; renderShop(); });
+// Arrow keys, Home and End move through the item list, like a grid.
+$('shop-grid').addEventListener('keydown', (e) => {
+  const items = [...$('shop-grid').querySelectorAll('.shop-item')];
+  const i = items.indexOf(document.activeElement);
+  if (i < 0) return;
+  const cols = getComputedStyle($('shop-grid')).gridTemplateColumns.split(' ').length;
+  const next = { ArrowLeft: i - 1, ArrowRight: i + 1, ArrowUp: i - cols, ArrowDown: i + cols, Home: 0, End: items.length - 1 }[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  items[Math.max(0, Math.min(items.length - 1, next))].focus();
+});
 $('shop-gift').addEventListener('change', renderShopTotal);
 $('shop-clear').addEventListener('click', () => { shop.chest = shop.chest.map(() => null); renderChest(); });
 $('shop-buy').addEventListener('click', async () => {
@@ -2851,7 +2873,7 @@ window.addEventListener('blur', () => { shiftHeld = false; });
 
 function shopItemDialog(item) {
   $('shop-item-title').textContent = shopName(item.id);
-  $('shop-item-text').textContent = `Normally ${fromCents(Math.round(item.price * 100 / item.percent))} each at ${shop.data.percent}% prices.`;
+  $('shop-item-text').textContent = `Normally ${fromCents(Math.round(item.price * 100 / item.percent))} ${shop.data.currency.many} each at ${shop.data.percent}% prices.`;
   $('shop-item-enabled').checked = !item.disabled;
   $('shop-item-percent').value = item.percent;
   $('shop-item-sell').hidden = !shop.data.market;
@@ -3120,8 +3142,8 @@ function renderCosmetics() {
   }
   if (!b.linked) parts.push(el('p', { class: 'card panel muted' }, 'Link your Minecraft account to buy cosmetics (/link in Discord).'));
   else if (!d.manage || !cos.edit) {
-    parts.push(el('p', { class: 'card panel muted cos-intro' }, 'Bought once, yours to keep. Switch them on and off under ',
-      el('a', { href: playerHref(b.uuid) }, 'Your unlocks'), ' on your profile.'));
+    parts.push(el('p', { class: 'card panel muted cos-intro' }, 'Bought once, yours to keep. Use or stop using them here; '
+      + 'pick a trail\'s or aura\'s look under ', el('a', { href: playerHref(b.uuid) }, 'Your unlocks'), ' on your profile.'));
   }
   if (d.manage) {
     parts.push(el('div', { class: 'card panel shop-manage' },
@@ -3148,23 +3170,25 @@ function cosmeticTile(item) {
   const d = cos.data;
   const b = d.buyer;
   const editing = d.manage && cos.edit;
+  const sellable = item.forSale && (item.kind !== 'card' || item.card);
   let action;
   if (editing) {
     action = el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => cosmeticDialog(item) }, 'Edit');
   } else if (item.owned) {
     action = el('button', { class: `btn btn-small ${item.equipped ? 'btn-ghost' : ''}`, type: 'button',
       onclick: (e) => equipCosmetic(item, !item.equipped, e.currentTarget) }, item.equipped ? 'Stop using' : 'Use');
-  } else {
+  } else if (sellable) {
     const short = b.linked && b.balance < item.price;
     action = el('button', { class: 'btn btn-small', type: 'button', disabled: !d.open || !b.linked || short,
-      title: short ? `You need ${credits(item.price - b.balance, d.currency)} more` : null,
+      title: short ? needMore(item.price - b.balance, d.currency) : null,
       onclick: () => buyCosmetic(item) }, item.price ? `Buy · ${credits(item.price, d.currency)}` : 'Get for free');
   }
-  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${item.forSale ? '' : 'not-for-sale'}` },
+  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${sellable ? '' : 'not-for-sale'}` },
     cosmeticPreview(item, b.linked ? { name: b.name, uuid: b.uuid } : null),
     el('div', { class: 'cos-info' },
       el('div', { class: 'cos-name' }, item.name,
-        item.equipped ? el('span', { class: 'badge good' }, 'In use') : item.owned && el('span', { class: 'badge' }, 'Yours')),
+        item.equipped ? el('span', { class: 'badge good' }, 'In use') : item.owned && el('span', { class: 'badge' }, 'Yours'),
+        !editing && !item.owned && !sellable && el('span', { class: 'badge' }, 'Not for sale')),
       (item.kind === 'trail' || item.kind === 'aura') && particleName(item.value).toLowerCase() !== item.name.toLowerCase()
         && el('div', { class: 'muted cos-meta' }, particleName(item.value)),
       item.kind === 'keepinv' && el('p', { class: 'muted cos-desc' }, keepInventoryText(d.keepInventoryDelay)),
@@ -3179,7 +3203,7 @@ function buyCosmetic(item) {
     title: `Buy ${item.name}?`,
     text: [`${credits(item.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`,
       item.kind === 'keepinv' ? keepInventoryText(d.keepInventoryDelay)
-        : `It's switched on straight away; switch it off any time under Your unlocks on your profile${
+        : `It's switched on straight away; switch it off any time here or under Your unlocks on your profile${
           item.kind === 'trail' || item.kind === 'aura' ? `, where you also pick its look (halo, wings, helix…)${item.colorable ? ' and colour' : ''}` : ''}.`],
     confirmLabel: item.price ? `Buy for ${credits(item.price, d.currency)}` : 'Get it',
     onConfirm: async () => {
@@ -3207,6 +3231,7 @@ function cosmeticDialog(item, kind = item?.kind) {
   const [, , one] = COSMETIC_KINDS.find(([k]) => k === kind);
   $('cosmetic-title').textContent = item ? `Edit ${item.name}` : `New ${one}`;
   $('cosmetic-name').value = item?.name || (kind === 'keepinv' ? 'KeepInventory' : '');
+  $('cosmetic-price-label').textContent = `Price (${d.currency.many})`;
   $('cosmetic-price').value = item?.price ?? DEFAULT_PRICES[kind];
   $('cosmetic-for-sale').checked = item ? item.forSale : true;
   $('cosmetic-error').hidden = true;
@@ -3262,7 +3287,7 @@ function cosmeticDialog(item, kind = item?.kind) {
       show(URL.createObjectURL(chosen));
     };
     file.addEventListener('change', () => take(file.files[0]));
-    const drop = el('label', { class: 'dropzone' }, file, el('b', {}, 'Drop a picture here'), el('span', { class: 'muted' }, 'or click to choose one. '
+    const drop = el('label', { class: 'dropzone' }, file, el('b', {}, item?.card ? 'Drop a new picture here' : 'Drop a picture here'), el('span', { class: 'muted' }, 'or click to choose one. '
       + 'Wide pictures work best (it fades out to the right); it\'s shrunk to at most 1600×900.'));
     ['dragenter', 'dragover'].forEach((type) => drop.addEventListener(type, (e) => { e.preventDefault(); drop.classList.add('over'); }));
     ['dragleave', 'drop'].forEach((type) => drop.addEventListener(type, () => drop.classList.remove('over')));
@@ -3535,7 +3560,7 @@ function renderMarket() {
   const d = market.data;
   const cur = d.currency;
   const me = d.me;
-  $('shop-balance').textContent = me.linked ? `You have ${credits(me.credits, d.credits)} · ${micro(me.micro, cur)}` : '';
+  $('shop-balance').textContent = me.linked ? `You have ${credits(me.credits, d.credits)}` : '';
   const notices = [];
   if (!d.open) {
     notices.push(el('div', { class: 'card panel shop-closed' }, d.manage
@@ -3576,8 +3601,7 @@ function renderMarket() {
     all.addEventListener('click', () => run(all, { all: true }));
     exchange.replaceChildren(el('h2', {}, `${cur.many} → ${d.credits.many}`),
       el('div', { class: 'stats-grid' },
-        stat('Yours', [micro(me.micro, cur), me.rank ? el('span', { class: 'stat-sub' }, `Rank #${me.rank}`) : null]),
-        stat(d.credits.many, credits(me.credits, d.credits))),
+        stat('Yours', [micro(me.micro, cur), me.rank ? el('span', { class: 'stat-sub' }, `Rank #${me.rank}`) : null])),
       el('p', { class: 'muted' }, `1 ${d.credits.one} = ${micro(d.rate, cur)}. Exchanging only goes this way, `
         + (d.ranking === 'balance' ? 'and lowers your place on the leaderboard.' : 'and doesn\'t change your place on the leaderboard.')),
       el('div', { class: 'market-exchange-row' }, amount, cost, one, all),
