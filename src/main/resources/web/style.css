@@ -103,7 +103,8 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
 .toolbar h1 { margin-right: auto; }
 .toolbar input[type=search] { width: 280px; max-width: 100%; }
-.count { color: var(--muted); font-weight: 500; font-size: 15px; }
+/* Soft body text, not --muted: counts and back links sit straight on the colour field, where --muted gets too faint. */
+.count { color: var(--text); opacity: .75; font-weight: 500; font-size: 15px; }
 
 /* ---- Tables ---- */
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow-x: auto; }
@@ -157,6 +158,8 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
   .table.table-cards tr:last-child { border-bottom: 0; }
   .table.table-cards td { padding: 0; border: 0; }
   .table.table-cards :is(td.detail, td.empty, td.own-line) { grid-column: 1 / -1; justify-self: stretch; max-width: none; min-width: 0; }
+  /* "—" for nobody (joins, chat, deaths) only keeps the desktop columns lined up; a card doesn't need it. */
+  .table.table-cards td.no-actor { display: none; }
 }
 
 /* ---- Dialog ---- */
@@ -212,15 +215,15 @@ textarea.single-line { resize: none; }
 .search-result .grow { flex: 1; min-width: 0; }
 .search-empty { padding: 12px; color: var(--muted); text-align: center; }
 
-.back { display: inline-block; margin-bottom: 12px; color: var(--muted); text-decoration: none; }
-.back:hover { color: var(--text); }
+.back { display: inline-block; margin-bottom: 12px; color: var(--text); opacity: .75; text-decoration: none; }
+.back:hover { opacity: 1; }
 .profile { padding: 20px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
 .profile .head-large { width: 96px; height: 96px; border-radius: 10px; image-rendering: pixelated; background: var(--surface-2); }
 .profile .info { flex: 1; min-width: 220px; display: grid; gap: 6px; }
 .profile h1 { font-size: 26px; }
 .profile .badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .profile .actions { justify-content: flex-start; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px; margin-bottom: 16px; }
 .panel { padding: 18px; }
 .panel > p:only-child { margin: 0; }
 .panel h2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
@@ -256,7 +259,7 @@ textarea.single-line { resize: none; }
   --glass-line: rgba(20, 30, 60, .08);
   /* Fields, ghost buttons, badges and off switches: white edges vanish on white glass, so these are darker. */
   --control-border: rgba(20, 30, 60, .18);
-  --switch-off: rgba(20, 30, 60, .16);
+  --switch-off: rgba(20, 30, 60, .4);
   --glass-shadow: 0 1px 1px rgba(20, 30, 60, .04), 0 8px 32px rgba(40, 50, 110, .12);
   --glass-blur: blur(22px) saturate(180%);
   --field-1: #8ea2ff;
@@ -347,7 +350,8 @@ body { background: var(--field-base); }
 /* Shared glass recipe */
 .card, .table-wrap, .topbar, dialog, .search-results, .toast {
   background-color: var(--glass);
-  background-image: linear-gradient(160deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, 0) 38%);
+  /* The sheen stops within 160px, so tall cards (long tables) don't get a pale top third that text has to fight. */
+  background-image: linear-gradient(160deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, 0) min(38%, 160px));
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   border: 1px solid var(--glass-border);
@@ -386,6 +390,8 @@ input, select, textarea {
 input[type=search] { border-radius: 999px; padding-left: 14px; }
 .toolbar select, .market-prices-head select, #shop-gift { border-radius: 999px; padding-left: 14px; min-height: 39px; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--glass-strong); }
+/* The browser's grey is too faint on dark fields, and some placeholders say what empty means ("Empty = off"). */
+::placeholder { color: var(--muted); opacity: 1; }
 
 /* Buttons: pills with a lit top edge */
 .btn {
@@ -425,7 +431,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   width: max(100%, 380px); max-width: min(560px, calc(100vw - 32px)); right: auto;
 }
 .search-result { border-radius: 12px; }
-.search-result:hover { background: var(--surface-2); }
+/* No separate :hover look: pointing at a row makes it the active one, so only one row is ever lit. */
 .search-result.active {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
@@ -537,7 +543,7 @@ body:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) .toast { bott
 .inventory-panel { --slot: 44px; margin-bottom: 16px; }
 .slot {
   position: relative; width: var(--slot); height: var(--slot); border-radius: 8px;
-  background: var(--glass-soft); border: 1px solid var(--glass-border);
+  background: var(--glass-soft); border: 1px solid var(--control-border);
   box-shadow: inset 0 1px 3px var(--glass-line);
   display: grid; place-items: center; cursor: default; outline-offset: 1px;
 }
@@ -624,8 +630,10 @@ body:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) .toast { bott
   background: var(--glass-soft); border: 1px solid var(--control-border); box-shadow: inset 0 1px 0 var(--glass-edge); }
 .icon-btn:hover { background: var(--glass-strong); }
 .icon-btn.active { background: var(--glass-strong); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+/* Unsaved Settings edits are kept while you look at other pages, so the gear shows they're waiting. */
+.icon-btn.has-edits { box-shadow: inset 0 0 0 2px var(--warning); }
 /* Columns, not a grid, so a short card doesn't leave a hole beside a long one. */
-.settings-grid { columns: 420px 2; column-gap: 16px; padding-bottom: 90px; }
+.settings-grid { columns: 520px 2; column-gap: 16px; padding-bottom: 90px; }
 .settings-grid > .settings-group { break-inside: avoid; margin: 0 0 16px; }
 .settings-group h2 { margin-bottom: 4px; }
 .setting { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--glass-line); }
@@ -634,7 +642,7 @@ body:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) .toast { bott
 .setting-text { min-width: 0; }
 .setting-label { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .setting-help { color: var(--muted); font-size: 13px; margin-top: 2px; }
-.setting-key { color: var(--muted); font-size: 11px; opacity: .7; margin-top: 2px; }
+.setting-key { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .setting-input { flex: none; }
 .setting-input input[type=text] { width: 240px; }
 .setting-input input[type=number] { width: 110px; }
@@ -642,7 +650,8 @@ body:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) .toast { bott
 .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .switch-track { position: absolute; inset: 0; border-radius: 999px; background: var(--switch-off); border: 1px solid var(--control-border); transition: background .15s; }
 .switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .15s; }
-.switch input:checked + .switch-track { background: var(--success); }
+/* The button green, not the text green: the white knob needs the darker fill in dark theme. */
+.switch input:checked + .switch-track { background: var(--btn-success); }
 .switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
 .stat { background: var(--glass-soft); border: 1px solid var(--glass-border); border-radius: 14px; padding: 10px 12px; }
@@ -676,19 +685,20 @@ body:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) .toast { bott
    while it runs, so the frames would change look when it ends. Clipping keeps the rising cards from
    briefly making the page scrollable; the margin leaves room for their shadows. */
 section.entering { overflow: clip; overflow-clip-margin: 24px; }
-section.entering .card, section.entering .table tbody tr, section.entering .mod-card,
+/* Not the floating settings bar: it's a card too, but has its own slide-in and centring transform. */
+section.entering .card:not(.settings-bar), section.entering .table tbody tr, section.entering .mod-card,
 section.entering .settings-group, section.entering .note {
   animation: rise-in .55s var(--flow) both;
 }
 section.entering .person-card, section.entering .stat-card { animation: rise-in .55s var(--flow) both; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(1) { animation-delay: .02s; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(2) { animation-delay: .06s; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(3) { animation-delay: .10s; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(4) { animation-delay: .14s; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(5) { animation-delay: .18s; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(6) { animation-delay: .22s; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(7) { animation-delay: .26s; }
-section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(n+8) { animation-delay: .30s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(1) { animation-delay: .02s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(2) { animation-delay: .06s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(3) { animation-delay: .10s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(4) { animation-delay: .14s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(5) { animation-delay: .18s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(6) { animation-delay: .22s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(7) { animation-delay: .26s; }
+section.entering :is(.card:not(.settings-bar), .mod-card, .settings-group, tbody tr):nth-child(n+8) { animation-delay: .30s; }
 
 /* Liquid tab pill: glides between tabs and squashes like a droplet as it lands. */
 .tabs { position: relative; isolation: isolate; }
@@ -728,7 +738,8 @@ section.entering :is(.card, .mod-card, .settings-group, tbody tr):nth-child(n+8)
 .mod-card:hover { transform: translateY(-3px); box-shadow: inset 0 1px 0 var(--glass-edge), 0 14px 40px rgba(0, 0, 0, .22); }
 .snap-item:hover { transform: translateX(3px); }
 .slot { transition: transform .3s var(--spring), border-color .2s, box-shadow .2s; }
-.slot[tabindex="0"]:hover { transform: translateY(-2px) scale(1.06); z-index: 2; }
+/* Not shop items: their roving tabindex would make just one of them lift. */
+.slot[tabindex="0"]:not(.shop-item):hover { transform: translateY(-2px) scale(1.06); z-index: 2; }
 .table tbody tr { transition: background-color .25s var(--soft); }
 .pill, .badge { transition: background-color .3s, color .3s; }
 
@@ -756,7 +767,7 @@ dialog.closing::backdrop { opacity: 0; transition: opacity .18s; }
 @keyframes unfold { from { opacity: 0; transform: translateY(-6px) scaleY(.96); } to { opacity: 1; transform: none; } }
 .search-results:not([hidden]) { transform-origin: top center; animation: unfold .3s var(--flow); }
 .search-result { transition: background-color .2s, transform .3s var(--spring); }
-.search-result:hover, .search-result.active { transform: translateX(2px); }
+.search-result.active { transform: translateX(2px); }
 
 /* Spy lock: the veil fades in and the card springs up. */
 @keyframes veil-in { from { opacity: 0; } }
@@ -794,11 +805,11 @@ input, select, textarea { transition: background-color .25s, box-shadow .25s, bo
   .live-indicator.on::before, .table tr.fresh {
     animation: none !important;
   }
-  .btn, .icon-btn, .mod-card, .snap-item, .slot, .search-result, .tab-pill, .switch-track::after, .meter-fill {
+  .btn, .icon-btn, .mod-card, .snap-item, .slot, .search-result, .tab-pill, .switch-track::after, .meter-fill, .person-card {
     transition: none !important;
   }
   .btn:hover, .btn:active, .icon-btn:hover, .icon-btn:active, .mod-card:hover, .snap-item:hover,
-  .slot[tabindex="0"]:hover, .search-result:hover { transform: none !important; }
+  .slot[tabindex="0"]:hover, .search-result.active, .person-card:hover { transform: none !important; }
 }
 
 /* ---- Community view (Home, Players) & duty switch ---- */
@@ -810,6 +821,15 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .duty .switch input:checked + .switch-track::after { transform: translateX(16px); }
 .duty.off .duty-text { color: var(--muted); }
 .duty:not(.off) .duty-text { color: var(--gold); }
+
+/* High contrast mode drops fills and shadows, so switches and the selected tab or chip use system colours instead.
+   After the duty switch's gold, which would otherwise win. */
+@media (forced-colors: active) {
+  .switch-track::after { background: CanvasText; }
+  .switch input:checked + .switch-track, .duty .switch input:checked + .switch-track { background: Highlight; border-color: Highlight; }
+  .switch input:checked + .switch-track::after { background: HighlightText; }
+  .tabs a.active, .board-chip.active, .shop-tab.active { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 
 /* Four tiles in one row, or two by two: never three and a straggler. */
 .home-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 8px; }
@@ -899,7 +919,12 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   #view-shop { --slot: calc((100vw - 32px - 32px - 20px - 32px) / 9); }
   .shop-tab span { display: none; }
   .shop-tab { padding: 5px; }
-  .shop-grid { max-height: 260px; --slot: 40px; }
+  .shop-grid { max-height: 260px; --slot: 40px; justify-content: center; }
+  /* As tall as an item's price with its +1 / +64 buttons wrapped under it, so the chest doesn't jump on the first tap. */
+  .shop-info { min-height: 105px; align-content: flex-start; }
+  /* The total on its own line, then who it's for beside Empty chest, then Check out. */
+  .shop-checkout .shop-total { flex-basis: 100%; }
+  .shop-checkout #shop-gift { flex: 1 1 150px; min-width: 0; }
   .shop-checkout #shop-buy { flex: 1 1 100%; }
 }
 .shop-window { user-select: none; -webkit-user-select: none; }
@@ -917,6 +942,8 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 #shop-sell { --slot: 40px; }
 #market-notice > * { margin-bottom: 12px; }
 .market-totals { font-size: 13px; margin-top: 12px; }
+/* Its one tile takes half the card on wider screens, not the whole width. */
+#market-exchange .stats-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .market-exchange-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .market-exchange-row input { width: 110px; }
 .market-exchange-row .muted { margin-right: auto; font-size: 13px; }
@@ -998,12 +1025,17 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .streak.t0 { font-weight: 500; color: var(--muted); }
 .streak.t1 .streak-text { color: var(--text); }
 .streak.t2 { border-color: rgba(255, 140, 0, .45); }
-.streak.t2 .streak-text { color: #e8730c; }
+.streak.t2 .streak-text { color: #b45309; }
 .streak.t3 {
   background: linear-gradient(135deg, rgba(255, 170, 40, .22), rgba(255, 70, 30, .22)); border-color: rgba(255, 110, 20, .6);
   animation: streak-glow 2.4s ease-in-out infinite;
 }
-.streak.t3 .streak-text { color: #f05a14; }
+.streak.t3 .streak-text { color: #9a3412; }
+/* Darker oranges in light theme so the text stays readable; the bright ones only read on dark glass. */
+@media (prefers-color-scheme: dark) {
+  .streak.t2 .streak-text { color: #e8730c; }
+  .streak.t3 .streak-text { color: #f05a14; }
+}
 .streak.t4, .streak.t5, .streak.t6, .streak.t7 { color: #fff; border: none; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
 .streak.t4 .streak-sub, .streak.t5 .streak-sub, .streak.t6 .streak-sub, .streak.t7 .streak-sub { color: rgba(255, 255, 255, .88); }
 .streak.t4 {
@@ -1068,20 +1100,37 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 
 /* Top bar on narrower screens: the search moves to a row of its own, then the words beside icons go. On phones
    the logo shares the first row with your account controls, the tabs get the second and the search the third. */
+/* If it still doesn't fit (larger text, say), the bar wraps instead of overflowing, and the search keeps a usable width. */
+.topbar { flex-wrap: wrap; row-gap: 8px; }
+.global-search { min-width: 150px; }
 #me-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* An admin's first row has no width to spare: a shorter name, and just the amber dot while reconnecting
+   (the words stay in the tooltip and for screen readers). */
+.topbar:has(#duty:not([hidden])) #me-name { max-width: 96px; }
+.topbar:has(#duty:not([hidden])) .live-indicator.off { font-size: 0; gap: 0; }
 @media (max-width: 1180px) {
-  .topbar { flex-wrap: wrap; row-gap: 8px; }
   .global-search { order: 5; flex-basis: 100%; max-width: none; }
+  /* Admins lose their name first (the avatar still opens their profile), so nothing gets pushed onto a third row. */
+  .topbar:has(#duty:not([hidden])) #me-name { display: none; }
+  .topbar:has(#duty:not([hidden])) .me-link { padding: 2px; }
+}
+/* Just above that an admin's inline search would be under 200px wide, so it gets its own row a little sooner. */
+@media (max-width: 1260px) {
+  .topbar:has(#duty:not([hidden])) .global-search { order: 5; flex-basis: 100%; max-width: none; }
 }
 /* Below 1060px an admin's first row (five tabs, the duty switch, settings) only fits without the words. */
 @media (max-width: 1060px) {
   #me-name, .duty-text, .brand-text { display: none; }
   .me-link { padding: 2px; }
 }
-/* Below about 820px an admin's controls no longer fit beside the tabs at all, so they get the phone order already. */
+/* Below about 820px an admin's controls no longer fit beside the tabs at all, so they get the phone order already.
+   That leaves room for the words on the first row, and the tabs share the second row evenly. */
 @media (min-width: 721px) and (max-width: 820px) {
   .topbar:has(#duty:not([hidden])) > .me { order: 1; }
-  .topbar:has(#duty:not([hidden])) > .tabs { order: 2; flex: 1 1 100%; justify-content: space-between; }
+  .topbar:has(#duty:not([hidden])) > .tabs { order: 2; flex: 1 1 100%; }
+  .topbar:has(#duty:not([hidden])) > .tabs a { flex: 1 1 auto; text-align: center; }
+  .topbar:has(#duty:not([hidden])) :is(.duty-text, #me-name) { display: inline; }
+  .topbar:has(#duty:not([hidden])) .me-link { padding: 2px 10px 2px 2px; }
 }
 @media (max-width: 720px) {
   .topbar > .me { order: 1; }
@@ -1089,8 +1138,13 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   /* Just the dot: the words stay for screen readers and in the tooltip. */
   .live-indicator { font-size: 0; gap: 0; }
 }
-@media (max-width: 420px) {
+/* Compact tabs, so an admin's five fit on common phones (the row still scrolls on the very narrowest). */
+@media (max-width: 460px) {
   .topbar > .tabs a { padding: 6px 8px; font-size: 13px; }
+}
+@media (max-width: 389px) {
+  .topbar > .tabs { gap: 2px; }
+  .topbar > .tabs a { padding: 6px; }
 }
 
 /* Pages with tabs of their own (Community, Shop): the tabs sit next to the title. */
@@ -1139,15 +1193,21 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 }
 .prow-discord .identity { min-width: 0; }
 .prow-discord .identity > div { min-width: 0; overflow: hidden; }
+/* These clip long names, so they get a little room around them for the focus ring (the content doesn't move). */
+.prow-discord .identity > div, .mod-id .sub { padding: 4px; margin: -4px; }
+.copy:focus-visible { outline-offset: -2px; }
 .prow-status { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
 .prow-status .streak.mini { margin: 0; }
+/* A long status ("Website only · 2 hours ago") wraps inside its column instead of running into the next one. */
+.prow-status .pill { white-space: normal; }
 .prow-status .suspension-note { flex-basis: 100%; margin: 0; }
 .prow-joined { font-size: 13px; white-space: nowrap; }
 .prow-head .prow-joined { font-size: inherit; }
 .prow-label { display: none; }
 .prow-actions .actions { flex-wrap: wrap; }
 .prow-head .prow-actions { text-align: right; }
-@media (max-width: 1000px) {
+/* Up to 1120px the staff list drops Member since, so Kick, Suspend, Note and Remove link stay on one line. */
+@media (max-width: 1120px) {
   .plist.staff { grid-template-columns: minmax(200px, 1.3fr) minmax(170px, 1fr) minmax(150px, 1fr) minmax(170px, auto); }
   .plist.staff .prow-joined { display: none; }
 }
@@ -1233,11 +1293,14 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, rgba(0, 0, 0, .55) 100%);
   mask-image: linear-gradient(180deg, #000 0%, #000 55%, rgba(0, 0, 0, .55) 100%);
 }
-.podium-place .name { font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Names wrap rather than being cut off: long group names don't fit a place below about 1000px. */
+.podium-place .name { font-weight: 700; max-width: 100%; overflow-wrap: anywhere; line-height: 1.25; }
 .podium-place .head { width: 56px; height: 56px; border-radius: 12px; }
 .podium-medal { font-size: 28px; line-height: 1; }
 .podium-value { font-weight: 700; color: var(--gold); font-size: 14px; }
 .podium-place.has-card .podium-value { color: #ffd166; text-shadow: 0 1px 3px rgba(0, 0, 0, .75); }
+/* Glass turns muddy over a picture, so pills there get a solid fill (as on the player page). */
+.podium-place.has-card .pill, .lrow.has-card .pill { background-color: var(--surface); }
 /* First place in the middle and tallest, like a real podium, even when it's the only one. */
 .podium-place { grid-row: 1; }
 .place-1 { grid-column: 2; padding-top: 22px; border-color: rgba(255, 196, 0, .55); box-shadow: 0 0 0 1px rgba(255, 196, 0, .25), 0 10px 30px rgba(255, 196, 0, .12); }
@@ -1262,14 +1325,16 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .podium-place .head { width: 44px; height: 44px; }
   .place-1 .head { width: 52px; height: 52px; }
   .podium-value { font-size: 12px; }
-  /* Narrow places: names wrap instead of being cut off, and a group's "2 players" goes on its own line. */
-  .podium-place .name { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; font-size: 13px; }
+  /* Narrow places: smaller names, and a group's "2 players" goes on its own line. */
+  .podium-place .name { line-height: 1.2; font-size: 13px; }
   .podium-place .group-tag { display: block; width: max-content; margin: 2px auto 0; }
   /* The board chips scroll sideways in one row, with room around them for the focus ring. */
-  .board-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px; margin: -4px -4px 8px; }
+  .board-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px; margin: -4px -4px 8px; scroll-padding-inline: 6px; }
   .board-chip { flex: none; white-space: nowrap; }
   .board-head input[type=search] { width: 100%; }
   .lrow .pill { display: none; }
+  /* Rows wrap long names onto a second line too, so the value keeps its place on the right. */
+  .lrow .name { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; }
 }
 
 /* ---- Shop ---- */
@@ -1294,6 +1359,8 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .cos-tile { padding: 8px; gap: 8px; }
   .cos-tile .chat-msg { display: none; }
   .cos-tile > .btn { white-space: normal; }
+  /* The preview is too narrow for the name and "No picture yet" side by side. */
+  .cos-tile .cardp-empty { top: 6px; right: 8px; font-size: 11px; }
 }
 .cos-name { font-weight: 700; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .cos-meta, .cos-desc { font-size: 12px; margin: 3px 0 0; }
@@ -1353,7 +1420,7 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .unlock-name { font-weight: 700; }
 .unlock-text .muted { font-size: 12px; }
 .unlock-give { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--glass-line); }
-.unlock-give select { flex: 1; min-width: 180px; }
+.unlock-give select { flex: 1; min-width: 180px; max-width: 360px; }
 @media (max-width: 560px) {
   .unlock { flex-wrap: wrap; }
   .unlock .cos-preview.small { width: 100%; }
@@ -1389,6 +1456,11 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 @media (max-width: 560px) {
   .unlock .style-editor { order: 5; flex-basis: 100%; justify-content: flex-start; }
 }
+/* With the colour menus as well they need about 340px, which squeezes the name below 900px, so they get a line of their own. */
+@media (max-width: 900px) {
+  .unlock:has(.style-color) { flex-wrap: wrap; }
+  .unlock:has(.style-color) .style-editor { order: 5; flex-basis: 100%; justify-content: flex-start; }
+}
 
 /* ---- Groups (Community → Groups, and groups on the microcredit leaderboard) ---- */
 .group-heads { display: inline-flex; flex: none; }
@@ -1397,6 +1469,12 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 .podium-place .group-heads .head { width: 44px; height: 44px; }
 .podium-place.place-1 .group-heads .head { width: 52px; height: 52px; }
 .group-tag { font-size: 11px; vertical-align: middle; }
+/* On phones a podium place is narrower than three full-size heads, so they shrink and overlap more. */
+@media (max-width: 560px) {
+  .podium-place .group-heads { max-width: 100%; overflow: hidden; }
+  .podium-place .group-heads .head, .podium-place.place-1 .group-heads .head { width: 36px; height: 36px; }
+  .podium-place .group-heads .head + .head { margin-left: -16px; }
+}
 .group-rules { font-size: 13px; margin: 12px 0 0; }
 .group-create { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .group-create input { flex: 1 1 200px; min-width: 0; max-width: 360px; border-radius: 999px; padding-left: 14px; }

@@ -720,7 +720,7 @@ public final class WebServer {
 
     private void startLogin(HttpExchange ex) throws IOException {
         if (oauth == null) {
-            sendMessagePage(ex, 404, "Use /dla", "Run /dla in Discord or in game to get a login link.");
+            sendMessagePage(ex, 404, "Use /dla", "Run /dla in Discord or in Minecraft to get a one\u2011time login link.");
             return;
         }
         if (!plugin.bot().isReady()) {
@@ -736,7 +736,7 @@ public final class WebServer {
 
     private void finishLogin(HttpExchange ex) throws IOException, InterruptedException {
         if (oauth == null) {
-            sendMessagePage(ex, 404, "Use /dla", "Run /dla in Discord or in game to get a login link.");
+            sendMessagePage(ex, 404, "Use /dla", "Run /dla in Discord or in Minecraft to get a one\u2011time login link.");
             return;
         }
         Map<String, String> query = query(ex);
@@ -1005,7 +1005,7 @@ public final class WebServer {
         UUID uuid = parseUuid(query.get("uuid"));
         Optional<PlayerRef> ref = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
         if (ref.isEmpty()) {
-            sendJson(ex, 404, error("No player with that UUID has ever joined"));
+            sendJson(ex, 404, error("No player with that UUID has joined yet."));
             return;
         }
         LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);
@@ -1074,7 +1074,7 @@ public final class WebServer {
         UUID uuid = parseUuid(query.get("uuid"));
         Optional<PlayerRef> ref = uuid == null ? Optional.empty() : plugin.database().findPlayer(uuid);
         if (ref.isEmpty()) {
-            sendJson(ex, 404, error("No player with that UUID has ever joined"));
+            sendJson(ex, 404, error("No player with that UUID has joined yet."));
             return;
         }
         LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);

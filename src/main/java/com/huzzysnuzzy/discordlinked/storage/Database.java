@@ -2242,7 +2242,7 @@ public final class Database implements AutoCloseable {
             movePersonalMicro(uuid, -own, "Brought into the group", null);
             addToGroup(group, own);
         }
-        insertGroupLog(group, uuid, name, "JOIN", own, groupBalance(group), own > 0 ? "joined and brought their microcredits"
+        insertGroupLog(group, uuid, name, "JOIN", own, groupBalance(group), own > 0 ? "joined and brought their balance in"
                 : "joined");
     }
 

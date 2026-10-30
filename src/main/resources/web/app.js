@@ -88,7 +88,7 @@ const showsContent = (node) => node.children.length > 0 && !node.querySelector('
 /**
  * Re-renders part of a page without losing keyboard focus: if the focused control was replaced, its new copy gets
  * focus back. It's found by its label, inside the same data-key row when it's in one (or by its place in that row
- * when its label changed, e.g. Use → Stop using).
+ * when its label changed, e.g. Use → Stop using). Half-typed text comes along if the new field starts empty.
  */
 function keepFocus(container, render) {
   const a = document.activeElement;
@@ -98,12 +98,17 @@ function keepFocus(container, render) {
   const label = (n) => n.getAttribute('aria-label') || n.textContent;
   const text = label(a);
   const index = key ? [...row.querySelectorAll(a.tagName)].indexOf(a) : -1;
+  const typed = a.matches('input[type=text], input[type=search], textarea') ? [a.value, a.selectionStart, a.selectionEnd] : null;
   const out = render();
   if (!container.contains(document.activeElement)) {
     const scope = key ? container.querySelector(`[data-key="${CSS.escape(key)}"]`) : container;
     const options = scope ? [...scope.querySelectorAll(a.tagName)] : [];
     const next = row === a ? scope : options.find((n) => label(n) === text) || options[index];
     next?.focus({ preventScroll: true });
+    if (typed && next && next.value === '') {
+      next.value = typed[0];
+      next.setSelectionRange(typed[1], typed[2]);
+    }
   }
   return out;
 }
@@ -699,7 +704,8 @@ async function loadLogs(reset) {
 function actorLabel(actor) {
   if (!actor) return '—';
   const m = actor.match(/^(.*?) \((\d{15,20})\)(?: \((.+)\))?$/);
-  return m ? [m[1], m[3] ? el('span', { class: 'muted' }, ` · ${m[3]}`) : null] : actor;
+  // A narrow column breaks it as "Owner" / "· website", never after the dot.
+  return m ? [m[1], m[3] ? el('span', { class: 'muted' }, ` ·\u00a0${m[3]}`) : null] : actor;
 }
 
 function logRow(entry, showPlayer) {
@@ -712,7 +718,9 @@ function logRow(entry, showPlayer) {
     el('td', {}, el('span', { class: `badge ${tone}` }, label)),
     showPlayer && el('td', { class: 'nowrap' }, player),
     // Without a player column, "by" gets its own line in the phone cards rather than widening the time column.
-    el('td', { class: showPlayer ? null : 'own-line', title: entry.actor || null }, actorLabel(entry.actor)),
+    // The phone cards leave out "—" for nobody.
+    el('td', { class: [!showPlayer && 'own-line', !entry.actor && 'no-actor'].filter(Boolean).join(' ') || null, title: entry.actor || null },
+      actorLabel(entry.actor)),
     el('td', { class: 'detail' }, maskIps((entry.detail || '').replace(/^ip=/, 'IP '))));
 }
 
@@ -767,7 +775,7 @@ async function loadPlayer(uuid) {
     if (currentRoute().inventory && state.player.player.online && changed) loadInventory();
   } catch (e) {
     if (!changed) toast(e.message);
-    else view.replaceChildren(el('a', { class: 'back', href: homeHash() }, '← Back'), el('p', { class: 'empty', role: 'alert' }, e.message));
+    else view.replaceChildren(el('a', { class: 'back', href: homeHash() }, '← Back'), el('p', { class: 'empty card', role: 'alert' }, e.message));
   }
 }
 
@@ -961,7 +969,9 @@ function keepInventoryText(delayMinutes) {
 }
 
 async function equipCosmetic(item, on, button) {
-  if (button) button.disabled = true;
+  // aria-disabled, not disabled: a disabled control loses keyboard focus, so the re-render would have nothing to give it back to.
+  if (button?.getAttribute('aria-disabled') === 'true') return;
+  button?.setAttribute('aria-disabled', 'true');
   try {
     const result = await api('/api/cosmetics/equip', { id: item.id, on });
     toast(result.message);
@@ -1231,7 +1241,13 @@ function inventorySection(p) {
   return [el('h2', { class: 'section-title' }, 'Inventory', modes), el('div', { class: 'card panel inventory-panel' }, box)];
 }
 
+/** Live refreshes and snapshot picks rebuild the box, so keyboard focus is carried over to the new copy. */
 function renderInventory() {
+  const box = $('inventory-box');
+  return box ? keepFocus(box, renderInventoryNow) : renderInventoryNow();
+}
+
+function renderInventoryNow() {
   const box = $('inventory-box');
   const inv = state.inventory;
   if (!box || !inv) return;
@@ -1334,7 +1350,9 @@ function inventoryView(data, textures) {
 }
 
 function inventorySlot(item, textures, extra, path = '') {
-  const node = el('div', { class: `slot ${extra}`, tabindex: item ? 0 : -1, 'aria-label': item ? `${item.amount} × ${itemName(item, textures)}` : 'Empty slot' });
+  // The data-key lets a focused slot keep focus when its count changes.
+  const node = el('div', { class: `slot ${extra}`, tabindex: item ? 0 : -1, 'data-key': path || null,
+    'aria-label': item ? `${item.amount} × ${itemName(item, textures)}` : 'Empty slot' });
   if (!item) return node;
   const texture = textures.get(item.id)?.texture;
   if (texture) {
@@ -1426,7 +1444,8 @@ function renderGlobalResults(query) {
   }
   box.replaceChildren(...(globalResults.length
     ? globalResults.map((p, i) => el('a', {
-      class: 'search-result', href: playerHref(p.uuid), role: 'option', id: `gs-${i}`,
+      // Not tab stops: the arrow keys move through the list, and Tab leaves the search.
+      class: 'search-result', href: playerHref(p.uuid), role: 'option', id: `gs-${i}`, tabindex: '-1',
       onclick: closeGlobalSearch, onmouseenter: () => setGlobalActive(i),
     },
     el('img', { class: 'head', src: headUrl(p.uuid, 56), alt: '' }),
@@ -1499,6 +1518,10 @@ $('global-search').addEventListener('keydown', (e) => {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.global-search')) hideGlobalResults();
 });
+// Tabbing out of the search closes the list too (a click on a result keeps focus inside, so it still works).
+$('global-search').addEventListener('blur', (e) => {
+  if (e.relatedTarget && !e.relatedTarget.closest('.global-search')) hideGlobalResults();
+});
 
 // ---- Community: credits and interactions (DiscordLinkedFAD) ----
 
@@ -1564,7 +1587,7 @@ function communitySection(p, c) {
       el('td', { class: `nowrap ${t.amount > 0 ? 'credit-plus' : 'credit-minus'}` }, signedCredits(t.amount, currency)),
       el('td', { class: 'nowrap' }, credits(t.balance, currency)),
       el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind,
-        t.detail && t.kind !== 'PLAYTIME' ? `: ${t.detail}` : '', t.actor ? ` — ${t.actor}` : ''))))))
+        t.detail && t.kind !== 'PLAYTIME' ? `: ${t.detail}` : '', t.actor ? [' — ', el('span', { title: t.actor }, actorLabel(t.actor))] : ''))))))
     : emptyCard(`No ${currency.many} yet.`);
 
   const mc = c.microCurrency;
@@ -1577,7 +1600,7 @@ function communitySection(p, c) {
           `${t.amount > 0 ? '+' : '−'}${micro(Math.abs(t.amount), mc)}`),
         el('td', { class: 'nowrap' }, micro(t.balance, mc)),
         el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind, t.detail ? `: ${t.detail}` : '',
-          t.actor ? ` — ${t.actor}` : ''))))))
+          t.actor ? [' — ', el('span', { title: t.actor }, actorLabel(t.actor))] : ''))))))
     : emptyCard(`No ${mc.many} yet.`);
 
   const advancements = c.advancements.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
@@ -1832,7 +1855,7 @@ function renderInteractions() {
 
 // ---- Community → Groups: players sharing their microcredits ----
 
-const groupState = { data: null, logOpen: new Set() };
+const groupState = { data: null, logOpen: new Set(), logs: new Map() };
 const GROUP_LOG_KINDS = { CREATE: 'Made', JOIN: 'Joined', LEAVE: 'Left', REMOVED: 'Removed', SALE: 'Sold', EXCHANGE: 'Exchanged',
   RENAME: 'Renamed', LEADER: 'New leader', GROUP: 'Moved' };
 
@@ -1913,7 +1936,13 @@ function renderGroups() {
           confirmLabel: 'Remove', confirmClass: 'btn-danger', onConfirm: () => groupAction('remove', { uuid: m.uuid }) }) }, 'Remove')))));
     const invite = leader && (() => {
       const who = el('input', { type: 'text', placeholder: 'Minecraft name', 'aria-label': 'Player to invite', required: true, list: 'group-invite-names' });
-      return el('form', { class: 'group-create', onsubmit: (e) => { e.preventDefault(); groupAction('invite', { name: who.value }); } },
+      // Emptied as it's sent: the refresh afterwards would otherwise keep the name in the field (see keepFocus).
+      return el('form', { class: 'group-create', onsubmit: (e) => {
+        e.preventDefault();
+        const name = who.value;
+        who.value = '';
+        groupAction('invite', { name });
+      } },
         who, el('button', { class: 'btn', type: 'submit', disabled: !d.open }, 'Invite'));
     })();
     const pending = leader && mine.invites.length > 0 && el('div', { class: 'group-pending muted' }, 'Invited: ',
@@ -1949,9 +1978,13 @@ function renderGroups() {
     d.groups.length ? el('div', { class: 'group-grid' }, d.groups.map((g) => {
       const log = el('div', { class: 'group-log', hidden: !groupState.logOpen.has(g.id) });
       const loadLog = async () => {
-        log.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
+        // The last copy stays up while it refreshes, so the card doesn't shrink and grow again every minute.
+        const last = groupState.logs.get(g.id);
+        log.replaceChildren(last ? groupLogTable(last, cur) : el('p', { class: 'muted' }, 'Loading…'));
         try {
-          log.replaceChildren(groupLogTable((await api(`/api/groups/log?id=${g.id}`)).log, cur));
+          const entries = (await api(`/api/groups/log?id=${g.id}`)).log;
+          groupState.logs.set(g.id, entries);
+          log.replaceChildren(groupLogTable(entries, cur));
         } catch (e) {
           log.replaceChildren(el('p', { class: 'muted' }, e.message));
         }
@@ -2437,6 +2470,11 @@ function updateSettingsBar() {
   const count = Object.keys(settingsEdits).length;
   $('settings-bar').hidden = count === 0;
   $('settings-bar-text').textContent = `${count} unsaved change${count === 1 ? '' : 's'}`;
+  // Edits are kept while you look at other pages, so the gear says they're waiting there.
+  const gear = $('settings-link');
+  gear.classList.toggle('has-edits', count > 0);
+  gear.title = count ? `Settings: ${count} unsaved change${count === 1 ? '' : 's'}` : 'Settings';
+  gear.setAttribute('aria-label', gear.title);
 }
 
 async function settingsAction(button, action) {
@@ -2660,7 +2698,7 @@ function showShopTooltip(anchor, item) {
     lines.push(el('div', { class: 'tt-meta' }, "Doesn't stack"));
   } else if (shiftHeld) {
     lines.push(el('div', { class: 'tt-price' }, `${fromCents(item.price * item.stack)} ${d.currency.many} ${perStackLabel(item)}`));
-    lines.push(el('div', { class: 'tt-meta' }, `${fromCents(item.price)} each`));
+    lines.push(el('div', { class: 'tt-meta' }, `${fromCents(item.price)} ${d.currency.many} each`));
   } else {
     lines.push(el('div', { class: 'tt-price' }, `${fromCents(item.price)} ${d.currency.many} each`));
     lines.push(el('div', { class: 'tt-meta' }, `Hold Shift: price ${perStackLabel(item)}`));
@@ -3337,7 +3375,7 @@ function cosmeticTile(item) {
       title: short ? needMore(item.price - b.balance, d.currency) : null,
       onclick: () => buyCosmetic(item) }, item.price ? `Buy · ${credits(item.price, d.currency)}` : 'Get for free');
   }
-  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${sellable ? '' : 'not-for-sale'}`, 'data-key': item.id },
+  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${!item.owned && !sellable ? 'not-for-sale' : ''}`, 'data-key': item.id },
     cosmeticPreview(item, b.linked ? { name: b.name, uuid: b.uuid } : null),
     el('div', { class: 'cos-info' },
       el('div', { class: 'cos-name' }, item.name,
@@ -3603,8 +3641,7 @@ $('msglog-filter').addEventListener('input', () => { if (msglog.data) renderMess
 async function loadMessageFeed(older = false) {
   const view = $('msglog-view');
   if (!msglog.channel) {
-    view.replaceChildren(el('p', { class: 'muted' }, msglog.data.channels.length ? 'Pick a channel.'
-      : msglog.data.enabled ? 'Nothing saved yet.' : 'Nothing saved yet. Turn logging on to start.'));
+    view.replaceChildren(el('p', { class: 'muted' }, msglog.data.channels.length ? 'Pick a channel.' : 'Nothing saved yet.'));
     return;
   }
   const channel = msglog.channel;
@@ -3684,8 +3721,9 @@ function renderMessageFeed(scroll) {
           `📎 ${decodeURIComponent(url.split('?')[0].split('/').pop())}`))))));
   }
   if (!msglog.messages.length) {
+    // With logging off, the card above already says how to turn it on.
     nodes.push(el('p', { class: 'muted' }, q ? 'Nothing matches.' : msglog.data.enabled ? 'Nothing saved yet. New messages show up here.'
-      : 'Nothing saved. Turn logging on to start.'));
+      : 'Nothing saved yet.'));
   }
   list.replaceChildren(...nodes);
   // Start at the newest message; after loading older ones, stay where you were.
@@ -3817,7 +3855,8 @@ function renderMarketList() {
       el('span', { class: 'slot' }, shopIcon(item.id)),
       el('div', { class: 'market-item-text' },
         el('span', { class: 'market-item-name' }, shopName(item.id)),
-        el('span', { class: 'muted' }, `${formatMicro(item.now, cur)} each · ${formatMicro(item.now * item.stack, cur)} per ${item.stack}`)),
+        el('span', { class: 'muted' }, `${formatMicro(item.now, cur)} each`
+          + (item.stack > 1 ? ` · ${formatMicro(item.now * item.stack, cur)} ${perStackLabel(item)}` : ''))),
       dropped && el('span', { class: 'badge warn', title: `Normally ${formatMicro(item.normal, cur)} each` },
         `${Math.round(item.now * 100 / item.normal)}%`));
   }) : [el('p', { class: 'muted shop-empty' }, query ? 'No items match.' : 'Nothing sells here.')]));
@@ -3872,7 +3911,8 @@ async function loadHome() {
     : [el('p', { class: 'muted' }, 'No members yet.')]));
   $('home-recent').replaceChildren(...(data.recent.length
     ? data.recent.map((p) => personRow(p, `Seen ${timeAgo(p.lastSeen)}`))
-    : [el('p', { class: 'muted' }, 'Nobody has been online yet.')]));
+    // Whoever is on now is left out of this list.
+    : [el('p', { class: 'muted' }, data.online.length ? 'Nobody else has been online yet.' : 'Nobody has been online yet.')]));
 }
 
 /** The simple profile everyone can see: who they are, their Discord, and whether they're on. */
@@ -4166,12 +4206,18 @@ const VIEWS = ['logs', 'player', 'moderate', 'settings', 'messages', 'community'
 function showView() {
   const route = currentRoute();
   for (const name of VIEWS) $(`view-${name}`).hidden = name !== route.view;
-  document.querySelectorAll('#main-tabs a').forEach((a) => markCurrent(a, a.dataset.view === route.view));
+  document.querySelectorAll('#main-tabs a').forEach((a) => {
+    markCurrent(a, a.dataset.view === route.view);
+    // A player's page sits under Players, so that tab stays lit (without claiming to be the current page).
+    if (route.view === 'player' && a.dataset.view === 'players') a.classList.add('active');
+  });
   markCurrent($('settings-link'), route.view === 'settings' || route.view === 'messages');
-  // Player pages name the player once they've loaded (renderPlayer); the rest use their heading, without its count.
+  // Player pages say "Player" until the player has loaded (renderPlayer names them); the rest use their heading, without its count.
   if (route.view !== 'player') {
     const h1 = $(`view-${route.view}`).querySelector('h1');
     document.title = `${h1 ? h1.firstChild.textContent.trim() : 'DiscordLinked'} · DiscordLinked`;
+  } else {
+    document.title = 'Player · DiscordLinked';
   }
   // On phones the tab row scrolls; keep the current tab in sight.
   const tabs = $('main-tabs');
@@ -4185,9 +4231,9 @@ function showView() {
 }
 
 window.addEventListener('hashchange', showView);
-// The phone tab rows scroll sideways: bring a tab into sight when the keyboard moves to it.
-document.querySelectorAll('.tabs').forEach((t) => t.addEventListener('focusin', (e) => {
-  e.target.closest('a')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+// The phone tab and leaderboard chip rows scroll sideways: bring a tab or chip into sight when the keyboard moves to it.
+document.querySelectorAll('.tabs, .board-chips').forEach((t) => t.addEventListener('focusin', (e) => {
+  e.target.closest('a, button')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }));
 
 const dialogOpen = () => document.querySelector('dialog[open]') !== null;

@@ -22,7 +22,7 @@
     <div class="global-search">
       <input id="global-search" type="search" placeholder="Find any player…" autocomplete="off" role="combobox"
              aria-label="Search all players" aria-controls="global-results" aria-autocomplete="list" aria-expanded="false">
-      <div id="global-results" class="search-results" role="listbox" hidden></div>
+      <div id="global-results" class="search-results" role="listbox" tabindex="-1" hidden></div>
     </div>
     <div class="me">
       <span id="live-indicator" class="live-indicator" title="Connecting…">Live</span>
@@ -126,7 +126,7 @@
       </div>
       <div id="messages-notice"></div>
       <div class="msglog">
-        <div class="card panel msglog-channels">
+        <div class="card panel msglog-channels" hidden>
           <input id="msglog-filter" type="search" placeholder="Find a channel…" aria-label="Find a channel">
           <div id="msglog-channels"></div>
         </div>
@@ -180,7 +180,7 @@
               picks up or puts down, right-click splits a stack or puts down one, drag across slots to spread it, double-click
               to gather, shift-click to send a slot back. Esc puts back what you hold. Keyboard: arrow keys move between items,
               Enter adds one, Delete empties a chest slot.</span><span class="hint-touch">Tap an item, then tap a chest slot to
-              put it down. +1 / +64 add it straight to the chest.</span></span>
+              put it down. The + buttons by its price add it straight to the chest.</span></span>
           </div>
           <div id="shop-chest" class="shop-chest" role="group" aria-label="Order chest"></div>
           <div class="shop-checkout">
@@ -219,7 +219,7 @@
     <section id="view-moderate" hidden>
       <div class="toolbar">
         <h1>Moderate <span id="moderate-count" class="count"></span></h1>
-        <select id="moderate-server" aria-label="Filter by server"><option value="">All servers</option></select>
+        <select id="moderate-server" aria-label="Filter by server" hidden><option value="">All servers</option></select>
         <input id="moderate-search" type="search" placeholder="Filter players…" aria-label="Filter online players">
       </div>
       <p id="moderate-self" class="self-status"></p>
