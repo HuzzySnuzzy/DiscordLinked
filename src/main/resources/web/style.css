@@ -139,8 +139,19 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
 .badge.bad { color: var(--danger); }
 .badge.warn { color: var(--warning); }
 .badge.info { color: var(--link); }
-.detail { max-width: 420px; word-break: break-word; }
+.detail { max-width: 420px; min-width: 180px; overflow-wrap: break-word; }
 .nowrap { white-space: nowrap; }
+/* Log-style tables become one card per row on phones: time and event on top, then who, then the details in full. */
+@media (max-width: 720px) {
+  .table.table-cards thead { display: none; }
+  .table.table-cards tr {
+    display: grid; grid-template-columns: auto 1fr; justify-items: start; align-items: baseline;
+    gap: 4px 10px; padding: 10px 14px; border-bottom: 1px solid var(--glass-line);
+  }
+  .table.table-cards tr:last-child { border-bottom: 0; }
+  .table.table-cards td { padding: 0; border: 0; }
+  .table.table-cards :is(td.detail, td.empty, td.own-line) { grid-column: 1 / -1; justify-self: stretch; max-width: none; min-width: 0; }
+}
 
 /* ---- Dialog ---- */
 dialog { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 22px; width: min(440px, calc(100vw - 32px)); box-shadow: var(--shadow); }
@@ -204,11 +215,12 @@ textarea { resize: vertical; width: 100%; }
 .profile .actions { justify-content: flex-start; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
 .panel { padding: 18px; }
+.panel > p:only-child { margin: 0; }
 .panel h2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .panel .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
 .panel .kv dt { color: var(--muted); }
 .panel .kv dd { margin: 0; word-break: break-word; }
-.section-title { font-size: 16px; margin: 24px 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.section-title { font-size: 18px; margin: 24px 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .notes { display: grid; gap: 10px; }
 .note { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; }
 .note p { margin: 0 0 4px; white-space: pre-wrap; word-break: break-word; }
@@ -383,6 +395,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   box-shadow: inset 0 1px 0 var(--glass-edge);
 }
 .btn-ghost:hover { background-color: var(--glass-strong); }
+.btn-ghost.danger { color: var(--danger); }
 
 /* Pills, badges, chips */
 .pill, .badge, .chip {
@@ -622,7 +635,7 @@ body:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) .toast { bott
 .switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .15s; }
 .switch input:checked + .switch-track { background: var(--success); }
 .switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 10px 0; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
 .stat { background: var(--glass-soft); border: 1px solid var(--glass-border); border-radius: 14px; padding: 10px 12px; }
 .stat .stat-value { font-size: 16px; }
 .settings-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 10px;
@@ -1078,19 +1091,22 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 :is(.prow.has-card .prow-name, .lrow.has-card, .podium-place.has-card, .profile.has-card .info) > .name-admin { color: #f0b429; }
 
 /* ---- Players list: one row per player; on phones each row becomes a card ---- */
-.plist { overflow: hidden; }
+/* The list owns the column tracks and every row is a subgrid of them, so columns line up with their headers. */
+.plist { overflow: hidden; display: grid; column-gap: 16px; grid-template-columns: minmax(210px, 1.3fr) minmax(190px, 1.2fr) minmax(170px, 1fr) 110px; }
+.plist.staff { grid-template-columns: minmax(210px, 1.3fr) minmax(190px, 1.2fr) minmax(170px, 1fr) 110px minmax(170px, auto); }
 .prow {
-  display: grid; grid-template-columns: minmax(210px, 1.3fr) minmax(190px, 1.2fr) minmax(170px, 1fr) 110px;
+  display: grid; grid-template-columns: subgrid; grid-column: 1 / -1;
   gap: 10px 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--glass-line);
   position: relative; isolation: isolate; transition: background-color .25s var(--soft);
 }
-.plist.staff .prow { grid-template-columns: minmax(210px, 1.3fr) minmax(190px, 1.2fr) minmax(170px, 1fr) 110px minmax(170px, auto); }
 .prow:last-child { border-bottom: 0; }
 .prow:not(.prow-head):hover { background: var(--glass-soft); }
 .prow-head { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; padding-top: 12px; padding-bottom: 10px; }
 .prow-id { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .prow-name { min-width: 0; }
 .prow-name .name { font-weight: 700; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* IDs stay on one line; the full ID is in the tooltip and on the clipboard. */
+.prow .copy { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .prow.has-card .prow-name .copy { color: rgba(255, 255, 255, .8); }
 /* In the list the picture stays behind the player column, so the Discord column stays readable in light mode. */
 .prow .card-backdrop {
@@ -1103,16 +1119,18 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .prow-status .streak.mini { margin: 0; }
 .prow-status .suspension-note { flex-basis: 100%; margin: 0; }
 .prow-joined { font-size: 13px; white-space: nowrap; }
+.prow-head .prow-joined { font-size: inherit; }
 .prow-label { display: none; }
 .prow-actions .actions { flex-wrap: wrap; }
 .prow-head .prow-actions { text-align: right; }
 @media (max-width: 1000px) {
-  .plist.staff .prow { grid-template-columns: minmax(200px, 1.3fr) minmax(170px, 1fr) minmax(150px, 1fr) minmax(170px, auto); }
+  .plist.staff { grid-template-columns: minmax(200px, 1.3fr) minmax(170px, 1fr) minmax(150px, 1fr) minmax(170px, auto); }
   .plist.staff .prow-joined { display: none; }
 }
 @media (max-width: 860px) {
   .plist { background: none; border: 0; box-shadow: none; overflow: visible; display: grid; gap: 10px;
     -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .plist, .plist.staff { grid-template-columns: minmax(0, 1fr); }
   .prow-head { display: none; }
   .prow, .plist.staff .prow {
     grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "id id" "status status" "discord joined" "actions actions";
@@ -1162,6 +1180,10 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 /* ---- Community: stats, leaderboards ---- */
 .stats-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .stats-strip .stat { background-color: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
+/* On phones the Community numbers scroll sideways in one row, so the leaderboard starts on the first screen. */
+@media (max-width: 560px) {
+  #community-stats { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 44%; overflow-x: auto; scrollbar-width: none; }
+}
 .board-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .board-chip {
   padding: 6px 13px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted);

@@ -65,6 +65,12 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/** A heading's text with a muted "(N)" after it, in one span so flex headings keep them together. */
+const withCount = (text, n) => el('span', {}, text, ' ', el('span', { class: 'count' }, `(${n.toLocaleString()})`));
+
+/** An empty section's message, in a card like the sections that have content. */
+const emptyCard = (text) => el('div', { class: 'card panel' }, el('p', { class: 'muted' }, text));
+
 async function api(path, body) {
   const options = { credentials: 'same-origin', headers: {} };
   if (body !== undefined) {
@@ -138,7 +144,7 @@ function copyText(text) {
 
 function copyButton(text, what) {
   return el('button', {
-    class: 'copy mono', type: 'button', title: `Copy ${what}`,
+    class: 'copy mono', type: 'button', title: `Copy ${what}: ${text}`,
     onclick: (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -200,7 +206,7 @@ function statusPills(p) {
   } else if (p.online) {
     pills.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
   } else if (!p.suspension) {
-    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never joined';
+    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never played';
     pills.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}` : null }, seen));
   }
   if (p.onWebsite) pills.push(el('span', { class: 'pill web', title: 'Has this website open right now' }, 'On the website'));
@@ -357,7 +363,8 @@ $('confirm-cancel').addEventListener('click', () => closeDialog($('confirm-dialo
 
 // ---- Actions (shared by the Players list and the player page) ----
 
-function actionButtons(p) {
+/** Compact (the Players list): every button is a quiet ghost one, so a column of filled buttons doesn't crowd each row. */
+function actionButtons(p, { compact = false } = {}) {
   const small = (cls, label, handler) => el('button', {
     class: `btn ${cls} btn-small`, type: 'button', 'aria-label': `${label} ${p.minecraftName}`, onclick: handler,
   }, label);
@@ -365,10 +372,10 @@ function actionButtons(p) {
     p.online && small('btn-ghost', 'Kick', () => kickDialog(p)),
     p.suspension
       ? [small('btn-ghost', 'Edit suspension', () => editSuspensionDialog(p)),
-        small('btn-success', 'Unsuspend', () => unsuspendDialog(p))]
-      : small('btn-warning', 'Suspend', () => suspendDialog(p)),
+        small(compact ? 'btn-ghost' : 'btn-success', 'Unsuspend', () => unsuspendDialog(p))]
+      : small(compact ? 'btn-ghost' : 'btn-warning', 'Suspend', () => suspendDialog(p)),
     small('btn-ghost', 'Note', () => noteDialog(p)),
-    p.linked && small('btn-danger', 'Remove link', () => unlinkDialog(p)));
+    p.linked && small(compact ? 'btn-ghost danger' : 'btn-danger', 'Remove link', () => unlinkDialog(p)));
 }
 
 function suspendDialog(p) {
@@ -475,7 +482,7 @@ const SORTS = {
 };
 // [value, label, staff only]
 const PLAYER_SORTS = [['seen', 'Recently seen'], ['online', 'Online first'], ['name-asc', 'Name A–Z'],
-  ['name-desc', 'Name Z–A'], ['joined-new', 'Newest first'], ['joined-old', 'Oldest first'], ['streak', 'Longest streak'],
+  ['name-desc', 'Name Z–A'], ['joined-new', 'Newest members'], ['joined-old', 'Oldest members'], ['streak', 'Longest streak'],
   ['admins', 'Staff first'], ['suspended', 'Suspended first', true]];
 const PLAYER_FILTERS = [['all', 'Everyone'], ['online', 'Online now'], ['linked', 'Linked members'],
   ['unlinked', 'Not linked'], ['staff', 'Staff'], ['suspended', 'Suspended', true]];
@@ -516,7 +523,8 @@ function renderPlayers() {
     .filter((p) => !query || [p.minecraftName || '', p.uuid || '', p.discordName || '', staff ? p.discordId || '' : '']
       .some((value) => value.toLowerCase().includes(query)))
     .sort(SORTS[$('players-sort').value] || SORTS.seen);
-  $('players-count').textContent = `(${shown.length.toLocaleString()})`;
+  $('players-count').textContent = query
+    ? `(${rows.length.toLocaleString()} of ${shown.length.toLocaleString()})` : `(${shown.length.toLocaleString()})`;
   // Long lists render in steps so a server with thousands of players stays responsive.
   const limit = state.playersLimit || 200;
   const list = $('players-list');
@@ -531,7 +539,7 @@ function renderPlayers() {
 }
 
 const playerListHead = (staff) => el('div', { class: 'prow prow-head', 'aria-hidden': 'true' },
-  el('div', {}, 'Player'), el('div', {}, 'Discord'), el('div', {}, 'Status'), el('div', {}, 'Joined'),
+  el('div', {}, 'Player'), el('div', {}, 'Discord'), el('div', {}, 'Status'), el('div', { class: 'prow-joined' }, 'Member since'),
   staff && el('div', { class: 'prow-actions' }, 'Actions'));
 
 /** A profile card picture behind something, fading out to the right. */
@@ -562,7 +570,7 @@ function playerRow(p) {
         el('div', {}, discordName(p), staff && copyButton(p.discordId, 'User ID')))),
       el('div', { class: 'prow-status' }, status),
       el('div', { class: 'prow-joined muted', title: formatTime(p.firstPlayed) },
-        el('span', { class: 'prow-label' }, 'First visit '), shortDate(p.firstPlayed)));
+        el('span', { class: 'prow-label' }, 'Member since '), shortDate(p.firstPlayed)));
   }
   return el('div', { class: `prow ${p.card ? 'has-card' : ''}`, role: 'listitem' },
     p.card && cardBackdrop(p.card),
@@ -577,8 +585,8 @@ function playerRow(p) {
       : el('span', { class: 'muted' }, 'Not linked')),
     el('div', { class: 'prow-status' }, status),
     el('div', { class: 'prow-joined muted', title: joined ? formatTime(joined) : null },
-      el('span', { class: 'prow-label' }, p.linkedAt ? 'Linked ' : 'Joined '), joined ? shortDate(joined) : '—'),
-    staff && el('div', { class: 'prow-actions' }, actionButtons(p)));
+      el('span', { class: 'prow-label' }, 'Member since '), joined ? shortDate(joined) : '—'),
+    staff && el('div', { class: 'prow-actions' }, actionButtons(p, { compact: true })));
 }
 
 const resetPlayersLimit = () => { state.playersLimit = 200; renderPlayers(); };
@@ -626,7 +634,8 @@ function logRow(entry, showPlayer) {
     el('td', { class: 'nowrap muted' }, formatTime(entry.time)),
     el('td', {}, el('span', { class: `badge ${tone}` }, label)),
     showPlayer && el('td', { class: 'nowrap' }, player),
-    el('td', {}, entry.actor || '—'),
+    // Without a player column, "by" gets its own line in the phone cards rather than widening the time column.
+    el('td', { class: showPlayer ? null : 'own-line' }, entry.actor || '—'),
     el('td', { class: 'detail' }, maskIps(entry.detail || '')));
 }
 
@@ -737,12 +746,9 @@ async function teleportTo(p, mode, button) {
  * they show one. Staff also get teleports and the admin buttons.
  */
 function profileHeader(p, staff) {
-  const badges = staff
-    ? [p.isAdmin && el('span', { class: 'badge warn' }, 'Admin'),
-      p.linked ? el('span', { class: 'badge good' }, 'Linked') : el('span', { class: 'badge' }, 'Not linked'),
-      p.linked && !p.inGuild && el('span', { class: 'badge bad' }, 'Left the Discord server')]
-    : [p.isAdmin && el('span', { class: 'badge warn' }, 'Staff'),
-      p.linked ? el('span', { class: 'badge good' }, 'Member') : el('span', { class: 'badge' }, 'Not linked')];
+  const badges = [p.isAdmin && el('span', { class: 'badge warn' }, 'Staff'),
+    p.linked ? el('span', { class: 'badge good' }, 'Linked') : el('span', { class: 'badge' }, 'Not linked'),
+    staff && p.linked && !p.inGuild && el('span', { class: 'badge bad' }, 'Left the Discord server')];
   return el('div', { class: `card profile ${p.card ? 'has-card' : ''}` },
     p.card && cardBackdrop(p.card),
     el('img', { class: 'head-large', src: headUrl(p.uuid, 192), alt: '' }),
@@ -792,17 +798,18 @@ function renderPlayer() {
       : el('p', { class: 'muted' }, `Not suspended. ${suspensions.length} past suspension${suspensions.length === 1 ? '' : 's'}.`));
 
   const notesSection = [
-    el('h2', { class: 'section-title' }, `Notes (${notes.length})`,
+    el('h2', { class: 'section-title' }, withCount('Notes', notes.length),
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => noteDialog(p) }, 'Add note')),
     notes.length
       ? el('div', { class: 'notes' }, notes.map((n) => el('div', { class: 'note' },
         el('p', {}, n.note), el('div', { class: 'meta' }, `${n.author} · ${formatTime(n.createdAt)}`))))
-      : el('p', { class: 'muted' }, 'No notes yet.'),
+      : emptyCard('No notes yet.'),
   ];
 
-  const historySection = [
-    el('h2', { class: 'section-title' }, `Suspension history (${suspensions.length})`),
-    suspensions.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+  // Only when there is some: the Suspension card already says "0 past suspensions".
+  const historySection = !suspensions.length ? [] : [
+    el('h2', { class: 'section-title' }, withCount('Suspension history', suspensions.length)),
+    el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
       el('thead', {}, el('tr', {}, ['Started', 'Ends', 'Reason', 'By', 'Outcome'].map((h) => el('th', {}, h)))),
       el('tbody', {}, suspensions.map((x) => el('tr', {},
         el('td', { class: 'nowrap muted' }, formatTime(x.createdAt)),
@@ -813,12 +820,11 @@ function renderPlayer() {
           ? el('span', { class: 'badge bad' }, 'Active')
           : x.liftedAt
             ? `Lifted ${formatTime(x.liftedAt)} by ${x.liftedBy}: "${x.liftReason}"`
-            : 'Expired'))))))
-      : el('p', { class: 'muted' }, 'Never suspended.'),
+            : 'Expired')))))),
   ];
 
   const ipSection = [
-    el('h2', { class: 'section-title' }, `IP addresses (${ips.length})`),
+    el('h2', { class: 'section-title' }, withCount('IP addresses', ips.length)),
     ips.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
       el('thead', {}, el('tr', {}, ['IP', 'First seen', 'Last seen', 'Times', 'Other accounts on this IP'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ips.map((ip) => el('tr', {},
@@ -829,7 +835,7 @@ function renderPlayer() {
         el('td', {}, ip.others.length
           ? el('div', { class: 'others' }, ip.others.map((o) => el('a', { class: 'chip', href: playerHref(o.uuid) }, o.name)))
           : el('span', { class: 'muted' }, 'None')))))))
-      : el('p', { class: 'muted' }, 'No IPs recorded yet.'),
+      : emptyCard('No IPs recorded yet.'),
   ];
 
   const sheetsButton = state.me.sheetsEnabled && el('button', {
@@ -840,7 +846,7 @@ function renderPlayer() {
       el('div', { class: 'actions' },
         el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => downloadCsv(p.uuid) }, 'Download CSV'),
         sheetsButton)),
-    el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+    el('div', { class: 'table-wrap' }, el('table', { class: 'table table-cards' },
       el('thead', {}, el('tr', {}, ['Time', 'Event', 'By', 'Details'].map((h) => el('th', {}, h)))),
       el('tbody', { id: 'player-logs' }))),
     el('div', { class: 'more' }, el('button', {
@@ -852,7 +858,7 @@ function renderPlayer() {
     el('a', { class: 'back', href: '#/players' }, '← All players'),
     profile,
     el('div', { class: 'grid' }, discord, suspension),
-    inventorySection(p),
+    ...inventorySection(p),
     ...unlocksSection(p, state.player.cosmetics),
     ...communitySection(p, state.player.community),
     ...notesSection, ...historySection, ...ipSection, ...activitySection);
@@ -1127,12 +1133,9 @@ function inventorySection(p) {
   const inv = state.inventory;
   const box = el('div', { id: 'inventory-box' });
   const mode = inv?.mode || 'live';
-  const modes = el('div', { class: 'tabs inv-modes' },
+  const modes = el('div', { class: 'tabs inv-modes', hidden: !state.inventory },
     el('a', { href: '#', class: mode === 'live' ? 'active' : '', onclick: (e) => { e.preventDefault(); loadInventory(); } }, 'Live'),
     el('a', { href: '#', class: mode === 'snapshots' ? 'active' : '', onclick: (e) => { e.preventDefault(); loadSnapshots(); } }, 'Snapshots'));
-  const section = el('div', { class: 'card panel inventory-panel' },
-    el('h2', {}, 'Inventory', modes),
-    box);
   queueMicrotask(() => {
     if (!state.inventory) {
       box.replaceChildren(el('p', { class: 'muted' }, p.online
@@ -1145,13 +1148,14 @@ function inventorySection(p) {
       renderInventory();
     }
   });
-  return section;
+  return [el('h2', { class: 'section-title' }, 'Inventory', modes), el('div', { class: 'card panel inventory-panel' }, box)];
 }
 
 function renderInventory() {
   const box = $('inventory-box');
   const inv = state.inventory;
   if (!box || !inv) return;
+  document.querySelector('.inv-modes')?.removeAttribute('hidden');
   document.querySelectorAll('.inv-modes a').forEach((a, i) => a.classList.toggle('active', (i === 0) === (inv.mode === 'live')));
   if (inv.mode === 'live') {
     if (!state.player.player.online) {
@@ -1456,15 +1460,15 @@ function communitySection(p, c) {
   const currency = c.currency;
   const summary = el('div', { class: 'card panel' },
     el('div', { class: 'stats-grid' },
-      stat(c.rank ? `Balance · rank #${c.rank}` : 'Balance', credits(c.credits, currency)),
+      stat('Balance', [credits(c.credits, currency), c.rank ? el('span', { class: 'stat-sub' }, `Rank #${c.rank}`) : null]),
       stat('Earned in total', credits(c.earned, currency)),
-      stat('Active playtime', playtime(c.activeSeconds), 'Time on the servers, not counting AFK'),
-      staff && stat('AFK time', playtime(c.afkSeconds)),
+      stat('Active playtime', [playtime(c.activeSeconds), staff ? el('span', { class: 'stat-sub' }, `${playtime(c.afkSeconds)} AFK`) : null],
+        'Time on the servers, not counting AFK'),
       stat('Advancements', c.advancements.length.toLocaleString()),
-      stat('Interactions', `${c.given.toLocaleString()} given · ${c.received.toLocaleString()} received`),
-      c.market && stat(c.microRank ? `${c.microCurrency.many} · rank #${c.microRank}` : c.microCurrency.many,
-        c.group ? el('span', {}, micro(c.micro, c.microCurrency), el('a', { class: 'stat-sub', href: '#/community/groups' },
-          `shared in ${c.group.name} (${c.group.members} players)`)) : micro(c.micro, c.microCurrency)),
+      stat('Interactions', [`${c.given.toLocaleString()} given`, el('span', { class: 'stat-sub' }, `${c.received.toLocaleString()} received`)]),
+      c.market && stat(c.microCurrency.many, [micro(c.micro, c.microCurrency),
+        c.microRank ? el('span', { class: 'stat-sub' }, `Rank #${c.microRank}`) : null,
+        c.group ? el('a', { class: 'stat-sub', href: '#/community/groups' }, `shared in ${c.group.name} (${c.group.members} players)`) : null]),
       c.market && stat('Earned by selling', micro(c.microEarned, c.microCurrency))),
     c.favourites.length > 0 && el('div', { class: 'others' },
       el('span', { class: 'muted' }, 'Favourite interactions:'),
@@ -1479,7 +1483,7 @@ function communitySection(p, c) {
       el('td', { class: 'nowrap' }, credits(t.balance, currency)),
       el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind,
         t.detail && t.kind !== 'PLAYTIME' ? `: ${t.detail}` : '', t.actor ? ` — ${t.actor}` : ''))))))
-    : el('p', { class: 'muted' }, `No ${currency.many} yet.`);
+    : emptyCard(`No ${currency.many} yet.`);
 
   const mc = c.microCurrency;
   const microLedger = !staff || !c.market ? null : c.microTransactions.length
@@ -1492,7 +1496,7 @@ function communitySection(p, c) {
         el('td', { class: 'nowrap' }, micro(t.balance, mc)),
         el('td', { class: 'detail' }, TRANSACTION_KINDS[t.kind] || t.kind, t.detail ? `: ${t.detail}` : '',
           t.actor ? ` — ${t.actor}` : ''))))))
-    : el('p', { class: 'muted' }, `Hasn't sold anything yet.`);
+    : emptyCard(`Hasn't sold anything yet.`);
 
   const advancements = c.advancements.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
     el('thead', {}, el('tr', {}, ['Advancement', 'Type', 'Reward', 'Server', 'When'].map((h) => el('th', {}, h)))),
@@ -1505,7 +1509,7 @@ function communitySection(p, c) {
         el('td', {}, a.server),
         el('td', { class: 'nowrap muted' }, formatTime(a.earnedAt)));
     }))))
-    : el('p', { class: 'muted' }, 'No advancements made since DiscordLinkedFAD was installed.');
+    : emptyCard('No advancements made since DiscordLinkedFAD was installed.');
 
   return [
     el('h2', { class: 'section-title' }, `${currency.many} & interactions`,
@@ -1516,7 +1520,7 @@ function communitySection(p, c) {
     ledger,
     microLedger && el('h2', { class: 'section-title' }, `${c.microCurrency.one} history`),
     microLedger,
-    el('h2', { class: 'section-title' }, `Advancements (${c.advancements.length})`),
+    el('h2', { class: 'section-title' }, withCount('Advancements', c.advancements.length)),
     advancements,
   ].filter(Boolean); // the callers spread this into replaceChildren, which would print false/null
 }
@@ -1577,12 +1581,12 @@ function renderCommunityStats() {
   const t = d.totals;
   $('community-stats').replaceChildren(...[
     stat(`${d.currency.many} held`, t.credits.toLocaleString()),
-    stat('Earned in total', t.earned.toLocaleString()),
-    d.market && stat(`${d.microCurrency.many} held`, micro(t.micro, d.microCurrency)),
+    stat(`${d.currency.many} earned`, t.earned.toLocaleString()),
+    d.market && stat(`${d.microCurrency.many} held`, t.micro.toLocaleString()),
     stat('Active playtime', playtime(t.activeSeconds)),
     stat('Advancements', t.advancements.toLocaleString()),
-    stat('Interactions', `${t.interactions.toLocaleString()} · ${t.interactionsToday.toLocaleString()} today`),
-    stat('Players', t.players.toLocaleString())].filter(Boolean));
+    stat('Interactions', [t.interactions.toLocaleString(), el('span', { class: 'stat-sub' }, `${t.interactionsToday.toLocaleString()} today`)]),
+    stat(`Players with ${d.currency.many}`, t.players.toLocaleString())].filter(Boolean));
 }
 
 /** A leaderboard value in its own unit: credits, microcredits, playtime, days or a plain count. */
@@ -1698,7 +1702,7 @@ function renderInteractions() {
         el('span', { title: formatTime(i.time) }, timeAgo(i.time))))))
       : el('p', { class: 'muted' }, 'No interactions yet.'));
   const actions = el('div', { class: 'card panel' },
-    el('h2', {}, `Interaction commands (${d.actions.length})`),
+    el('h2', {}, withCount('Interaction commands', d.actions.length)),
     d.synced
       ? el('div', { class: 'others' }, d.actions.map((a) => el('span', {
         class: 'chip', title: `${a.description} · ${a.lines} lines · ${a.target === 'required' ? 'needs a player' : a.target === 'optional' ? 'player optional' : 'no player'}`,
@@ -1741,15 +1745,15 @@ async function groupAction(path, body = {}) {
 
 function groupLogTable(log, cur) {
   if (!log.length) return el('p', { class: 'muted' }, 'Nothing yet.');
-  return el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+  return el('div', { class: 'table-wrap' }, el('table', { class: 'table table-cards' },
     el('thead', {}, el('tr', {}, ['Time', 'Who', 'What', 'Change', 'Balance'].map((h) => el('th', {}, h)))),
     el('tbody', {}, log.map((e) => el('tr', {},
-      el('td', { title: formatTime(e.time) }, timeAgo(e.time)),
+      el('td', { class: 'nowrap muted', title: formatTime(e.time) }, timeAgo(e.time)),
       el('td', {}, e.uuid ? el('a', { class: 'name', href: playerHref(e.uuid) }, e.name) : e.name || '—'),
-      el('td', {}, el('span', { class: 'badge' }, GROUP_LOG_KINDS[e.kind] || e.kind), ' ', el('span', { class: 'muted' }, e.detail || '')),
+      el('td', { class: 'detail' }, el('span', { class: 'badge' }, GROUP_LOG_KINDS[e.kind] || e.kind), ' ', el('span', { class: 'muted' }, e.detail || '')),
       el('td', { class: `nowrap ${e.amount > 0 ? 'credit-plus' : e.amount < 0 ? 'credit-minus' : 'muted'}` },
         e.amount ? `${e.amount > 0 ? '+' : '−'}${micro(Math.abs(e.amount), cur)}` : '—'),
-      el('td', {}, micro(e.balance, cur)))))));
+      el('td', { class: 'nowrap' }, micro(e.balance, cur)))))));
 }
 
 function memberHeads(members, size = 32) {
@@ -1820,9 +1824,8 @@ function renderGroups() {
       el('div', { class: 'group-title' }, el('h2', {}, mine.name), mine.rank && el('span', { class: 'badge good' }, `#${mine.rank} on the leaderboard`),
         el('span', { class: 'actions' }, rename, leave)),
       el('div', { class: 'stats-grid' },
-        el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, 'Shared balance'), el('div', { class: 'stat-value' }, micro(mine.balance, cur))),
-        el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, 'Members'), el('div', { class: 'stat-value' },
-          `${mine.members.length}${d.maxMembers ? ` / ${d.maxMembers}` : ''}`))),
+        stat('Shared balance', micro(mine.balance, cur)),
+        stat('Members', `${mine.members.length}${d.maxMembers ? ` / ${d.maxMembers}` : ''}`)),
       members, invite, pending, rules));
     if (leader) {
       parts.push(el('h2', { class: 'section-title' }, 'Group log'),
@@ -1831,7 +1834,7 @@ function renderGroups() {
     }
   }
   const staff = isStaff();
-  parts.push(el('h2', { class: 'section-title' }, `All groups (${d.groups.length})`),
+  parts.push(el('h2', { class: 'section-title' }, withCount('All groups', d.groups.length)),
     d.groups.length ? el('div', { class: 'group-grid' }, d.groups.map((g) => {
       const log = el('div', { class: 'group-log', hidden: !groupState.logOpen.has(g.id) });
       const loadLog = async () => {
@@ -2259,14 +2262,13 @@ function renderSettings() {
     secret('Cloudflare tunnel token', data.secrets.tunnelToken, 'web-tunnel-token (optional: a tunnel made in the Cloudflare dashboard)'));
 
   const d = data.data;
-  const stat = (label, value) => el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, label), el('div', { class: 'stat-value' }, value));
   const dataCard = el('div', { class: 'card panel settings-group' },
     el('h2', {}, 'Data'),
     el('div', { class: 'stats-grid' },
       stat('Database size', formatBytes(d.databaseBytes)),
       stat('Linked players', d.linkedPlayers.toLocaleString()),
-      stat('Log entries', `${d.logEntries.toLocaleString()} (${d.chatEntries.toLocaleString()} chat/commands)`),
-      stat('Inventory snapshots', `${d.snapshots.toLocaleString()} (${formatBytes(d.snapshotBytes)})`),
+      stat('Log entries', [d.logEntries.toLocaleString(), el('span', { class: 'stat-sub' }, `${d.chatEntries.toLocaleString()} chat/commands`)]),
+      stat('Inventory snapshots', [d.snapshots.toLocaleString(), el('span', { class: 'stat-sub' }, formatBytes(d.snapshotBytes))]),
       stat('Staff notes', d.notes.toLocaleString())),
     el('p', { class: 'muted' }, 'Cleanup runs automatically every hour using the retention settings above.'),
     el('div', { class: 'actions inv-start' },
@@ -3551,7 +3553,7 @@ function renderMarket() {
     all.addEventListener('click', () => run(all, { all: true }));
     exchange.replaceChildren(el('h2', {}, `${cur.many} → ${d.credits.many}`),
       el('div', { class: 'stats-grid' },
-        stat(me.rank ? `Yours · #${me.rank} on the leaderboard` : 'Yours', micro(me.micro, cur)),
+        stat('Yours', [micro(me.micro, cur), me.rank ? el('span', { class: 'stat-sub' }, `Rank #${me.rank}`) : null]),
         stat(d.credits.many, credits(me.credits, d.credits))),
       el('p', { class: 'muted' }, `1 ${d.credits.one} = ${micro(d.rate, cur)}. Exchanging only goes this way, `
         + (d.ranking === 'balance' ? 'and lowers your place on the leaderboard.' : 'and doesn\'t change your place on the leaderboard.')),
@@ -3668,7 +3670,6 @@ function renderPublicPlayer() {
   const server = el('div', { class: 'card panel' },
     el('h2', {}, 'On the server'),
     el('dl', { class: 'kv' },
-      el('dt', {}, 'Status'), el('dd', {}, p.online ? `Online${p.server ? ` on ${p.server}` : ''}` : 'Offline'),
       p.firstPlayed && [el('dt', {}, 'First joined'), el('dd', {}, formatTime(p.firstPlayed))],
       !p.online && [el('dt', {}, 'Last seen'),
         el('dd', {}, p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never')]));
