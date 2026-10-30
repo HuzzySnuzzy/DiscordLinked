@@ -440,8 +440,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.21.0.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.21.0.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.21.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.21.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.21.1.jar`
+and `fad-paper/build/libs/DiscordLinkedFAD-0.21.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup
