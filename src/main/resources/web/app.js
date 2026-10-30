@@ -10,9 +10,9 @@ const EVENT_LABELS = {
   UNSUSPEND: ['Unsuspended', 'good'],
   KICK: ['Kicked', 'warn'],
   NOTE: ['Note', 'info'],
-  JOIN: ['Join', 'info'],
-  LEAVE: ['Leave', ''],
-  SERVER_SWITCH: ['Server switch', ''],
+  JOIN: ['Joined', 'info'],
+  LEAVE: ['Left', ''],
+  SERVER_SWITCH: ['Switched server', ''],
   CHAT: ['Chat', ''],
   COMMAND: ['Command', ''],
   DENIED_UNLINKED: ['Denied: not linked', 'warn'],
@@ -24,17 +24,17 @@ const EVENT_LABELS = {
   INVENTORY_RESTORE: ['Inventory restored', 'warn'],
   SETTINGS_CHANGE: ['Settings changed', 'info'],
   DUTY: ['Duty', 'info'],
-  DEATH: ['Death', 'bad'],
+  DEATH: ['Died', 'bad'],
   SPY_START: ['Spy started', 'info'],
   SPY_END: ['Spy ended', ''],
   INTERACTION: ['Interaction', ''],
   ADVANCEMENT: ['Advancement', 'good'],
-  CREDITS_ADJUST: ['Credits changed', 'warn'],
-  SHOP_PURCHASE: ['Shop', 'warn'],
+  CREDITS_ADJUST: ['Credits changed', 'info'],
+  SHOP_PURCHASE: ['Shop order', ''],
   TELEPORT: ['Teleport', 'info'],
-  SALE: ['Sale', 'good'],
-  EXCHANGE: ['Exchange', 'info'],
-  COSMETIC: ['Cosmetic', 'warn'],
+  SALE: ['Sold', 'good'],
+  EXCHANGE: ['Exchanged', 'info'],
+  COSMETIC: ['Cosmetic', ''],
   GROUP: ['Group', 'info'],
 };
 
@@ -618,11 +618,20 @@ async function loadLogs(reset) {
     state.logsBefore = data.nextBefore;
     $('logs-more').hidden = !data.nextBefore;
     $('logs-empty').hidden = $('logs-body').children.length > 0;
+    $('logs-empty').textContent = $('logs-filter').value !== 'all' || $('logs-search').value.trim()
+      ? 'No log entries match this filter.' : 'Nothing logged yet.';
   } catch (e) {
     toast(e.message);
   } finally {
     state.logsLoading = false;
   }
+}
+
+/** "Name (Discord ID) (website)" as just "Name · website": the full text stays in the cell's tooltip. */
+function actorLabel(actor) {
+  if (!actor) return '—';
+  const m = actor.match(/^(.*?) \((\d{15,20})\)(?: \((.+)\))?$/);
+  return m ? [m[1], m[3] ? el('span', { class: 'muted' }, ` · ${m[3]}`) : null] : actor;
 }
 
 function logRow(entry, showPlayer) {
@@ -635,8 +644,8 @@ function logRow(entry, showPlayer) {
     el('td', {}, el('span', { class: `badge ${tone}` }, label)),
     showPlayer && el('td', { class: 'nowrap' }, player),
     // Without a player column, "by" gets its own line in the phone cards rather than widening the time column.
-    el('td', { class: showPlayer ? null : 'own-line' }, entry.actor || '—'),
-    el('td', { class: 'detail' }, maskIps(entry.detail || '')));
+    el('td', { class: showPlayer ? null : 'own-line', title: entry.actor || null }, actorLabel(entry.actor)),
+    el('td', { class: 'detail' }, maskIps((entry.detail || '').replace(/^ip=/, 'IP '))));
 }
 
 function downloadCsv(uuid) {
@@ -793,7 +802,7 @@ function renderPlayer() {
         el('dt', {}, 'Status'), el('dd', { class: 'name-suspended' }, `Suspended · ${formatRemaining(s.expiresAt)} left`),
         el('dt', {}, 'Reason'), el('dd', {}, s.reason),
         el('dt', {}, 'Ends'), el('dd', {}, formatTime(s.expiresAt)),
-        el('dt', {}, 'By'), el('dd', {}, s.createdBy),
+        el('dt', {}, 'By'), el('dd', { title: s.createdBy }, actorLabel(s.createdBy)),
         el('dt', {}, 'Since'), el('dd', {}, formatTime(s.createdAt)))
       : el('p', { class: 'muted' }, `Not suspended. ${suspensions.length} past suspension${suspensions.length === 1 ? '' : 's'}.`));
 
@@ -815,11 +824,11 @@ function renderPlayer() {
         el('td', { class: 'nowrap muted' }, formatTime(x.createdAt)),
         el('td', { class: 'nowrap' }, formatTime(x.expiresAt)),
         el('td', { class: 'detail' }, x.reason),
-        el('td', {}, x.createdBy),
+        el('td', { title: x.createdBy }, actorLabel(x.createdBy)),
         el('td', { class: 'detail' }, x.active
           ? el('span', { class: 'badge bad' }, 'Active')
           : x.liftedAt
-            ? `Lifted ${formatTime(x.liftedAt)} by ${x.liftedBy}: "${x.liftReason}"`
+            ? [`Lifted ${formatTime(x.liftedAt)} by `, el('span', { title: x.liftedBy }, actorLabel(x.liftedBy)), `: "${x.liftReason}"`]
             : 'Expired')))))),
   ];
 
@@ -1912,6 +1921,7 @@ function renderModerate() {
   const chosen = select.value;
   select.replaceChildren(el('option', { value: '' }, 'All servers'), ...servers.map((s) => el('option', { value: s }, s)));
   select.value = servers.includes(chosen) ? chosen : '';
+  select.hidden = servers.length < 2 && !select.value;
 
   const self = $('moderate-self');
   const selfText = {
@@ -1927,7 +1937,7 @@ function renderModerate() {
     .filter((p) => !select.value || p.server === select.value)
     .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
     .sort(SORTS['name-asc']);
-  $('moderate-count').textContent = `(${data.players.length})`;
+  $('moderate-count').textContent = `(${data.players.length.toLocaleString()} online)`;
   $('moderate-grid').replaceChildren(...players.map((p) => moderateCard(p, data.selfStatus === 'online')));
   const empty = $('moderate-empty');
   empty.textContent = data.players.length ? 'No players match your filter.' : 'Nobody is online right now.';
@@ -1940,7 +1950,9 @@ function moderateCard(p, canSpy) {
     el('button', { class: `btn ${cls} btn-small`, type: 'button', onclick: handler, ...extra }, label);
   return el('div', { class: 'card mod-card' },
     el('div', { class: 'mod-top' },
-      el('a', { href: playerHref(p.uuid) }, el('img', { class: 'head mod-head', src: headUrl(p.uuid, 112), alt: '', loading: 'lazy' })),
+      // Same link as the name beside it, so only the name is announced and focusable.
+      el('a', { href: playerHref(p.uuid), tabindex: '-1', 'aria-hidden': 'true' },
+        el('img', { class: 'head mod-head', src: headUrl(p.uuid, 112), alt: '', loading: 'lazy' })),
       el('div', { class: 'mod-id' },
         playerName(p),
         el('div', { class: 'sub' }, p.linked ? discordLink(p, p.discordName) : 'Not linked'),
@@ -2095,7 +2107,8 @@ async function loadSettings() {
     $('settings-bar').hidden = true;
     return;
   }
-  for (const key of Object.keys(settingsEdits)) delete settingsEdits[key];
+  // Unsaved edits survive a trip to another page or a live refresh; drop only the ones the server now matches.
+  for (const g of state.settings.groups) for (const f of g.fields) if (settingsEdits[f.key] === f.value) delete settingsEdits[f.key];
   try {
     state.domain = await api('/api/settings/domain');
   } catch (e) {
@@ -2129,23 +2142,20 @@ function domainCard() {
   const d = state.domain;
   const card = el('div', { class: 'card panel settings-group domain-card', id: 'domain-card' }, el('h2', {}, 'Your own address'));
   if (!d) return card;
-  if (!d.tunnel) {
-    card.append(el('p', { class: 'muted' }, 'Your own address works with web-access=tunnel. This website uses web-access=direct, '
-      + 'so its address is web-public-url in config.properties.'));
-    return card;
-  }
   const prefix = el('input', { type: 'text', value: d.prefix ?? 'dla', placeholder: 'dla', 'aria-label': 'Before your domain', class: 'domain-prefix', spellcheck: 'false' });
   const name = el('input', { type: 'text', value: d.domain || '', placeholder: 'example.com', 'aria-label': 'Your domain', class: 'domain-name', spellcheck: 'false' });
   const preview = el('div', { class: 'domain-preview mono' });
+  const connected = d.state === 'ready' && d.connectedHostname;
+  const live = connected && d.publicUrl === `https://${d.connectedHostname}`;
   const update = () => {
     const host = [prefix.value.trim().toLowerCase(), name.value.trim().toLowerCase()].filter(Boolean).join('.');
     preview.textContent = name.value.trim() ? `https://${host}` : 'https://dla.example.com';
+    // The live address is shown below already; only show the preview once it differs.
+    preview.hidden = live && preview.textContent === `https://${d.connectedHostname}`;
   };
   prefix.addEventListener('input', update);
   name.addEventListener('input', update);
   update();
-  const connected = d.state === 'ready' && d.connectedHostname;
-  const live = connected && d.publicUrl === `https://${d.connectedHostname}`;
   const connect = el('button', { class: 'btn btn-small', type: 'button', onclick: async (e) => {
     const button = e.currentTarget;
     button.disabled = true;
@@ -2209,15 +2219,18 @@ function domainCard() {
   }
   if (d.message && d.state !== 'working') card.append(el('p', { class: 'error' }, d.message));
   card.append(el('div', { class: 'actions inv-start' }, connect,
-    connected && !d.tokenMode && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: async (e) => {
-      if (!confirm('Remove your own address? The website goes back to an automatic address that changes on restart.')) return;
-      e.currentTarget.disabled = true;
-      try {
-        state.domain = await api('/api/settings/domain/disconnect', {});
-        toast('Disconnected. Run /dla for a link to the new address.');
-      } catch (err) { toast(err.message); }
-      card.replaceWith(domainCard());
-    } }, 'Disconnect')));
+    connected && !d.tokenMode && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
+      title: 'Remove your own address?',
+      text: 'The website goes back to an automatic address that changes on restart.',
+      confirmLabel: 'Disconnect', confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        try {
+          state.domain = await api('/api/settings/domain/disconnect', {});
+          toast('Disconnected. Run /dla for a link to the new address.');
+        } catch (err) { toast(err.message); }
+        card.replaceWith(domainCard());
+      },
+    }) }, 'Disconnect')));
   return card;
 }
 
@@ -2263,7 +2276,9 @@ function renderSettings() {
     el('h2', {}, group.name),
     group.fields.map((field) => el('div', { class: `setting ${field.key in settingsEdits ? 'changed' : ''}`, 'data-setting': field.key },
       el('div', { class: 'setting-text' },
-        el('div', { class: 'setting-label' }, field.label, field.restart && el('span', { class: 'badge warn' }, 'needs restart')),
+        el('div', { class: 'setting-label' }, field.label, field.restart && el('span', { class: 'badge warn' }, 'needs restart'),
+          field.key === 'google-service-account-file' && el('span', { class: `badge ${data.secrets.googleKey ? 'good' : ''}` },
+            data.secrets.googleKey ? 'File found' : 'File missing')),
         el('div', { class: 'setting-help' }, field.help),
         el('div', { class: 'setting-key mono' }, field.key)),
       el('div', { class: 'setting-input' }, settingInput(field)))),
@@ -2275,16 +2290,17 @@ function renderSettings() {
       el('div', { class: 'setting-input' }, el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics',
         onclick: () => { cos.edit = true; } }, 'Edit cosmetics')))));
 
-  const secret = (label, set, hint) => el('div', { class: 'setting' },
-    el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, label), el('div', { class: 'setting-help' }, hint)),
-    el('span', { class: `badge ${set ? 'good' : 'warn'}` }, set ? 'Set' : 'Not set'));
+  // An optional secret that isn't set gets a plain badge; only a missing required one is a warning.
+  const secret = (label, set, key, hint, optional) => el('div', { class: 'setting' },
+    el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, label),
+      hint && el('div', { class: 'setting-help' }, hint), el('div', { class: 'setting-key mono' }, key)),
+    el('span', { class: `badge ${set ? 'good' : optional ? '' : 'warn'}` }, set ? 'Set' : 'Not set'));
   const secrets = el('div', { class: 'card panel settings-group' },
     el('h2', {}, 'Secrets'),
     el('p', { class: 'muted' }, 'For safety these can only be changed in plugins/discordlinked/config.properties.'),
     secret('Bot token', data.secrets.botToken, 'bot-token'),
-    secret('Discord client secret', data.secrets.clientSecret, 'discord-client-secret (optional, for the Log in with Discord button)'),
-    secret('Google service account key', data.secrets.googleKey, 'the key file for Google Sheets export (optional)'),
-    secret('Cloudflare tunnel token', data.secrets.tunnelToken, 'web-tunnel-token (optional: a tunnel made in the Cloudflare dashboard)'));
+    secret('Discord client secret', data.secrets.clientSecret, 'discord-client-secret', 'Optional, for the Log in with Discord button.', true),
+    secret('Cloudflare tunnel token', data.secrets.tunnelToken, 'web-tunnel-token', 'Optional, for a tunnel made in the Cloudflare dashboard.', true));
 
   const d = data.data;
   const dataCard = el('div', { class: 'card panel settings-group' },
@@ -2300,7 +2316,7 @@ function renderSettings() {
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'cleanup') }, 'Clean up now'),
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'compact') }, 'Compact database')));
 
-  $('settings-body').replaceChildren(el('div', { class: 'settings-grid' }, domainCard(), ...groups, secrets, dataCard));
+  $('settings-body').replaceChildren(el('div', { class: 'settings-grid' }, state.domain?.tunnel && domainCard(), ...groups, secrets, dataCard));
   updateSettingsBar();
 }
 
@@ -2329,9 +2345,8 @@ $('settings-discard').addEventListener('click', () => {
   renderSettings();
 });
 
-$('settings-save').addEventListener('click', async () => {
+async function saveSettings() {
   const ownerChange = 'web-owner-id' in settingsEdits;
-  if (ownerChange && !confirm('Changing the settings owner hands this page to that Discord user right away. Continue?')) return;
   const button = $('settings-save');
   button.disabled = true;
   try {
@@ -2343,13 +2358,29 @@ $('settings-save').addEventListener('click', async () => {
       state.me = await api('/api/me');
       applyMode();
     }
+    for (const key of Object.keys(settingsEdits)) delete settingsEdits[key];
     await loadSettings();
   } catch (e) {
     toast(e.message);
   } finally {
     button.disabled = false;
   }
+}
+
+$('settings-save').addEventListener('click', () => {
+  if (!('web-owner-id' in settingsEdits)) {
+    saveSettings();
+    return;
+  }
+  confirmDialog({
+    title: 'Change the settings owner?',
+    text: 'This hands the Settings page to that Discord user right away.',
+    confirmLabel: 'Change owner', confirmClass: 'btn-danger', onConfirm: saveSettings,
+  });
 });
+
+// Leaving or reloading the page with unsaved settings asks first.
+window.addEventListener('beforeunload', (e) => { if (Object.keys(settingsEdits).length) e.preventDefault(); });
 
 // ---- Live updates: one event stream for every page ----
 
@@ -3386,27 +3417,32 @@ async function loadMessageLog() {
       button.disabled = false;
     }
   };
+  // Whether the bot is connected goes under the on/off line rather than in a card of its own.
+  const stateCard = (text, button) => el('div', { class: 'card panel msglog-state' },
+    el('div', {}, el('div', {}, text), !d.botReady
+      && el('div', { class: 'muted msglog-note' }, 'The Discord bot isn\'t connected, so only channels with saved messages are listed.')),
+    button);
   if (!d.enabled) {
     const on = el('button', { class: 'btn btn-small', type: 'button' }, 'Turn logging on');
     on.addEventListener('click', () => toggle(on, true));
-    notices.push(el('div', { class: 'card panel msglog-state' },
-      el('span', {}, el('b', {}, 'Logging is off. '), 'Turn it on to save the messages of every channel the bot can see.'), on));
+    notices.push(stateCard([el('b', {}, 'Logging is off. '), 'Turn it on to save the messages of every channel the bot can see.'], on));
   } else {
     const off = el('button', { class: 'btn btn-ghost btn-small', type: 'button' }, 'Turn off');
     off.addEventListener('click', () => toggle(off, false));
-    notices.push(el('div', { class: 'card panel msglog-state' },
-      el('span', {}, el('span', { class: 'pill online' }, 'Logging'), ' every channel the bot can see.'), off));
+    notices.push(stateCard([el('span', { class: 'pill online' }, 'Logging'), ' every channel the bot can see.'], off));
     if (!d.messageContent) {
       notices.push(el('div', { class: 'card panel shop-closed' }, 'Not saving yet: turn on ', el('b', {}, 'Message Content Intent'),
         ' at discord.com/developers/applications → your app → Bot, then restart the proxy.'));
     }
   }
-  if (!d.botReady) notices.push(el('p', { class: 'card panel muted' }, 'The Discord bot isn\'t connected, so only channels with saved messages are listed.'));
-  notices.push(el('p', { class: 'muted msglog-help' }, 'The bot only reads: it never posts, reacts or leaves anything in these channels. '
-    + 'New messages only (Discord doesn\'t hand out old history). Edits keep the first version and deleted messages stay, marked as deleted. ',
-    d.retentionDays ? `The log goes back ${d.retentionDays} days` : 'The log keeps everything', ' (',
-    el('a', { href: '#/settings' }, 'change it in Settings'), '). Channels the bot can\'t see aren\'t logged.'));
+  notices.push(el('details', { class: 'msglog-help' }, el('summary', {}, 'How the message log works'),
+    el('p', { class: 'muted' }, 'The bot only reads: it never posts, reacts or leaves anything in these channels. '
+      + 'New messages only (Discord doesn\'t hand out old history). Edits keep the first version and deleted messages stay, marked as deleted. ',
+      d.retentionDays ? `The log goes back ${d.retentionDays} days` : 'The log keeps everything', ' (',
+      el('a', { href: '#/settings' }, 'change it in Settings'), '). Channels the bot can\'t see aren\'t logged.')));
   $('messages-notice').replaceChildren(...notices);
+  // With nothing saved there is nothing to pick, so the feed's empty message stands alone.
+  document.querySelector('.msglog-channels').hidden = !d.channels.length;
   if (!msglog.channel || !d.channels.some((c) => c.id === msglog.channel)) {
     msglog.channel = (d.channels.find((c) => c.count > 0) || d.channels[0])?.id || null;
   }
@@ -3434,7 +3470,7 @@ function renderMessageChannels() {
         c.count > 0 && el('span', { class: 'muted msglog-count' }, c.count.toLocaleString()))));
     }
   }
-  $('msglog-channels').replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted' }, 'No channels.')]));
+  $('msglog-channels').replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted' }, 'No channels match.')]));
 }
 $('msglog-filter').addEventListener('input', () => { if (msglog.data) renderMessageChannels(); });
 
@@ -3442,7 +3478,8 @@ $('msglog-filter').addEventListener('input', () => { if (msglog.data) renderMess
 async function loadMessageFeed(older = false) {
   const view = $('msglog-view');
   if (!msglog.channel) {
-    view.replaceChildren(el('p', { class: 'muted' }, 'No channels yet.'));
+    view.replaceChildren(el('p', { class: 'muted' }, msglog.data.channels.length ? 'Pick a channel.'
+      : msglog.data.enabled ? 'Nothing saved yet.' : 'Nothing saved yet. Turn logging on to start.'));
     return;
   }
   const channel = msglog.channel;

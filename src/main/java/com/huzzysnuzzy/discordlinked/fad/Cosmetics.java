@@ -347,7 +347,8 @@ public final class Cosmetics {
             }
         }
         plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "deleted cosmetic " + describe(cosmetic)
-                + (refunds.isEmpty() ? "" : "; " + refunds.size() + " players had it and paid ones were refunded"), actor);
+                + (refunds.isEmpty() ? "" : "; " + refunds.size() + (refunds.size() == 1 ? " player" : " players")
+                        + " had it and paid ones were refunded"), actor);
         if (cosmetic.kind().equals(CARD)) {
             deleteCardFile(cosmetic.value());
         }
