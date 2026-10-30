@@ -1623,7 +1623,7 @@ function boardEntry(d, row, rank, size) {
   return { isMe, href: '#/community/groups',
     heads: el('span', { class: 'group-heads', title: members.map((m) => m.name).join(', ') },
       members.slice(0, 3).map((m) => el('img', { class: 'head', src: headUrl(m.uuid, size), alt: '', loading: 'lazy' }))),
-    name: el('span', { class: 'name' }, row.name, ' ', el('span', { class: 'group-tag' }, `${members.length} player${members.length === 1 ? '' : 's'}`)),
+    name: el('span', { class: 'name' }, row.name, ' ', el('span', { class: 'badge group-tag' }, `${members.length} player${members.length === 1 ? '' : 's'}`)),
     online: members.some((m) => m.online) };
 }
 
@@ -1762,7 +1762,7 @@ function renderGroups() {
     const invite = leader && (() => {
       const who = el('input', { type: 'text', placeholder: 'Minecraft name', 'aria-label': 'Player to invite', required: true, list: 'group-invite-names' });
       return el('form', { class: 'group-create', onsubmit: (e) => { e.preventDefault(); groupAction('invite', { name: who.value }); } },
-        who, el('button', { class: 'btn btn-small', type: 'submit', disabled: !d.open }, 'Invite'));
+        who, el('button', { class: 'btn', type: 'submit', disabled: !d.open }, 'Invite'));
     })();
     const pending = leader && mine.invites.length > 0 && el('div', { class: 'group-pending muted' }, 'Invited: ',
       mine.invites.map((i) => el('span', { class: 'chip' }, i.name, ' ',
@@ -1977,16 +1977,16 @@ function renderSpyLock(s) {
     el('div', { class: 'actions spy-actions' },
       el('button', { class: 'btn btn-ghost', type: 'button', onclick: endSpy }, starting ? 'Cancel' : 'End session'),
       !starting && el('button', {
-        class: 'btn btn-warning', type: 'button', onclick: () => openDialog({
+        class: 'btn btn-ghost', type: 'button', onclick: () => openDialog({
           title: `Kick ${t.minecraftName}`, text: `Ends the session and kicks them. ${observed}`,
           confirmLabel: 'Kick', confirmClass: 'btn-warning',
           onConfirm: ({ reason }) => api('/api/spy/kick', { reason }),
         }),
       }, 'Kick'),
       !starting && !t.suspension && el('button', {
-        class: 'btn btn-danger', type: 'button', onclick: () => openDialog({
+        class: 'btn btn-warning', type: 'button', onclick: () => openDialog({
           title: `Suspend ${t.minecraftName}`, text: `Ends the session and suspends them. ${observed}`,
-          confirmLabel: 'Suspend', confirmClass: 'btn-danger', duration: { days: 1, hours: 0 },
+          confirmLabel: 'Suspend', confirmClass: 'btn-warning', duration: { days: 1, hours: 0 },
           onConfirm: ({ reason, days, hours }) => api('/api/spy/suspend', { reason, days, hours }),
         }),
       }, 'Suspend'))].filter(Boolean));
@@ -3505,10 +3505,10 @@ function renderMarket() {
         button.disabled = false;
       }
     };
-    const one = el('button', { class: 'btn btn-small', type: 'button', disabled: !d.open || can < 1 ? '' : null },
+    const one = el('button', { class: 'btn', type: 'button', disabled: !d.open || can < 1 ? '' : null },
       'Exchange');
     one.addEventListener('click', () => run(one, { credits: Number(amount.value) }));
-    const all = el('button', { class: 'btn btn-ghost btn-small', type: 'button', disabled: !d.open || can < 1 ? '' : null },
+    const all = el('button', { class: 'btn btn-ghost', type: 'button', disabled: !d.open || can < 1 ? '' : null },
       `All (${credits(can, d.credits)})`);
     all.addEventListener('click', () => run(all, { all: true }));
     exchange.replaceChildren(el('h2', {}, `${cur.many} → ${d.credits.many}`),

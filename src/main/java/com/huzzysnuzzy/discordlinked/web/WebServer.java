@@ -819,6 +819,10 @@ public final class WebServer {
             return null;
         }
         if (Duration.between(session.lastRoleCheck, Instant.now()).compareTo(ROLE_RECHECK) > 0) {
+            // While the bot reconnects, keep the current role and check again once it is back.
+            if (!plugin.bot().isReady()) {
+                return session;
+            }
             Access access = access(session.user.id());
             if (access == Access.NONE) {
                 sessions.invalidate(session.token);
