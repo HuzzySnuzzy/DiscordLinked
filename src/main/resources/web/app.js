@@ -42,6 +42,13 @@ const EVENT_LABELS = {
 
 const $ = (id) => document.getElementById(id);
 
+/** Marks the tab for the page you're on (aria-current needs a value, so never toggleAttribute). */
+function markCurrent(a, on) {
+  a.classList.toggle('active', on);
+  if (on) a.setAttribute('aria-current', 'page');
+  else a.removeAttribute('aria-current');
+}
+
 /** Builds an element. Strings become text nodes, so nothing is ever parsed as HTML. */
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -144,6 +151,13 @@ const discordHref = (id) => `https://discord.com/users/${id}`;
 const discordLink = (p, ...children) =>
   el('a', { class: 'discord-link', href: discordHref(p.discordId), target: '_blank', rel: 'noopener', title: 'Open Discord profile' }, ...children);
 const discordName = (p) => discordLink(p, el('span', { class: `name ${p.isAdmin ? 'name-admin' : ''}` }, p.discordName));
+/** The avatar beside a Discord name: the same link again, so it's left out of the tab order and screen readers. */
+const discordAvatarLink = (p) => {
+  const a = discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' }));
+  a.tabIndex = -1;
+  a.setAttribute('aria-hidden', 'true');
+  return a;
+};
 
 /** Blurred until hovered (or focused/tapped), so IPs don't show on a shared or streamed screen. */
 const sensitive = (text) => el('span', { class: 'sensitive', tabindex: '0', title: 'Hover to show' }, text);
@@ -344,7 +358,9 @@ $('confirm-cancel').addEventListener('click', () => closeDialog($('confirm-dialo
 // ---- Actions (shared by the Players list and the player page) ----
 
 function actionButtons(p) {
-  const small = (cls, label, handler) => el('button', { class: `btn ${cls} btn-small`, type: 'button', onclick: handler }, label);
+  const small = (cls, label, handler) => el('button', {
+    class: `btn ${cls} btn-small`, type: 'button', 'aria-label': `${label} ${p.minecraftName}`, onclick: handler,
+  }, label);
   return el('div', { class: 'actions' },
     p.online && small('btn-ghost', 'Kick', () => kickDialog(p)),
     p.suspension
@@ -542,7 +558,7 @@ function playerRow(p) {
         el('span', { class: 'head head-none', 'aria-hidden': 'true' }),
         el('div', { class: 'prow-name muted' }, 'No Minecraft account')),
       el('div', { class: 'prow-discord' }, el('div', { class: 'identity' },
-        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
+        discordAvatarLink(p),
         el('div', {}, discordName(p), staff && copyButton(p.discordId, 'User ID')))),
       el('div', { class: 'prow-status' }, status),
       el('div', { class: 'prow-joined muted', title: formatTime(p.firstPlayed) },
@@ -551,11 +567,12 @@ function playerRow(p) {
   return el('div', { class: `prow ${p.card ? 'has-card' : ''}`, role: 'listitem' },
     p.card && cardBackdrop(p.card),
     el('div', { class: 'prow-id' },
-      el('a', { href: playerHref(p.uuid), tabindex: '-1' }, el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
+      el('a', { href: playerHref(p.uuid), tabindex: '-1', 'aria-hidden': 'true' },
+        el('img', { class: 'head', src: headUrl(p.uuid, 72), alt: '', loading: 'lazy' })),
       el('div', { class: 'prow-name' }, playerName(p), staff && copyButton(p.uuid, 'UUID'))),
     el('div', { class: 'prow-discord' }, p.linked
       ? el('div', { class: 'identity' },
-        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '', loading: 'lazy' })),
+        discordAvatarLink(p),
         el('div', {}, discordName(p), staff && copyButton(p.discordId, 'User ID')))
       : el('span', { class: 'muted' }, 'Not linked')),
     el('div', { class: 'prow-status' }, status),
@@ -746,13 +763,14 @@ function profileHeader(p, staff) {
 
 function renderPlayer() {
   const { player: p, suspensions, notes, ips } = state.player;
+  document.title = `${p.minecraftName} · DiscordLinked`;
   const profile = profileHeader(p, true);
 
   const discord = el('div', { class: 'card panel' },
     el('h2', {}, 'Discord'),
     p.linked
       ? el('div', { class: 'identity' },
-        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '' })),
+        discordAvatarLink(p),
         el('div', {}, discordName(p), copyButton(p.discordId, 'User ID')))
       : el('p', { class: 'muted' }, 'This player has no linked Discord account.'),
     el('dl', { class: 'kv' },
@@ -1319,25 +1337,44 @@ let globalActive = -1;
 function renderGlobalResults(query) {
   const box = $('global-results');
   if (!query) {
-    box.hidden = true;
+    hideGlobalResults();
     return;
   }
   box.replaceChildren(...(globalResults.length
     ? globalResults.map((p, i) => el('a', {
-      class: `search-result ${i === globalActive ? 'active' : ''}`, href: playerHref(p.uuid), role: 'option',
-      onclick: closeGlobalSearch,
+      class: 'search-result', href: playerHref(p.uuid), role: 'option', id: `gs-${i}`,
+      onclick: closeGlobalSearch, onmouseenter: () => setGlobalActive(i),
     },
     el('img', { class: 'head', src: headUrl(p.uuid, 56), alt: '' }),
     el('div', { class: 'grow' },
       el('div', { class: `name ${nameClass(p)}` }, p.minecraftName),
-      el('div', { class: 'sub' }, p.linked ? `Linked · ${p.discordName}` : 'Not linked')),
-    statusPills(p)))
+      el('div', { class: 'sub' }, p.linked ? `Linked · ${p.discordName}` : 'Not linked'),
+      el('div', { class: 'search-pills' }, statusPills(p)))))
     : [el('div', { class: 'search-empty' }, 'No players found')]));
   box.hidden = false;
+  $('global-search').setAttribute('aria-expanded', 'true');
+  setGlobalActive(globalActive);
+}
+
+/** Moves the highlight in place (rebuilding the rows on every mouse move would be wasteful). */
+function setGlobalActive(i) {
+  globalActive = i;
+  $('global-results').querySelectorAll('.search-result').forEach((n, j) => {
+    n.classList.toggle('active', j === i);
+    n.setAttribute('aria-selected', String(j === i));
+  });
+  if (i >= 0) $('global-search').setAttribute('aria-activedescendant', `gs-${i}`);
+  else $('global-search').removeAttribute('aria-activedescendant');
+}
+
+function hideGlobalResults() {
+  $('global-results').hidden = true;
+  $('global-search').setAttribute('aria-expanded', 'false');
+  $('global-search').removeAttribute('aria-activedescendant');
 }
 
 function closeGlobalSearch() {
-  $('global-results').hidden = true;
+  hideGlobalResults();
   $('global-search').value = '';
   globalResults = [];
   globalActive = -1;
@@ -1364,11 +1401,11 @@ $('global-search').addEventListener('input', () => {
 $('global-search').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeGlobalSearch();
-    e.currentTarget.blur();
   } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && globalResults.length) {
     e.preventDefault();
-    globalActive = (globalActive + (e.key === 'ArrowDown' ? 1 : -1) + globalResults.length) % globalResults.length;
-    renderGlobalResults($('global-search').value.trim());
+    setGlobalActive((globalActive + (e.key === 'ArrowDown' ? 1 : -1) + globalResults.length) % globalResults.length);
+    if ($('global-results').hidden) renderGlobalResults($('global-search').value.trim()); // closed by a click elsewhere
+    $(`gs-${globalActive}`)?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter' && globalResults[globalActive]) {
     location.hash = playerHref(globalResults[globalActive].uuid);
     closeGlobalSearch();
@@ -1376,7 +1413,7 @@ $('global-search').addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.global-search')) $('global-results').hidden = true;
+  if (!e.target.closest('.global-search')) hideGlobalResults();
 });
 
 // ---- Community: credits and interactions (DiscordLinkedFAD) ----
@@ -1493,7 +1530,7 @@ async function loadCommunity() {
   const sub = ['interactions', 'groups'].includes(currentRoute().sub) ? currentRoute().sub : '';
   const interactions = sub === 'interactions';
   const groups = sub === 'groups';
-  document.querySelectorAll('#community-subtabs a').forEach((a) => a.classList.toggle('active', a.dataset.sub === sub));
+  document.querySelectorAll('#community-subtabs a').forEach((a) => markCurrent(a, a.dataset.sub === sub));
   $('community-leaderboards').hidden = !!sub;
   $('community-interactions').hidden = !interactions;
   $('community-groups').hidden = !groups;
@@ -1563,7 +1600,7 @@ function renderBoard() {
   const d = communityState.data;
   if (!d) return;
   $('community-boards').replaceChildren(...d.boards.map((b) => el('button', {
-    class: `board-chip ${b.key === d.board ? 'active' : ''}`, type: 'button', role: 'tab', 'aria-selected': String(b.key === d.board),
+    class: `board-chip ${b.key === d.board ? 'active' : ''}`, type: 'button', 'aria-pressed': String(b.key === d.board),
     onclick: () => {
       communityState.board = b.key;
       remember('dl-board', b.key);
@@ -2353,8 +2390,9 @@ function renderShop() {
   else if (!b.serverReady) notices.push(el('p', { class: 'card panel muted' }, `${b.server} can't deliver orders. Move to another server to check out.`));
   $('shop-notice').replaceChildren(...notices);
 
+  const shopTab = $('shop-search').value.trim() ? null : shop.tab; // searching shows every category
   $('shop-tabs').replaceChildren(...SHOP_TABS.map(([tab, icon]) => el('button', {
-    class: `shop-tab ${tab === shop.tab && !$('shop-search').value.trim() ? 'active' : ''}`, type: 'button', role: 'tab',
+    class: `shop-tab ${tab === shopTab ? 'active' : ''}`, type: 'button', 'aria-pressed': String(tab === shopTab),
     title: tab, 'aria-label': tab, onclick: () => { shop.tab = tab; $('shop-search').value = ''; renderShop(); },
   }, shopIcon(icon), el('span', {}, tab))));
   renderShopGrid();
@@ -3263,7 +3301,7 @@ function loadShopView() {
   const sub = tabs.includes(wanted) ? wanted : tabs[0] ?? '';
   document.querySelectorAll('#shop-subtabs a').forEach((a) => {
     a.hidden = !tabs.includes(a.dataset.sub);
-    a.classList.toggle('active', a.dataset.sub === sub);
+    markCurrent(a, a.dataset.sub === sub);
   });
   $('shop-items').hidden = sub !== '';
   $('shop-cosmetics').hidden = sub !== 'cosmetics';
@@ -3535,8 +3573,9 @@ function renderMarket() {
         + `${d.credits.many}' worth) and recover over time (halfway every ${d.recoveryHours} hours).` : '')),
     el('p', { class: 'muted market-totals' }, `${micro(d.held, cur)} held · ${micro(d.earned, cur)} earned by everyone`));
 
+  const marketTab = $('market-search').value.trim() ? null : market.tab; // searching shows every category
   $('market-tabs').replaceChildren(...SHOP_TABS.map(([tab, icon]) => el('button', {
-    class: `shop-tab ${tab === market.tab && !$('market-search').value.trim() ? 'active' : ''}`, type: 'button', role: 'tab',
+    class: `shop-tab ${tab === marketTab ? 'active' : ''}`, type: 'button', 'aria-pressed': String(tab === marketTab),
     title: tab, 'aria-label': tab, onclick: () => { market.tab = tab; $('market-search').value = ''; renderMarket(); },
   }, shopIcon(icon), el('span', {}, tab))));
   renderMarketList();
@@ -3617,11 +3656,12 @@ async function loadHome() {
 /** The simple profile everyone can see: who they are, their Discord, and whether they're on. */
 function renderPublicPlayer() {
   const p = state.player.player;
+  document.title = `${p.minecraftName} · DiscordLinked`;
   const discord = el('div', { class: 'card panel' },
     el('h2', {}, 'Discord'),
     p.linked
       ? el('div', { class: 'identity' },
-        discordLink(p, el('img', { class: 'avatar', src: p.discordAvatar, alt: '' })),
+        discordAvatarLink(p),
         el('div', {}, discordName(p), copyButton(p.discordId, 'User ID')))
       : el('p', { class: 'muted' }, 'This player has no linked Discord account.'),
     p.linked && el('dl', { class: 'kv' }, el('dt', {}, 'Member since'), el('dd', {}, formatTime(p.linkedAt))));
@@ -3779,7 +3819,9 @@ async function connectLive() {
       }
       if (!res.ok) throw new Error(`poll failed (${res.status})`);
       const data = await res.json();
+      indicator.textContent = 'Live';
       indicator.classList.add('on');
+      indicator.classList.remove('off');
       indicator.title = 'Live: pages update as things happen';
       // Missed some (the tab slept or the proxy restarted): reload what's on screen instead.
       if (data.reset && since !== null) refreshCurrentView();
@@ -3791,7 +3833,9 @@ async function connectLive() {
       }
       if (data.busy) await new Promise((resolve) => setTimeout(resolve, 5000));
     } catch (e) {
+      indicator.textContent = 'Reconnecting…';
       indicator.classList.remove('on');
+      indicator.classList.add('off');
       indicator.title = 'Reconnecting… pages still refresh every so often';
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
@@ -3901,8 +3945,13 @@ const VIEWS = ['logs', 'player', 'moderate', 'settings', 'messages', 'community'
 function showView() {
   const route = currentRoute();
   for (const name of VIEWS) $(`view-${name}`).hidden = name !== route.view;
-  document.querySelectorAll('#main-tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === route.view));
-  $('settings-link').classList.toggle('active', route.view === 'settings' || route.view === 'messages');
+  document.querySelectorAll('#main-tabs a').forEach((a) => markCurrent(a, a.dataset.view === route.view));
+  markCurrent($('settings-link'), route.view === 'settings' || route.view === 'messages');
+  // Player pages name the player once they've loaded (renderPlayer); the rest use their heading, without its count.
+  if (route.view !== 'player') {
+    const h1 = $(`view-${route.view}`).querySelector('h1');
+    document.title = `${h1 ? h1.firstChild.textContent.trim() : 'DiscordLinked'} · DiscordLinked`;
+  }
   // On phones the tab row scrolls; keep the current tab in sight.
   const tabs = $('main-tabs');
   const active = tabs.querySelector('a.active');
@@ -3915,6 +3964,10 @@ function showView() {
 }
 
 window.addEventListener('hashchange', showView);
+// The phone tab rows scroll sideways: bring a tab into sight when the keyboard moves to it.
+document.querySelectorAll('.tabs').forEach((t) => t.addEventListener('focusin', (e) => {
+  e.target.closest('a')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+}));
 
 const dialogOpen = () => document.querySelector('dialog[open]') !== null;
 

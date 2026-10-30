@@ -10,7 +10,7 @@
 <body>
   <div class="liquid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
   <header class="topbar" id="topbar">
-    <a class="brand" id="brand" href="#/"><img src="/favicon.svg" alt=""> <span class="brand-text">DiscordLinked</span></a>
+    <a class="brand" id="brand" href="#/" aria-label="DiscordLinked home"><img src="/favicon.svg" alt=""> <span class="brand-text">DiscordLinked</span></a>
     <nav class="tabs" id="main-tabs" aria-label="Pages">
       <a href="#/home" data-view="home" data-mode="member">Home</a>
       <a href="#/players" data-view="players">Players</a>
@@ -20,8 +20,8 @@
       <a href="#/logs" data-view="logs" data-mode="admin">Logs</a>
     </nav>
     <div class="global-search">
-      <input id="global-search" type="search" placeholder="Find any player…" autocomplete="off"
-             aria-label="Search all players" aria-controls="global-results">
+      <input id="global-search" type="search" placeholder="Find any player…" autocomplete="off" role="combobox"
+             aria-label="Search all players" aria-controls="global-results" aria-autocomplete="list" aria-expanded="false">
       <div id="global-results" class="search-results" role="listbox" hidden></div>
     </div>
     <div class="me">
@@ -146,7 +146,7 @@
       <div id="community-notice"></div>
       <div id="community-leaderboards">
         <div id="community-stats" class="stats-strip"></div>
-        <div id="community-boards" class="board-chips" role="tablist" aria-label="Leaderboards"></div>
+        <div id="community-boards" class="board-chips" role="group" aria-label="Leaderboards"></div>
         <div id="community-board" class="card panel board"></div>
       </div>
       <div id="community-groups" hidden></div>
@@ -168,7 +168,7 @@
         <div id="shop-notice"></div>
         <div class="card shop-window">
           <div class="shop-window-head">
-            <div id="shop-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
+            <div id="shop-tabs" class="shop-tabs" role="group" aria-label="Item categories"></div>
             <input id="shop-search" type="search" placeholder="Search items…" aria-label="Search items">
           </div>
           <div id="shop-grid" class="shop-grid" role="list"></div>
@@ -208,7 +208,7 @@
             </select>
             <input id="market-search" type="search" placeholder="Search items…" aria-label="Search sell prices">
           </div>
-          <div id="market-tabs" class="shop-tabs" role="tablist" aria-label="Item categories"></div>
+          <div id="market-tabs" class="shop-tabs" role="group" aria-label="Item categories"></div>
           <div id="market-list" class="market-list"></div>
         </div>
       </div>

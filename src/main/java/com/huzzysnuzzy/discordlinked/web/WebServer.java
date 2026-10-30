@@ -685,7 +685,8 @@ public final class WebServer {
                 .replace("{{message}}", "This one-time link logs you into the website."
                         + "</p><form method=\"post\" action=\"/login/link\" class=\"inline-form\">"
                         + "<input type=\"hidden\" name=\"t\" value=\"" + escapeHtml(token) + "\">"
-                        + "<button class=\"btn\" type=\"submit\">Continue</button></form><p hidden>");
+                        + "<button class=\"btn\" type=\"submit\">Continue</button></form><p hidden>")
+                .replace("{{actions}}", "");
         send(ex, 200, CONTENT_TYPES.get("html"), html.getBytes(StandardCharsets.UTF_8));
     }
 
@@ -2791,7 +2792,8 @@ public final class WebServer {
     private void sendMessagePage(HttpExchange ex, int status, String title, String message) throws IOException {
         String html = new String(files.get("message.html"), StandardCharsets.UTF_8)
                 .replace("{{title}}", escapeHtml(title))
-                .replace("{{message}}", escapeHtml(message));
+                .replace("{{message}}", escapeHtml(message))
+                .replace("{{actions}}", "<a class=\"btn btn-ghost\" href=\"/\">Go to the website</a>");
         send(ex, status, CONTENT_TYPES.get("html"), html.getBytes(StandardCharsets.UTF_8));
     }
 

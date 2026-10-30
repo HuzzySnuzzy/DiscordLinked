@@ -158,7 +158,6 @@ textarea { resize: vertical; width: 100%; }
 
 @media (max-width: 720px) {
   .topbar { flex-wrap: wrap; gap: 10px; padding: 10px 16px; }
-  .me span { display: none; }
   .content { padding: 16px; }
   .toolbar input[type=search], .toolbar select { width: 100%; }
 }
@@ -190,7 +189,6 @@ textarea { resize: vertical; width: 100%; }
   box-shadow: var(--shadow); max-height: 420px; overflow-y: auto; padding: 4px;
 }
 .search-result { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: var(--text); text-decoration: none; }
-.search-result:hover, .search-result.active { background: var(--surface-2); }
 .search-result .head { width: 28px; height: 28px; }
 .search-result .sub { color: var(--muted); font-size: 12px; }
 .search-result .grow { flex: 1; min-width: 0; }
@@ -221,7 +219,6 @@ textarea { resize: vertical; width: 100%; }
 .toast a { color: inherit; font-weight: 700; margin-left: 8px; }
 
 @media (max-width: 720px) {
-  .global-search { order: 5; max-width: none; flex-basis: 100%; }
   .profile .head-large { width: 72px; height: 72px; }
 }
 
@@ -402,9 +399,19 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 
 /* Notes and panels */
 .note { background: var(--glass-soft); border: 1px solid var(--glass-border); border-radius: 14px; }
-.search-results { border-radius: 18px; background-color: var(--glass-strong); padding: 6px; }
+/* Solid, not glass: blur can't reach the page from inside the blurred top bar, so the page would show through. */
+.search-results {
+  border-radius: 18px; background-color: var(--surface); background-image: none; padding: 6px;
+  width: max(100%, 380px); max-width: min(560px, calc(100vw - 32px)); right: auto;
+}
 .search-result { border-radius: 12px; }
-.search-result:hover, .search-result.active { background: var(--glass-soft); }
+.search-result:hover { background: var(--surface-2); }
+.search-result.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.search-result .name, .search-result .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 
 /* Dialog: thick glass over a blurred page */
 dialog { border-radius: 24px; background-color: var(--glass-strong); }
@@ -412,11 +419,17 @@ dialog::backdrop { background: rgba(10, 14, 30, .25); -webkit-backdrop-filter: b
 dialog[open] { animation: glass-in .18s ease-out; }
 @keyframes glass-in { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
 
-.toast { color: var(--text); border-radius: 999px; padding: 10px 18px; background-color: var(--glass-strong); }
+/* Above the settings bar (20) and the spy lock (50), below item tooltips (60). */
+.toast {
+  color: var(--text); border-radius: 18px; padding: 10px 18px; background-color: var(--glass-strong);
+  width: max-content; max-width: min(560px, calc(100vw - 32px)); text-align: center; z-index: 55;
+}
+body:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) .toast { bottom: 84px; }
 .toast a { color: var(--link); }
 
 /* Login / message card */
 .login-card { border-radius: 28px; padding: 36px 30px; }
+.login-card p { margin: 0; }
 
 @media (max-width: 720px) {
   .topbar { border-radius: 20px; top: 8px; margin-top: 8px; width: calc(100% - 16px); padding: 8px 12px; }
@@ -554,6 +567,8 @@ dialog[open] { animation: glass-in .18s ease-out; }
 .live-indicator::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .live-indicator.on { color: var(--success); }
 .live-indicator.on::before { background: var(--success); box-shadow: 0 0 0 3px rgba(31, 157, 85, .18); }
+.live-indicator.off { color: var(--warning); }
+.live-indicator.off::before { background: var(--warning); }
 @keyframes fresh-row { from { background: rgba(109, 120, 255, .22); } to { background: transparent; } }
 
 /* ---- Inventory modes & snapshots ---- */
@@ -588,6 +603,7 @@ dialog[open] { animation: glass-in .18s ease-out; }
 .icon-btn { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; color: var(--text);
   background: var(--glass-soft); border: 1px solid var(--control-border); box-shadow: inset 0 1px 0 var(--glass-edge); }
 .icon-btn:hover { background: var(--glass-strong); }
+.icon-btn.active { background: var(--glass-strong); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; align-items: start; padding-bottom: 90px; }
 .settings-group h2 { margin-bottom: 4px; }
 .setting { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--glass-line); }
@@ -791,9 +807,6 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .sensitive { display: inline-block; filter: blur(5px); transition: filter .25s var(--soft); cursor: help; border-radius: 4px; }
 .sensitive:hover, .sensitive:focus { filter: none; outline: none; }
 
-@media (max-width: 760px) {
-  .duty-text { display: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   section.entering .person-card, section.entering .stat-card { animation: none !important; }
 }
@@ -1016,6 +1029,33 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .me-link { display: inline-flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; border-radius: 999px; padding: 2px 10px 2px 2px; }
 .me-link[href]:hover { background: var(--glass-soft); }
 
+/* Top bar on narrower screens: the search moves to a row of its own, then the words beside icons go. On phones
+   the logo shares the first row with your account controls, the tabs get the second and the search the third. */
+#me-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1180px) {
+  .topbar { flex-wrap: wrap; row-gap: 8px; }
+  .global-search { order: 5; flex-basis: 100%; max-width: none; }
+}
+/* Below 1060px an admin's first row (five tabs, the duty switch, settings) only fits without the words. */
+@media (max-width: 1060px) {
+  #me-name, .duty-text, .brand-text { display: none; }
+  .me-link { padding: 2px; }
+}
+/* Below about 820px an admin's controls no longer fit beside the tabs at all, so they get the phone order already. */
+@media (min-width: 721px) and (max-width: 820px) {
+  .topbar:has(#duty:not([hidden])) > .me { order: 1; }
+  .topbar:has(#duty:not([hidden])) > .tabs { order: 2; flex: 1 1 100%; justify-content: space-between; }
+}
+@media (max-width: 720px) {
+  .topbar > .me { order: 1; }
+  .topbar > .tabs { order: 2; flex: 1 1 100%; justify-content: space-between; }
+  /* Just the dot: the words stay for screen readers and in the tooltip. */
+  .live-indicator { font-size: 0; gap: 0; }
+}
+@media (max-width: 420px) {
+  .topbar > .tabs a { padding: 6px 8px; font-size: 13px; }
+}
+
 /* Pages with tabs of their own (Community, Shop): the tabs sit next to the title. */
 .toolbar:has(.subtabs) h1 { margin-right: 0; }
 .toolbar .subtabs { margin-right: auto; font-size: 13px; }
@@ -1100,7 +1140,6 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .prow-discord .avatar { width: 22px; height: 22px; }
   .prow-discord .name:not(.name-admin) { font-weight: 500; color: var(--muted); }
   .prow-status .pill { font-size: 11px; }
-  .brand-text { display: none; }
 }
 @media (max-width: 380px) {
   .prow, .plist.staff .prow { grid-template-columns: 1fr; grid-template-areas: "id" "status" "discord" "joined" "actions"; }
