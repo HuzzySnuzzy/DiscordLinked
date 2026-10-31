@@ -372,6 +372,23 @@ public final class Database implements AutoCloseable {
             seedColourParticles();
             setMarketState("seeded-colour-particles", "1");
         }
+        // Added in 0.22.0: the backend servers with their earning switches, and which server a log entry is from.
+        try (Statement st = connection.createStatement()) {
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS backend_servers (
+                        name            TEXT PRIMARY KEY COLLATE NOCASE,
+                        credits_enabled INTEGER NOT NULL DEFAULT 1,
+                        micro_enabled   INTEGER NOT NULL DEFAULT 1,
+                        plugin_name     TEXT,
+                        plugin_version  TEXT,
+                        mc_version      TEXT,
+                        last_seen       INTEGER
+                    )""");
+        }
+        addColumnIfMissing("audit_log", "server", "TEXT");
+        try (Statement st = connection.createStatement()) {
+            st.execute("CREATE INDEX IF NOT EXISTS idx_audit_server ON audit_log (server COLLATE NOCASE, id)");
+        }
     }
 
     /** A first set so the shop isn't empty; the settings owner can change or delete all of them. */
@@ -709,6 +726,18 @@ public final class Database implements AutoCloseable {
         }
     }
 
+    /** The server each known player was last on, for everyone who has one. */
+    public synchronized Map<UUID, String> lastServers() throws SQLException {
+        Map<UUID, String> servers = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT minecraft_uuid, last_server FROM known_players WHERE last_server IS NOT NULL")) {
+            while (rs.next()) {
+                servers.put(UUID.fromString(rs.getString(1)), rs.getString(2));
+            }
+        }
+        return servers;
+    }
+
     // ---- Login streaks ----
 
     /**
@@ -1044,13 +1073,13 @@ public final class Database implements AutoCloseable {
 
     // ---- Audit log ----
 
-    /** Returns the stored entry, with its id. */
-    public synchronized AuditEntry logEvent(UUID uuid, String minecraftName, Long discordId,
-                                            String eventType, String detail, String actor) throws SQLException {
+    /** Returns the stored entry, with its id. {@code server} is the backend server it happened on, or null. */
+    public synchronized AuditEntry logEvent(UUID uuid, String minecraftName, Long discordId, String eventType,
+                                            String detail, String actor, String server) throws SQLException {
         Instant now = Instant.now();
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO audit_log (timestamp, minecraft_uuid, minecraft_name, discord_id, event_type, detail, actor) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+                "INSERT INTO audit_log (timestamp, minecraft_uuid, minecraft_name, discord_id, event_type, detail, actor, "
+                        + "server) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, now.toEpochMilli());
             ps.setString(2, uuid == null ? null : uuid.toString());
             ps.setString(3, minecraftName);
@@ -1062,10 +1091,11 @@ public final class Database implements AutoCloseable {
             ps.setString(5, eventType);
             ps.setString(6, detail);
             ps.setString(7, actor);
+            ps.setString(8, server);
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 keys.next();
-                return new AuditEntry(keys.getLong(1), now, uuid, minecraftName, discordId, eventType, detail, actor);
+                return new AuditEntry(keys.getLong(1), now, uuid, minecraftName, discordId, eventType, detail, actor, server);
             }
         }
     }
@@ -1085,15 +1115,20 @@ public final class Database implements AutoCloseable {
      * @param types        event types to include, or empty for all
      * @param playerSearch part of a Minecraft name or actor, or empty
      * @param player       only this player's entries, or null
+     * @param server       only entries from this backend server (any case), or empty
      * @param beforeId     only entries with a smaller id (for paging), or 0
      */
     public synchronized List<AuditEntry> searchEvents(Collection<String> types, String playerSearch, UUID player,
-                                                      long beforeId, int limit) throws SQLException {
+                                                      String server, long beforeId, int limit) throws SQLException {
         StringBuilder sql = new StringBuilder("SELECT * FROM audit_log WHERE 1 = 1");
         List<Object> params = new ArrayList<>();
         if (player != null) {
             sql.append(" AND minecraft_uuid = ?");
             params.add(player.toString());
+        }
+        if (!server.isEmpty()) {
+            sql.append(" AND server = ? COLLATE NOCASE");
+            params.add(server);
         }
         if (!types.isEmpty()) {
             sql.append(" AND event_type IN (").append("?,".repeat(types.size() - 1)).append("?)");
@@ -1337,16 +1372,20 @@ public final class Database implements AutoCloseable {
      * Adds {@code seconds} of playtime to everyone online, in one go. Active players earn {@code rewardAmount} for
      * every full {@code rewardSeconds} of active time; the rest carries over to the next call. Playtime rewards
      * are added to one ledger row per player per day (since {@code dayStart}) so the ledger stays small.
+     * {@code playtimeOnly} players are active on a server where earning credits is off: it counts as playtime, but
+     * not toward their next reward.
      *
      * @return the players who earned something just now
      */
-    public synchronized List<PlaytimeReward> addPlaytime(Map<UUID, String> active, Map<UUID, String> afk, long seconds,
-                                                         long rewardSeconds, long rewardAmount, Instant dayStart)
-            throws SQLException {
+    public synchronized List<PlaytimeReward> addPlaytime(Map<UUID, String> active, Map<UUID, String> playtimeOnly,
+                                                         Map<UUID, String> afk, long seconds, long rewardSeconds,
+                                                         long rewardAmount, Instant dayStart) throws SQLException {
         return transaction(() -> {
             List<PlaytimeReward> rewards = new ArrayList<>();
             try (PreparedStatement addAfk = connection.prepareStatement(
                     "UPDATE fad_accounts SET afk_seconds = afk_seconds + ? WHERE minecraft_uuid = ?");
+                 PreparedStatement addPlaytimeOnly = connection.prepareStatement(
+                         "UPDATE fad_accounts SET active_seconds = active_seconds + ? WHERE minecraft_uuid = ?");
                  PreparedStatement addActive = connection.prepareStatement(
                          "UPDATE fad_accounts SET active_seconds = active_seconds + ?, unpaid_seconds = "
                                  + "CASE WHEN ? THEN unpaid_seconds + ? ELSE 0 END WHERE minecraft_uuid = ? "
@@ -1359,6 +1398,12 @@ public final class Database implements AutoCloseable {
                     addAfk.setLong(1, seconds);
                     addAfk.setString(2, player.getKey().toString());
                     addAfk.executeUpdate();
+                }
+                for (Map.Entry<UUID, String> player : playtimeOnly.entrySet()) {
+                    ensureCreditAccount(player.getKey(), player.getValue());
+                    addPlaytimeOnly.setLong(1, seconds);
+                    addPlaytimeOnly.setString(2, player.getKey().toString());
+                    addPlaytimeOnly.executeUpdate();
                 }
                 boolean rewarding = rewardSeconds > 0 && rewardAmount > 0;
                 for (Map.Entry<UUID, String> player : active.entrySet()) {
@@ -2629,6 +2674,72 @@ public final class Database implements AutoCloseable {
         }
     }
 
+    // ---- Backend servers ----
+
+    /** A backend server as stored: its earning switches and what its plugin last reported (null = never). */
+    public record BackendServerRow(String name, boolean creditsEnabled, boolean microEnabled, String pluginName,
+                                   String pluginVersion, String minecraftVersion, Instant lastSeen) {
+    }
+
+    public synchronized List<BackendServerRow> backendServers() throws SQLException {
+        List<BackendServerRow> servers = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM backend_servers ORDER BY name COLLATE NOCASE")) {
+            while (rs.next()) {
+                long lastSeen = rs.getLong("last_seen");
+                servers.add(new BackendServerRow(rs.getString("name"), rs.getInt("credits_enabled") != 0,
+                        rs.getInt("micro_enabled") != 0, rs.getString("plugin_name"), rs.getString("plugin_version"),
+                        rs.getString("mc_version"), rs.wasNull() ? null : Instant.ofEpochMilli(lastSeen)));
+            }
+        }
+        return servers;
+    }
+
+    /** Remembers a server (both switches on) if it isn't stored yet. */
+    public synchronized void addBackendServer(String name) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("INSERT OR IGNORE INTO backend_servers (name) VALUES (?)")) {
+            ps.setString(1, name);
+            ps.executeUpdate();
+        }
+    }
+
+    public synchronized void setBackendEarning(String name, boolean credits, boolean micro) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO backend_servers (name, credits_enabled, micro_enabled) VALUES (?, ?, ?)
+                ON CONFLICT (name) DO UPDATE SET credits_enabled = excluded.credits_enabled,
+                    micro_enabled = excluded.micro_enabled""")) {
+            ps.setString(1, name);
+            ps.setInt(2, credits ? 1 : 0);
+            ps.setInt(3, micro ? 1 : 0);
+            ps.executeUpdate();
+        }
+    }
+
+    /** What a server's plugin reported. Null values keep what's stored. */
+    public synchronized void setBackendPlugin(String name, String pluginName, String pluginVersion,
+                                              String minecraftVersion, Instant lastSeen) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO backend_servers (name, plugin_name, plugin_version, mc_version, last_seen) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (name) DO UPDATE SET plugin_name = COALESCE(excluded.plugin_name, plugin_name),
+                    plugin_version = COALESCE(excluded.plugin_version, plugin_version),
+                    mc_version = COALESCE(excluded.mc_version, mc_version),
+                    last_seen = COALESCE(excluded.last_seen, last_seen)""")) {
+            ps.setString(1, name);
+            ps.setString(2, pluginName);
+            ps.setString(3, pluginVersion);
+            ps.setString(4, minecraftVersion);
+            ps.setObject(5, lastSeen == null ? null : lastSeen.toEpochMilli());
+            ps.executeUpdate();
+        }
+    }
+
+    public synchronized boolean deleteBackendServer(String name) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM backend_servers WHERE name = ?")) {
+            ps.setString(1, name);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
     private interface SqlWork<T> {
         T run() throws SQLException;
     }
@@ -2717,7 +2828,8 @@ public final class Database implements AutoCloseable {
                         noDiscordId ? null : discordId,
                         rs.getString("event_type"),
                         rs.getString("detail"),
-                        rs.getString("actor")));
+                        rs.getString("actor"),
+                        rs.getString("server")));
             }
         }
         return entries;

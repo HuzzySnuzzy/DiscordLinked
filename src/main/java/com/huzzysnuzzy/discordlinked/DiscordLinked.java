@@ -8,6 +8,7 @@ import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
 import com.huzzysnuzzy.discordlinked.fad.Community;
 import com.huzzysnuzzy.discordlinked.link.LinkCodeManager;
 import com.huzzysnuzzy.discordlinked.listener.PlayerListener;
+import com.huzzysnuzzy.discordlinked.servers.BackendServers;
 import com.huzzysnuzzy.discordlinked.storage.Database;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
@@ -61,6 +62,7 @@ public final class DiscordLinked {
     private SpyManager spy;
     private InventoryRequests inventories;
     private Community community;
+    private BackendServers servers;
 
     @Inject
     public DiscordLinked(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -76,6 +78,10 @@ public final class DiscordLinked {
         messages = Messages.load(dataDirectory, logger);
         linkCodes = new LinkCodeManager(() -> Duration.ofMinutes(this.config.codeExpiryMinutes()));
         audit = new AuditLog(database, messages, logger);
+        // Log entries about an online player are from the server they're on, unless the event says otherwise.
+        audit.setServerLookup(uuid -> proxy.getPlayer(uuid).flatMap(Player::getCurrentServer)
+                .map(connection -> connection.getServerInfo().getName()).orElse(null));
+        servers = new BackendServers(this);
         // Before the bot connects: its slash commands include the community ones.
         community = new Community(this);
         bot = new DiscordBot(this);
@@ -89,6 +95,7 @@ public final class DiscordLinked {
         inventories = new InventoryRequests(this);
         proxy.getChannelRegistrar().register(InventoryRequests.CHANNEL);
         proxy.getEventManager().register(this, inventories);
+        servers.start();
         community.start();
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),
@@ -312,13 +319,18 @@ public final class DiscordLinked {
         return web;
     }
 
-    /** Credits and interactions (DiscordLinkedFAD). */
+    /** Credits, interactions, the Shop, the market and cosmetics, with the backend plugin. */
     public Community community() {
         return community;
     }
 
     public InventoryRequests inventories() {
         return inventories;
+    }
+
+    /** Every backend server, with its status and per-server settings. */
+    public BackendServers servers() {
+        return servers;
     }
 
     public SpyManager spy() {

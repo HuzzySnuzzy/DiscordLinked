@@ -32,9 +32,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The proxy side of DiscordLinkedFAD: credits for active playtime and advancements, interactions shown on every
- * server and in Discord, and opting out of them. The Minecraft servers report what happens (see {@link FadBridge});
- * everything is stored and decided here, so it's the same on every server and on Discord.
+ * The proxy side of the backend plugin's community features: credits for active playtime and advancements,
+ * interactions shown on every server and in Discord, and opting out of them. The Minecraft servers report what
+ * happens (see {@link FadBridge}); everything is stored and decided here, so it's the same on every server and on
+ * Discord. Earning can be switched off per server (see {@link com.huzzysnuzzy.discordlinked.servers.BackendServers}).
  */
 public final class Community {
 
@@ -51,8 +52,6 @@ public final class Community {
     private final Groups groups;
     /** Players their server reported as AFK. Cleared when they switch server or leave. */
     private final Set<UUID> afk = ConcurrentHashMap.newKeySet();
-    /** Servers running DiscordLinkedFAD: name -> version. */
-    private final Map<String, String> servers = new ConcurrentHashMap<>();
 
     public Community(DiscordLinked plugin) {
         this.plugin = plugin;
@@ -102,9 +101,9 @@ public final class Community {
         return cosmetics;
     }
 
-    /** Servers that have said hello since the proxy started, with their DiscordLinkedFAD version. */
+    /** Servers whose backend plugin has said hello since the proxy started, with its version. */
     public Map<String, String> servers() {
-        return Map.copyOf(servers);
+        return plugin.servers().withPlugin();
     }
 
     private PluginConfig config() {
@@ -113,11 +112,10 @@ public final class Community {
 
     // ---- From the Minecraft servers ----
 
-    /** A server started (or reloaded) DiscordLinkedFAD and sent its interactions. */
+    /** A server started (or reloaded) its backend plugin and sent its interactions. */
     void hello(String server, String version, String json) {
-        servers.put(server, version);
         if (actions.update(json)) {
-            plugin.logger().info("Got {} interactions from {} (DiscordLinkedFAD {})",
+            plugin.logger().info("Got {} interactions from {} (backend plugin {})",
                     actions.current().actions().size(), server, version);
             plugin.bot().refreshCommands();
         }
@@ -135,26 +133,35 @@ public final class Community {
         afk.remove(player);
     }
 
-    /** Every minute: playtime for everyone on a server, and credits for whoever has played long enough. */
+    /**
+     * Every minute: playtime for everyone on a server, and credits for whoever has played long enough. On a server
+     * where earning credits is off it's still playtime, but doesn't count toward a reward.
+     */
     private void tickPlaytime() {
         PluginConfig c = config();
         if (!c.fadEnabled()) {
             return;
         }
         Map<UUID, String> active = new HashMap<>();
+        Map<UUID, String> playtimeOnly = new HashMap<>();
         Map<UUID, String> away = new HashMap<>();
         for (Player player : plugin.proxy().getAllPlayers()) {
-            if (player.getCurrentServer().isPresent()) {
-                (afk.contains(player.getUniqueId()) ? away : active).put(player.getUniqueId(), player.getUsername());
+            Optional<String> server = player.getCurrentServer().map(connection -> connection.getServerInfo().getName());
+            if (server.isEmpty()) {
+                continue;
             }
+            Map<UUID, String> into = afk.contains(player.getUniqueId()) ? away
+                    : plugin.servers().creditsEnabled(server.get()) ? active : playtimeOnly;
+            into.put(player.getUniqueId(), player.getUsername());
         }
-        if (active.isEmpty() && away.isEmpty()) {
+        if (active.isEmpty() && playtimeOnly.isEmpty() && away.isEmpty()) {
             return;
         }
         List<PlaytimeReward> rewards;
         try {
-            rewards = plugin.database().addPlaytime(active, away, TICK_SECONDS, c.creditsPlaytimeMinutes() * 60L,
-                    c.creditsPlaytimeAmount(), LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant());
+            rewards = plugin.database().addPlaytime(active, playtimeOnly, away, TICK_SECONDS,
+                    c.creditsPlaytimeMinutes() * 60L, c.creditsPlaytimeAmount(),
+                    LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant());
         } catch (SQLException e) {
             plugin.logger().error("Could not record playtime", e);
             return;
@@ -168,10 +175,13 @@ public final class Community {
         }
     }
 
-    /** A player made an advancement; credits and announcements only the first time, on any server. */
+    /**
+     * A player made an advancement; credits and announcements only the first time, on any server. On a server where
+     * earning credits is off it's ignored completely, so it can still be earned on another server later.
+     */
     void advancement(Player player, String server, String key, String title, String frame) {
         PluginConfig c = config();
-        if (!c.fadEnabled()) {
+        if (!c.fadEnabled() || !plugin.servers().creditsEnabled(server)) {
             return;
         }
         long amount = Math.max(0, switch (frame) {
@@ -193,7 +203,7 @@ public final class Community {
             return;
         }
         plugin.audit().log(uuid, player.getUsername(), discordId, EventTypes.ADVANCEMENT,
-                title + (amount > 0 ? " (+" + c.credits(amount) + ")" : ""));
+                title + (amount > 0 ? " (+" + c.credits(amount) + ")" : ""), null, server);
         if (amount > 0 && !plugin.messages().isEmpty("minecraft.fad.advancement-reward")) {
             player.sendMessage(plugin.messages().minecraft("minecraft.fad.advancement-reward",
                     "amount", c.credits(amount), "advancement", title));
@@ -264,7 +274,9 @@ public final class Community {
         }
         String detail = (via == null ? "" : "[" + via + "] ") + "/" + action + ": " + text;
         if (actorUuid != null) {
-            plugin.audit().log(actorUuid, actorName, actorDiscord, EventTypes.INTERACTION, detail);
+            // From a Minecraft server, the source is that server; from Discord, it's on none.
+            plugin.audit().log(actorUuid, actorName, actorDiscord, EventTypes.INTERACTION, detail, null,
+                    via == null ? source : "");
         } else {
             plugin.audit().log(null, null, actorDiscord, EventTypes.INTERACTION, detail, actorName + " (Discord)");
         }

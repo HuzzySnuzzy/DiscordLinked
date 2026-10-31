@@ -84,7 +84,7 @@ public final class SettingsEditor {
                     "Blocks the admin may get from the player before the session ends.", 16, 100_000),
 
             bool("fad-enabled", "Community & credits", "Community features",
-                    "Interactions (/hug, /kiss...) and credits. Needs DiscordLinkedFAD on the Minecraft servers.", false),
+                    "Interactions (/hug, /kiss...) and credits. Needs DiscordLinkedBackend on the Minecraft servers.", false),
             name("credits-name", "Community & credits", "Credit name (one)",
                     "What one credit is called, e.g. \"1 Pawbuck\"."),
             name("credits-name-plural", "Community & credits", "Credit name (several)",
@@ -220,6 +220,15 @@ public final class SettingsEditor {
             changes.put("web-domain-prefix", prefix);
         }
         ConfigFiles.update(plugin.dataDirectory(), "config.properties", changes);
+        plugin.reloadConfig();
+    }
+
+    /**
+     * Saves the server the website's server pickers start on ("" = all servers), from Settings -> Backend servers
+     * (which checks it's a known server), and applies it.
+     */
+    public void setDefaultServer(String server) throws IOException {
+        ConfigFiles.update(plugin.dataDirectory(), "config.properties", Map.of("default-server", server));
         plugin.reloadConfig();
     }
 

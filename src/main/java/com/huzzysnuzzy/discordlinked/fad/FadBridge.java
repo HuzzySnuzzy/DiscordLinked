@@ -1,6 +1,7 @@
 package com.huzzysnuzzy.discordlinked.fad;
 
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
+import com.huzzysnuzzy.discordlinked.servers.BackendServers;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
@@ -21,9 +22,10 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The "discordlinked:fad" channel to DiscordLinkedFAD on the Minecraft servers. Messages are only accepted from
- * server connections (a player's client can't send them) and always travel through the player they're about.
- * Database work happens off the network thread.
+ * The "discordlinked:fad" channel to the backend plugin on the Minecraft servers (DiscordLinkedBackend, or
+ * DiscordLinkedFAD from before the merge). Messages are only accepted from server connections (a player's client
+ * can't send them) and always travel through the player they're about. Database work happens off the network
+ * thread. Message types this proxy doesn't know are ignored, so newer backends can add some.
  */
 final class FadBridge {
 
@@ -55,16 +57,33 @@ final class FadBridge {
                 case "HELLO" -> {
                     String version = in.readUTF();
                     String json = new String(readBlob(in), StandardCharsets.UTF_8);
+                    // Noted here, in the order the messages came, so the STATUS that follows is seen after it.
+                    plugin.servers().hello(server, version);
                     later(() -> {
                         try {
                             community.hello(server, version, json);
                             send(connection, out -> out.writeUTF("HELLO_OK"));
                             community.cosmetics().serverReady(server);
                         } catch (IllegalArgumentException e) {
-                            plugin.logger().warn("DiscordLinkedFAD on {} sent an unreadable interactions list: {}",
+                            plugin.logger().warn("The backend plugin on {} sent an unreadable interactions list: {}",
                                     server, e.getMessage());
                         }
                     });
+                }
+                // DiscordLinkedBackend, after HELLO_OK and then every 30 seconds. Fields are only ever added at the
+                // end: ones an older backend doesn't send stay unknown, newer ones are left unread.
+                case "STATUS" -> {
+                    String name = clip(in.readUTF());
+                    String version = clip(in.readUTF());
+                    String minecraft = in.available() > 0 ? clip(in.readUTF()) : "";
+                    boolean folia = in.available() > 0 && in.readBoolean();
+                    int online = in.available() > 0 ? in.readInt() : -1;
+                    int max = in.available() > 0 ? in.readInt() : -1;
+                    double tps = in.available() > 0 ? in.readDouble() : -1;
+                    double mspt = in.available() > 0 ? in.readDouble() : -1;
+                    Boolean spy = in.available() > 0 ? in.readBoolean() : null;
+                    plugin.servers().status(server, new BackendServers.Status(name, version, minecraft, folia, online,
+                            max, tps, mspt, spy));
                 }
                 case "INTERACT" -> {
                     String id = in.readUTF();
@@ -148,7 +167,7 @@ final class FadBridge {
                 default -> { }
             }
         } catch (IOException | IllegalArgumentException e) {
-            plugin.logger().warn("Bad DiscordLinkedFAD message from {}: {}", server, e.getMessage());
+            plugin.logger().warn("Bad backend plugin message from {}: {}", server, e.getMessage());
         }
     }
 
@@ -275,7 +294,7 @@ final class FadBridge {
             try {
                 task.run();
             } catch (RuntimeException e) {
-                plugin.logger().error("DiscordLinkedFAD message failed", e);
+                plugin.logger().error("Backend plugin message failed", e);
             }
         }).schedule();
     }
@@ -300,6 +319,11 @@ final class FadBridge {
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Plugin names and versions are short; a broken one can't fill the database. */
+    private static String clip(String text) {
+        return text.length() > 64 ? text.substring(0, 64) : text;
     }
 
     private static byte[] readBlob(DataInputStream in) throws IOException {

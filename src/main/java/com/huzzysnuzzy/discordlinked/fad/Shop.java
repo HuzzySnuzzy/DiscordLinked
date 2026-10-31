@@ -61,7 +61,7 @@ public final class Shop {
     private final Map<String, Item> catalog;
     private final Map<String, Delivery> deliveries = new ConcurrentHashMap<>();
     private final Set<UUID> checkingOut = ConcurrentHashMap.newKeySet();
-    /** Items each server knows (from DiscordLinkedFAD), so items from newer Minecraft versions aren't offered. */
+    /** Items each server knows (from its backend plugin), so items from newer Minecraft versions aren't offered. */
     private final Map<String, Set<String>> serverItems = new ConcurrentHashMap<>();
 
     Shop(DiscordLinked plugin, Community community) {
@@ -97,7 +97,7 @@ public final class Shop {
         return c.fadEnabled() && c.shopEnabled();
     }
 
-    /** Items any server with DiscordLinkedFAD has said it knows, or null if none has said yet. */
+    /** Items any server with the backend plugin has said it knows, or null if none has said yet. */
     public Set<String> availableItems() {
         if (serverItems.isEmpty()) {
             return null;
@@ -180,7 +180,7 @@ public final class Shop {
         if (!community.servers().containsKey(server)) {
             return fail((gift ? receiverName + " is on " + server : "The server you're on (" + server + ")")
                     + ", which can't deliver orders" + (gift ? "." : ". Move to another server, or ask an admin to install "
-                    + "DiscordLinkedFAD there."));
+                    + "DiscordLinkedBackend there."));
         }
         Set<String> known = serverItems.get(server);
         if (known != null) {
@@ -207,7 +207,7 @@ public final class Shop {
             if ("ok".equals(outcome)) {
                 plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.SHOP_PURCHASE,
                         (gift ? "gifted " : "bought ") + summary + " in a chest for " + c.credits(cost) + ", now "
-                                + c.credits(balance), actor);
+                                + c.credits(balance), actor, server);
                 if (gift) {
                     receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.gift-received",
                             "from", buyer.minecraftName(), "stacks", stacks));
@@ -232,7 +232,7 @@ public final class Shop {
             long refunded = plugin.database().addCredits(buyer.uuid(), buyer.minecraftName(), cost, "SHOP",
                     "refund: " + reason, actor, false);
             plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.SHOP_PURCHASE,
-                    "declined (" + reason + "), refunded " + c.credits(cost) + ": " + summary, actor);
+                    "declined (" + reason + "), refunded " + c.credits(cost) + ": " + summary, actor, server);
             online.ifPresent(player -> player.sendMessage(plugin.messages().minecraft("minecraft.shop.declined",
                     "reason", reason)));
             return new Result(false, "Not delivered: " + reason + ". You weren't charged.", cost, refunded);

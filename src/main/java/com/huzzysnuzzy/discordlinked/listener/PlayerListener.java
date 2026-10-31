@@ -106,7 +106,8 @@ public final class PlayerListener {
             return;
         }
         Player player = event.getPlayer();
-        plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player), EventTypes.LEAVE, null);
+        plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player), EventTypes.LEAVE, null, null,
+                player.getCurrentServer().map(s -> s.getServerInfo().getName()).orElse(""));
         updateLastSeen(player);
         plugin.bot().bridgeToDiscord("discord.bridge.leave", player.getUsername(), "", "");
     }
@@ -115,11 +116,12 @@ public final class PlayerListener {
     public void onServerConnected(ServerConnectedEvent event) {
         Player player = event.getPlayer();
         String from = event.getPreviousServer().map(s -> s.getServerInfo().getName()).orElse("(proxy)");
-        plugin.audit().log(player.getUniqueId(), player.getUsername(), null, EventTypes.SERVER_SWITCH,
-                from + " -> " + event.getServer().getServerInfo().getName());
+        String to = event.getServer().getServerInfo().getName();
+        plugin.audit().log(player.getUniqueId(), player.getUsername(), null, EventTypes.SERVER_SWITCH, from + " -> " + to,
+                null, to);
         // Where their logout spot and bed will be, for the website's teleport buttons.
         try {
-            plugin.database().setLastServer(player.getUniqueId(), player.getUsername(), event.getServer().getServerInfo().getName());
+            plugin.database().setLastServer(player.getUniqueId(), player.getUsername(), to);
         } catch (SQLException e) {
             plugin.logger().warn("Could not store the server of {}", player.getUsername(), e);
         }

@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Talks to the DiscordLinkedSpy plugin on the backend servers about inventories: live views, snapshots
+ * Talks to the backend plugin (DiscordLinkedBackend) on the Minecraft servers about inventories: live views, snapshots
  * (sent by the servers on death/join/quit/world change, stored here so the website can show them even
  * when that server is empty) and restores. Only messages that arrive from a backend connection are
  * accepted; players' clients can't send on this channel.
@@ -198,7 +198,7 @@ public final class InventoryRequests {
             });
             if (reason.equals("DEATH")) {
                 Long discordId = discordId(uuid);
-                plugin.audit().log(uuid, name, discordId, EventTypes.DEATH, detail.isEmpty() ? "died" : detail);
+                plugin.audit().log(uuid, name, discordId, EventTypes.DEATH, detail.isEmpty() ? "died" : detail, null, server);
             }
             plugin.audit().live().playerChanged("snapshot", uuid);
         }).schedule();
@@ -218,7 +218,7 @@ public final class InventoryRequests {
 
     /**
      * Asks the player's server (through their connection) for everyone in its player data, so the website
-     * also knows players from before DiscordLinked was installed. Servers without DiscordLinkedSpy, or with
+     * also knows players from before DiscordLinked was installed. Servers without the backend plugin, or with
      * an older one, just don't answer.
      */
     private void requestPlayers(Player player) {
@@ -298,7 +298,7 @@ public final class InventoryRequests {
             }
             PendingRestore p = pending.get();
             restore(player, snapshot.get(), p.includeEnderChest()).whenComplete((outcome, error) -> {
-                String result = error != null ? "no reply from the server (is DiscordLinkedSpy installed there?)"
+                String result = error != null ? "no reply from the server (is DiscordLinkedBackend installed there?)"
                         : outcome.equals("ok") ? "applied when they joined" : "failed: " + outcome;
                 plugin.audit().log(player.getUniqueId(), player.getUsername(), discordId(player.getUniqueId()),
                         EventTypes.INVENTORY_RESTORE, describe(snapshot.get()) + ", " + result + ": " + p.reason(), p.actor());

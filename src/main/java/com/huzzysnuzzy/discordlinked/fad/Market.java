@@ -90,6 +90,11 @@ public final class Market {
         return config().marketOpen();
     }
 
+    /** Whether players can sell on this server: the market is open and earning microcredits is on there. */
+    public boolean open(String server) {
+        return open() && plugin.servers().microEnabled(server);
+    }
+
     // ---- Prices ----
 
     /** What one of {@code item} sells for normally, in thousandths of a microcredit; 0 if it can't be sold. */
@@ -157,8 +162,10 @@ public final class Market {
      */
     Sale sell(Player player, String server, List<Line> lines) {
         PluginConfig c = config();
-        if (!open()) {
-            player.sendMessage(plugin.messages().minecraft("minecraft.market.closed"));
+        if (!open(server)) {
+            // Switched off on this server only, or everywhere.
+            player.sendMessage(plugin.messages().minecraft(open() ? "minecraft.market.closed-here"
+                    : "minecraft.market.closed"));
             return new Sale(0, -1, lines);
         }
         Map<String, ShopOverride> overrides;
@@ -225,7 +232,8 @@ public final class Market {
             return new Sale(0, -1, lines);
         }
         plugin.audit().log(player.getUniqueId(), player.getUsername(), community.linkedDiscordId(player.getUniqueId()),
-                EventTypes.SALE, "sold " + summary + " on " + server + " for " + c.micro(paid) + ", now " + c.micro(balance));
+                EventTypes.SALE, "sold " + summary + " on " + server + " for " + c.micro(paid) + ", now "
+                        + c.micro(balance), null, server);
         player.sendMessage(plugin.messages().minecraft("minecraft.market.sold", "items", shortSummary(totals),
                 "amount", c.micro(paid), "balance", c.micro(balance)));
         return new Sale(paid, balance, refused);
@@ -368,20 +376,29 @@ public final class Market {
 
     // ---- Keeping the servers' price lists current ----
 
-    /** Sends a server its prices now (after it said hello), through one of its players. */
+    /**
+     * Sends a server its prices now (after it said hello), through one of its players. A server where selling is
+     * off gets none, with open false, so its /sell, /sellhand and /worth say so.
+     */
     void sendPrices(ServerConnection connection) {
         String server = connection.getServerInfo().getName();
+        boolean open = open(server);
         try {
-            List<Price> prices = open() ? prices(community.shop().serverItems().get(server)) : List.of();
-            community.bridge().prices(connection, open(), config().microSymbol(), prices);
-            sentPrices.put(server, fingerprint(prices, open()));
+            List<Price> prices = open ? prices(community.shop().serverItems().get(server)) : List.of();
+            community.bridge().prices(connection, open, config().microSymbol(), prices);
+            sentPrices.put(server, fingerprint(prices, open));
         } catch (SQLException e) {
             plugin.logger().warn("Could not send sell prices to {}", server, e);
         }
     }
 
+    /** Something that changes the prices or where selling is on changed: servers get the new prices now. */
+    public void pricesChanged() {
+        plugin.proxy().getScheduler().buildTask(plugin, this::pushPrices).schedule();
+    }
+
     /** Every 30 seconds: servers whose prices changed (settings, the Shop page, dropping prices) get the new ones. */
-    private void pushPrices() {
+    private synchronized void pushPrices() {
         Map<String, ServerConnection> carriers = new HashMap<>();
         for (Player player : plugin.proxy().getAllPlayers()) {
             player.getCurrentServer().ifPresent(connection -> carriers.putIfAbsent(connection.getServerInfo().getName(), connection));
@@ -392,11 +409,12 @@ public final class Market {
                 continue;
             }
             try {
-                List<Price> prices = open() ? prices(community.shop().serverItems().get(server)) : List.of();
-                int now = fingerprint(prices, open());
+                boolean open = open(server);
+                List<Price> prices = open ? prices(community.shop().serverItems().get(server)) : List.of();
+                int now = fingerprint(prices, open);
                 Integer last = sentPrices.get(server);
                 if (last == null || last != now) {
-                    community.bridge().prices(entry.getValue(), open(), config().microSymbol(), prices);
+                    community.bridge().prices(entry.getValue(), open, config().microSymbol(), prices);
                     sentPrices.put(server, now);
                 }
             } catch (SQLException e) {

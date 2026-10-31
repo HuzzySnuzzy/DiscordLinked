@@ -75,7 +75,8 @@ public record PluginConfig(
         int keepInventoryDelayMinutes,
         int messageLogRetentionDays,
         boolean groupsEnabled,
-        int groupMaxMembers
+        int groupMaxMembers,
+        String defaultServer
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -148,7 +149,8 @@ public record PluginConfig(
                 Math.max(0, Integer.parseInt(props.getProperty("keep-inventory-delay-minutes").trim())),
                 Integer.parseInt(props.getProperty("message-log-retention-days").trim()),
                 parseBoolean(props, "groups-enabled"),
-                Math.max(0, Integer.parseInt(props.getProperty("group-max-members").trim()))
+                Math.max(0, Integer.parseInt(props.getProperty("group-max-members").trim())),
+                props.getProperty("default-server", "").trim()
         );
     }
 

@@ -11,6 +11,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Records player activity to the database off the event threads,
@@ -34,6 +35,8 @@ public final class AuditLog {
     private final Messages messages;
     private final LiveEvents live = new LiveEvents();
     private volatile Consumer<String> discordSink = message -> { };
+    /** The backend server an online player is on, or null. */
+    private volatile Function<UUID, String> serverOf = uuid -> null;
 
     public AuditLog(Database database, Messages messages, Logger logger) {
         this.database = database;
@@ -49,15 +52,33 @@ public final class AuditLog {
         this.discordSink = discordSink;
     }
 
+    public void setServerLookup(Function<UUID, String> serverOf) {
+        this.serverOf = serverOf;
+    }
+
     public void log(UUID uuid, String minecraftName, Long discordId, String eventType, String detail) {
         log(uuid, minecraftName, discordId, eventType, detail, null);
     }
 
-    /** @param actor who performed an admin action, e.g. "Name (discord id)"; null for player activity */
+    /**
+     * Logs an event on the server the player is on right now (none if they're offline).
+     *
+     * @param actor who performed an admin action, e.g. "Name (discord id)"; null for player activity
+     */
     public void log(UUID uuid, String minecraftName, Long discordId, String eventType, String detail, String actor) {
+        log(uuid, minecraftName, discordId, eventType, detail, actor, null);
+    }
+
+    /**
+     * @param server the backend server it happened on; "" = none (e.g. it happened on Discord); null = the player's
+     *               current server, if they're online
+     */
+    public void log(UUID uuid, String minecraftName, Long discordId, String eventType, String detail, String actor,
+                    String server) {
+        String where = server != null ? (server.isEmpty() ? null : server) : uuid == null ? null : serverOf.apply(uuid);
         executor.execute(() -> {
             try {
-                live.log(database.logEvent(uuid, minecraftName, discordId, eventType, detail, actor));
+                live.log(database.logEvent(uuid, minecraftName, discordId, eventType, detail, actor, where));
             } catch (SQLException e) {
                 logger.error("Failed to write audit event {} for {}", eventType, minecraftName, e);
             }

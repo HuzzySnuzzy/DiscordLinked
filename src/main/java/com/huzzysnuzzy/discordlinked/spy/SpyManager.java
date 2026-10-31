@@ -32,7 +32,7 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * Website "Spy" sessions: puts an admin's Minecraft character in spectator next to a player, via the
- * DiscordLinkedSpy plugin on the backend server. While a session runs the admin's website is locked.
+ * backend plugin (DiscordLinkedBackend) on the player's server. While a session runs the admin's website is locked.
  */
 public final class SpyManager {
 
@@ -128,7 +128,7 @@ public final class SpyManager {
         }
         plugin.proxy().getScheduler().buildTask(plugin, () -> {
             if (session.state == State.STARTING && byAdmin.get(session.adminUuid) == session) {
-                fail(session, "no reply from " + session.serverName + ". Is the DiscordLinkedSpy plugin installed there?");
+                fail(session, "no reply from " + session.serverName + ". Is DiscordLinkedBackend installed there?");
             }
         }).delay(START_TIMEOUT_SECONDS + (sameServer ? 0 : 3), TimeUnit.SECONDS).schedule();
         return null;
@@ -178,7 +178,8 @@ public final class SpyManager {
         }
         if (wasActive) {
             plugin.audit().log(session.target.uuid(), session.target.name(), session.target.discordId(),
-                    EventTypes.SPY_END, "after " + TimeFormat.preciseDuration(duration) + ": " + reason, session.actor);
+                    EventTypes.SPY_END, "after " + TimeFormat.preciseDuration(duration) + ": " + reason, session.actor,
+                    session.serverName);
         }
         lastEnded.put(session.adminDiscordId,
                 new Ended(session.target.name(), session.target.uuid(), reason, duration, failed || !wasActive));
@@ -214,7 +215,7 @@ public final class SpyManager {
                     admin.sendMessage(plugin.messages().minecraft("minecraft.spy.started",
                             "player", session.target.name(), "distance", String.valueOf(plugin.config().spyMaxDistance())));
                     plugin.audit().log(session.target.uuid(), session.target.name(), session.target.discordId(),
-                            EventTypes.SPY_START, "on " + session.serverName, session.actor);
+                            EventTypes.SPY_START, "on " + session.serverName, session.actor, session.serverName);
                 }
                 case "FAILED" -> fail(session, detail);
                 case "ENDED" -> finish(session, detail, false, false);
@@ -325,7 +326,7 @@ public final class SpyManager {
             String result = outcome.get(8, TimeUnit.SECONDS);
             return "ok".equals(result) ? null : result;
         } catch (TimeoutException | ExecutionException e) {
-            return "No reply from " + serverName + ". Is DiscordLinkedSpy 0.14 or newer installed there?";
+            return "No reply from " + serverName + ". Is DiscordLinkedBackend installed there?";
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return "Interrupted.";

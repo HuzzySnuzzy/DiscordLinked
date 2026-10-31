@@ -15,6 +15,7 @@ import com.huzzysnuzzy.discordlinked.fad.Groups;
 import com.huzzysnuzzy.discordlinked.fad.Market;
 import com.huzzysnuzzy.discordlinked.fad.ParticleStyle;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
+import com.huzzysnuzzy.discordlinked.servers.BackendServers;
 import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
 import com.huzzysnuzzy.discordlinked.spy.SpyManager;
 import com.huzzysnuzzy.discordlinked.storage.AuditEntry;
@@ -560,8 +561,12 @@ public final class WebServer {
             case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact",
                  "GET /api/settings/domain", "POST /api/settings/domain/connect", "POST /api/settings/domain/disconnect",
                  "POST /api/settings/domain/login-link", "GET /api/settings/messages",
-                 "GET /api/settings/messages/feed" ->
+                 "GET /api/settings/messages/feed", "GET /api/settings/servers", "POST /api/settings/servers" ->
                     settings(ex, method, path, session);
+            case "GET /api/servers" -> {
+                plugin.servers().refreshSoon();
+                sendJson(ex, 200, serversJson());
+            }
             case "GET /api/community" -> sendJson(ex, 200, community(staff));
             case "GET /api/leaderboard" -> sendJson(ex, 200, leaderboard(query(ex), session));
             case "GET /api/cosmetics" -> sendJson(ex, 200, cosmeticsJson(session));
@@ -631,7 +636,9 @@ public final class WebServer {
                 .put("communityEnabled", plugin.config().fadEnabled())
                 .put("shopOpen", plugin.community().shop().open())
                 .put("marketOpen", plugin.community().market().open())
-                .put("cosmeticsOpen", plugin.community().cosmetics().open());
+                .put("cosmeticsOpen", plugin.community().cosmetics().open())
+                .put("servers", DataArray.fromCollection(plugin.servers().names()))
+                .put("defaultServer", plugin.servers().defaultServer());
     }
 
     /** The Minecraft account linked to whoever is logged in, or null. */
@@ -910,10 +917,12 @@ public final class WebServer {
 
     /**
      * Everyone who has played: linked members, plus players known from joins and the servers' player data. Staff
-     * also get each player's suspension and whether they're still in the Discord server.
+     * also get each player's suspension and whether they're still in the Discord server. {@code lastServer} is the
+     * server a player was last on (for filtering by server while they're offline).
      */
     private DataArray memberList(boolean staff) throws SQLException {
         Map<UUID, Suspension> suspensions = staff ? plugin.database().activeSuspensions() : Map.of();
+        Map<UUID, String> lastServers = plugin.database().lastServers();
         Map<UUID, KnownPlayer> known = new HashMap<>();
         for (KnownPlayer player : plugin.database().knownPlayers()) {
             known.put(player.uuid(), player);
@@ -927,7 +936,8 @@ public final class WebServer {
             KnownPlayer k = known.remove(account.uuid());
             DataObject row = staff ? playerJson(account.uuid(), account.minecraftName(), account, suspensions.get(account.uuid()))
                     : publicPlayerJson(account.uuid(), account.minecraftName(), account);
-            result.add(withStreak(row.put("firstPlayed", k == null || k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli()),
+            result.add(withStreak(row.put("firstPlayed", k == null || k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli())
+                            .put("lastServer", lastServers.getOrDefault(account.uuid(), "")),
                     streaks.get(account.uuid()), today));
         }
         for (KnownPlayer k : known.values()) {
@@ -939,6 +949,7 @@ public final class WebServer {
                     .put("linked", false)
                     .put("online", online.isPresent())
                     .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""))
+                    .put("lastServer", lastServers.getOrDefault(k.uuid(), ""))
                     .put("lastSeen", k.lastPlayed() == null ? null : k.lastPlayed().toEpochMilli())
                     .put("firstPlayed", k.firstPlayed() == null ? null : k.firstPlayed().toEpochMilli())
                     .put("isAdmin", false)
@@ -1106,7 +1117,7 @@ public final class WebServer {
                 .put("cosmetics", playerCosmetics(uuid, session)));
     }
 
-    // ---- Community: credits and interactions (DiscordLinkedFAD) ----
+    // ---- Community: credits and interactions ----
 
     private DataObject currency() {
         PluginConfig c = plugin.config();
@@ -1989,7 +2000,7 @@ public final class WebServer {
     private List<AuditEntry> findLogs(Map<String, String> query, long before, int limit) throws SQLException {
         Set<String> types = LOG_FILTERS.getOrDefault(query.getOrDefault("filter", "all"), Set.of());
         return plugin.database().searchEvents(types, query.getOrDefault("q", "").trim(),
-                parseUuid(query.get("uuid")), before, limit);
+                parseUuid(query.get("uuid")), query.getOrDefault("server", "").trim(), before, limit);
     }
 
     private DataObject logs(Map<String, String> query) throws SQLException {
@@ -2019,6 +2030,7 @@ public final class WebServer {
                 .put("discordId", entry.discordId() == null ? "" : String.valueOf(entry.discordId()))
                 .put("actor", entry.actor() == null ? "" : entry.actor())
                 .put("detail", entry.detail() == null ? "" : entry.detail())
+                .put("server", entry.server() == null ? "" : entry.server())
                 .put("filters", filters);
     }
 
@@ -2168,6 +2180,86 @@ public final class WebServer {
         sendJson(ex, 200, DataObject.empty().put("seq", seq).put("reset", reset).put("busy", !mayWait).put("events", out));
     }
 
+    // ---- Backend servers ----
+
+    /** Every backend server with its status, plugin and earning switches, and the server pickers' default. */
+    private DataObject serversJson() {
+        String defaultServer = plugin.servers().defaultServer();
+        DataArray servers = DataArray.empty();
+        for (BackendServers.Server s : plugin.servers().list()) {
+            servers.add(DataObject.empty()
+                    .put("name", s.name())
+                    .put("registered", s.registered())
+                    .put("isDefault", s.name().equals(defaultServer))
+                    .put("online", s.reachable())
+                    .put("checkedAt", s.checkedAt() == null ? null : s.checkedAt().toEpochMilli())
+                    .put("players", s.players())
+                    .put("maxPlayers", s.maxPlayers())
+                    .put("minecraftVersion", s.minecraftVersion())
+                    .put("plugin", s.pluginName() == null ? null : DataObject.empty()
+                            .put("name", s.pluginName())
+                            .put("version", s.pluginVersion())
+                            .put("old", s.oldPlugin())
+                            .put("folia", s.folia())
+                            .put("spy", s.spy()))
+                    .put("tps", s.tps() == null ? null : Math.round(s.tps() * 100) / 100.0)
+                    .put("mspt", s.mspt() == null ? null : Math.round(s.mspt() * 100) / 100.0)
+                    .put("lastSeen", s.lastSeen() == null ? null : s.lastSeen().toEpochMilli())
+                    .put("creditsEnabled", s.creditsEnabled())
+                    .put("microEnabled", s.microEnabled()));
+        }
+        return DataObject.empty().put("servers", servers).put("defaultServer", defaultServer);
+    }
+
+    /**
+     * Settings -> Backend servers: {@code {name, creditsEnabled?, microEnabled?}}, {@code {name, forget: true}} for
+     * a server that's no longer in Velocity's config, or {@code {defaultServer}}. Answers with the new list.
+     */
+    private void serverSettings(HttpExchange ex, String actor) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        BackendServers servers = plugin.servers();
+        String requested = body.getString("name", "");
+        String message;
+        try {
+            if (body.hasKey("defaultServer")) {
+                String name = servers.setDefaultServer(body.getString("defaultServer", ""), actor);
+                message = name.isEmpty() ? "The server pickers start on all servers." : "The server pickers start on " + name + ".";
+            } else if (body.getBoolean("forget", false)) {
+                String name = servers.name(requested);
+                servers.forget(requested, actor);
+                message = name + " is off the list.";
+            } else {
+                Boolean credits = body.isNull("creditsEnabled") ? null : body.getBoolean("creditsEnabled");
+                Boolean micro = body.isNull("microEnabled") ? null : body.getBoolean("microEnabled");
+                if (credits == null && micro == null) {
+                    sendJson(ex, 400, error("Nothing to change."));
+                    return;
+                }
+                List<String> changed = servers.setEarning(requested, credits, micro, actor);
+                String name = servers.name(requested);
+                PluginConfig c = plugin.config();
+                List<String> sentences = new ArrayList<>();
+                if (credits != null) {
+                    sentences.add("Earning " + c.creditsNamePlural() + " on " + name + " is " + (credits ? "on." : "off."));
+                }
+                if (micro != null) {
+                    sentences.add("Selling for " + c.microNamePlural() + " on " + name + " is " + (micro ? "on." : "off."));
+                }
+                message = changed.isEmpty() ? "Nothing changed." : String.join(" ", sentences);
+            }
+        } catch (IllegalArgumentException e) {
+            sendJson(ex, 400, error(e.getMessage()));
+            return;
+        } catch (ParsingException e) {
+            sendJson(ex, 400, error("creditsEnabled, microEnabled and forget are true or false."));
+            return;
+        }
+        sendJson(ex, 200, serversJson().put("ok", true).put("message", message));
+    }
+
     // ---- Settings (one Discord user only) ----
 
     private boolean isOwner(Sessions.Session session) {
@@ -2184,6 +2276,14 @@ public final class WebServer {
         String actor = session.user.actor() + " (website)";
         switch (path) {
             case "/api/settings/domain" -> sendJson(ex, 200, domainJson());
+            case "/api/settings/servers" -> {
+                if (method.equals("POST")) {
+                    serverSettings(ex, actor);
+                } else {
+                    plugin.servers().refreshSoon();
+                    sendJson(ex, 200, serversJson());
+                }
+            }
             case "/api/settings/messages" -> sendJson(ex, 200, messageLogJson());
             case "/api/settings/messages/feed" -> messageLogFeed(ex, query(ex));
             case "/api/settings/domain/connect" -> domainConnect(ex, session);
@@ -2367,7 +2467,7 @@ public final class WebServer {
         try {
             outcome = plugin.inventories().restore(player.get(), snapshot, includeEnder).get(12, TimeUnit.SECONDS);
         } catch (TimeoutException | ExecutionException e) {
-            outcome = "no reply from the server. Is the DiscordLinkedSpy plugin installed there?";
+            outcome = "no reply from the server. Is DiscordLinkedBackend installed there?";
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             outcome = "interrupted";
@@ -2383,7 +2483,7 @@ public final class WebServer {
     }
 
     private static final List<String> EXPORT_HEADER =
-            List.of("Time", "Event", "Player", "UUID", "Discord ID", "By", "Details");
+            List.of("Time", "Event", "Player", "UUID", "Discord ID", "By", "Server", "Details");
 
     private List<List<String>> exportRows(Map<String, String> query) throws SQLException {
         List<List<String>> rows = new ArrayList<>();
@@ -2393,6 +2493,7 @@ public final class WebServer {
                     e.uuid() == null ? "" : e.uuid().toString(),
                     e.discordId() == null ? "" : String.valueOf(e.discordId()),
                     e.actor() == null ? "" : e.actor(),
+                    e.server() == null ? "" : e.server(),
                     e.detail() == null ? "" : e.detail()));
         }
         return rows;
@@ -2414,7 +2515,9 @@ public final class WebServer {
             csv.append("\r\n");
         }
         plugin.audit().log(null, null, session.user.id(), EventTypes.LOG_EXPORT,
-                "CSV, " + (rows.size() - 1) + " rows, filter=" + query.getOrDefault("filter", "all"), session.user.actor());
+                "CSV, " + (rows.size() - 1) + " rows, filter=" + query.getOrDefault("filter", "all")
+                        + (query.getOrDefault("server", "").isBlank() ? "" : ", server=" + query.get("server").trim()),
+                session.user.actor());
         ex.getResponseHeaders().set("Content-Disposition",
                 "attachment; filename=\"discordlinked-logs-" + FILE_TIME.format(Instant.now()) + ".csv\"");
         // BOM so Excel reads UTF-8 correctly; Google Sheets ignores it.
@@ -2443,7 +2546,7 @@ public final class WebServer {
             return;
         }
         Map<String, String> query = new HashMap<>();
-        for (String key : List.of("filter", "q", "uuid")) {
+        for (String key : List.of("filter", "q", "uuid", "server")) {
             query.put(key, body.getString(key, ""));
         }
         List<List<String>> rows = exportRows(query);
@@ -2451,7 +2554,9 @@ public final class WebServer {
         try {
             String url = sheets.export(title.replace("  ", " "), EXPORT_HEADER, rows);
             plugin.audit().log(null, null, session.user.id(), EventTypes.LOG_EXPORT,
-                    "Google Sheets, " + rows.size() + " rows, filter=" + query.get("filter"), session.user.actor());
+                    "Google Sheets, " + rows.size() + " rows, filter=" + query.get("filter")
+                            + (query.get("server").isBlank() ? "" : ", server=" + query.get("server").trim()),
+                    session.user.actor());
             sendJson(ex, 200, DataObject.empty().put("url", url).put("rows", rows.size()));
         } catch (IOException e) {
             plugin.logger().warn("Google Sheets export failed: {}", e.getMessage());
@@ -2492,7 +2597,7 @@ public final class WebServer {
         try {
             snapshot = DataObject.fromJson(plugin.inventories().request(player.get()).get(6, TimeUnit.SECONDS));
         } catch (TimeoutException | ExecutionException e) {
-            sendJson(ex, 504, error("No reply from " + server + ". Is the DiscordLinkedSpy plugin installed there?"));
+            sendJson(ex, 504, error("No reply from " + server + ". Is DiscordLinkedBackend installed there?"));
             return;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -2596,7 +2701,7 @@ public final class WebServer {
         String server = admin.get().getCurrentServer().map(c -> c.getServerInfo().getName()).orElse("?");
         plugin.audit().log(target.get().uuid(), target.get().name(), target.get().discordId(), EventTypes.TELEPORT,
                 "teleported " + self.get().minecraftName() + " to their " + place + " on " + server,
-                session.user.actor() + " (website)");
+                session.user.actor() + " (website)", server.equals("?") ? "" : server);
         admin.get().sendMessage(plugin.messages().minecraft("minecraft.teleport.done",
                 "player", target.get().name(), "place", place));
         sendJson(ex, 200, DataObject.empty().put("ok", true).put("message", "Teleported to " + target.get().name() + "'s " + place + "."));
