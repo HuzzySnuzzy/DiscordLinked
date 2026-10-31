@@ -1,0 +1,31 @@
+name: DiscordLinkedBackend
+version: '${version}'
+main: com.huzzysnuzzy.discordlinked.backend.DiscordLinkedBackend
+api-version: '1.21'
+folia-supported: true
+softdepend: [LuckPerms]
+description: DiscordLinked's plugin for the Minecraft servers. Interaction commands (/hug, /kiss, /pet...), credits for playtime and advancements, selling items for microcredits (/sell) and cosmetics, shared with Discord and the admin website, plus the website's Spy sessions, inventory viewer and teleports. Replaces DiscordLinkedFAD and DiscordLinkedSpy. Install on every Paper or Folia server (1.21.4 or newer) behind the Velocity proxy.
+authors: [HuzzySnuzzy]
+commands:
+  discordlinkedbackend:
+    description: Reload DiscordLinkedBackend's config.yml
+    usage: /<command> reload
+    aliases: [dlb, discordlinkedfad, dlfad]
+    permission: discordlinkedfad.admin
+# The permissions kept DiscordLinkedFAD's names, so existing permission setups keep working.
+permissions:
+  discordlinkedfad.admin:
+    description: Use /discordlinkedbackend reload
+    default: op
+  discordlinkedfad.cooldown.bypass:
+    description: Use interactions without waiting for the cooldown
+    default: op
+  discordlinkedfad.credits:
+    description: Check credits and the leaderboards (/credits, /mct)
+    default: true
+  discordlinkedfad.sell:
+    description: Sell items for microcredits and exchange them (/sell, /sellhand, /worth, /exchange)
+    default: true
+  discordlinkedfad.interactions:
+    description: List interactions and turn them off or on for yourself
+    default: true

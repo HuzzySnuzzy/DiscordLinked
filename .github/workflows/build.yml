@@ -21,5 +21,4 @@ jobs:
           name: DiscordLinked
           path: |
             build/libs/*.jar
-            spy-paper/build/libs/*.jar
-            fad-paper/build/libs/*.jar
+            backend-paper/build/libs/*.jar

@@ -1,7 +1,5 @@
 rootProject.name = "DiscordLinked"
 
-// Companion plugin for Paper/Spigot backend servers (needed for the website's Spy feature).
-include("spy-paper")
-
-// DiscordLinkedFAD: interaction commands and credits for Paper/Folia backend servers.
-include("fad-paper")
+// DiscordLinkedBackend: the plugin for the Paper/Folia backend servers (interactions, credits, selling, cosmetics,
+// and the website's Spy sessions, inventory viewer and teleports). Replaces DiscordLinkedSpy and DiscordLinkedFAD.
+include("backend-paper")
