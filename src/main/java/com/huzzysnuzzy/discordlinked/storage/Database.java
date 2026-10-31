@@ -2686,10 +2686,11 @@ public final class Database implements AutoCloseable {
         try (Statement st = connection.createStatement();
              ResultSet rs = st.executeQuery("SELECT * FROM backend_servers ORDER BY name COLLATE NOCASE")) {
             while (rs.next()) {
-                long lastSeen = rs.getLong("last_seen");
+                long seen = rs.getLong("last_seen");
+                Instant lastSeen = rs.wasNull() ? null : Instant.ofEpochMilli(seen);
                 servers.add(new BackendServerRow(rs.getString("name"), rs.getInt("credits_enabled") != 0,
                         rs.getInt("micro_enabled") != 0, rs.getString("plugin_name"), rs.getString("plugin_version"),
-                        rs.getString("mc_version"), rs.wasNull() ? null : Instant.ofEpochMilli(lastSeen)));
+                        rs.getString("mc_version"), lastSeen));
             }
         }
         return servers;

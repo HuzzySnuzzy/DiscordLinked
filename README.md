@@ -78,6 +78,13 @@ Good to know:
   `/discordlinkedfad reload` and `/dlfad reload` still work, and so does `/discordlinkedfad:sell`.
 - While an old jar is still in `plugins/`, DiscordLinkedBackend says so in the console and switches itself off,
   so nothing is done twice. Remove the old jar and restart.
+- A server that only had DiscordLinkedSpy (a creative server, say) now also gets everything DiscordLinkedFAD
+  did: interactions, `/credits`, selling and `/exchange`, credits for playtime and advancements, cosmetics
+  (prefixes, trails, KeepInventory) and Shop deliveries. It has no DiscordLinkedFAD folder to copy from, so before
+  its first start put the `config.yml` from one of your other servers in its `plugins/DiscordLinkedBackend/`, so
+  every server has the same interactions. If players shouldn't earn there, switch **Earn credits** and **Earn
+  microcredits** off for it (see [Several servers](#several-servers)). To hide the commands there, take the
+  `discordlinkedfad.*` permissions away on that server.
 - It needs **Paper or Folia 1.21.4 or newer**. DiscordLinkedSpy also ran on 1.20.4; update older servers first.
 - Admins who were in the middle of a spy session when their server crashed are still put back where they were
   the next time they join.
@@ -95,8 +102,9 @@ config with:
   version (and Folia), and its TPS while someone is on it (Folia has no TPS);
 - its backend plugin with the version, and when the proxy last heard from it. A server still on DiscordLinkedFAD
   says "(old, replace with DiscordLinkedBackend)". One the proxy has never heard from, or one with only an old
-  DiscordLinkedSpy, says "Backend plugin not installed". The plugin can only talk to the proxy while someone is on
-  its server, so an empty server shows when it was last heard from.
+  DiscordLinkedSpy, says "No backend plugin heard from yet". The plugin can only talk to the proxy while someone
+  is on its server, so a new install shows up once a player joins, and an empty server shows when it was last
+  heard from.
 
 **Settings** next to a server opens its two switches (named after your currencies). They apply straight away,
 and every change is in the Logs (**Settings changes**, with the server's name):
@@ -108,16 +116,18 @@ and every change is in the Logs (**Settings changes**, with the server's name):
   a server, so it's paid either way.
 - **Earn microcredits** off: nobody can sell there. `/sell`, `/sellhand` and `/worth` say selling is closed, and
   anything sold anyway is given back. Exchanging microcredits for credits still works everywhere, in game and
-  on the website (it's spending, not earning).
+  on the website (it's spending, not earning). In game this needs DiscordLinkedBackend: on a server still running
+  DiscordLinkedFAD, `/exchange` says selling is closed, so use the website there.
 - The Shop, gifts, cosmetics, interactions and admins giving or taking credits work the same on every server.
 
 **Default server**, above the list, is where the server menus on Players and Moderate start (`default-server`
-in `config.properties`, empty = All servers). If it names a server that's gone, they start on All servers.
+in `config.properties`, empty = All servers). If it names a server that's gone from Velocity's config, they start
+on All servers.
 
 With two or more servers the website gets server menus:
 
 - **Players** shows who's on that server, or was last on it, and can sort by **Server A–Z** (then by recently
-  seen). With All servers picked, offline players show which server they were last on.
+  seen). With All servers picked and the Server A–Z sort, offline players show which server they were last on.
 - **Moderate** lists every server, also the ones nobody is on right now.
 - **Logs** shows one server's events, starting on All servers. **Download CSV** and **Export to Google Sheets**
   follow it, and both have a Server column. Events from before 0.22.0 have no server.

@@ -2221,7 +2221,7 @@ public final class WebServer {
             return;
         }
         BackendServers servers = plugin.servers();
-        String requested = body.getString("name", "");
+        String requested = body.getString("name", "").trim();
         String message;
         try {
             if (body.hasKey("defaultServer")) {

@@ -237,7 +237,10 @@ function playerName(p, extraClass = '') {
   return el('a', { class: `name ${nameClass(p)} ${extraClass}`, href: playerHref(p.uuid) }, p.minecraftName);
 }
 
-/** With lastServer, an offline player's pill says which server they were on last (the Players list, while it shows every server). */
+/**
+ * An offline player's pill has the server they were on last in its tooltip, and with lastServer in its text too (the
+ * Players list, while it shows every server sorted by server).
+ */
 function statusPills(p, { lastServer = false } = {}) {
   const pills = [];
   if (p.suspension) {
@@ -249,8 +252,8 @@ function statusPills(p, { lastServer = false } = {}) {
   } else if (p.online) {
     pills.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
   } else if (!p.suspension) {
-    const where = lastServer && p.lastServer && (state.me?.servers || []).length > 1 ? ` on ${p.lastServer}` : '';
-    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}${where}` : 'Offline · never played';
+    const where = p.lastServer && (state.me?.servers || []).length > 1 ? ` on ${p.lastServer}` : '';
+    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}${lastServer ? where : ''}` : 'Offline · never played';
     pills.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}${where}` : null }, seen));
   }
   if (p.onWebsite) pills.push(el('span', { class: 'pill web', title: 'Has this website open right now' }, 'On the website'));
@@ -655,7 +658,10 @@ function renderPlayers() {
   $('players-more').hidden = rows.length <= limit;
   $('players-more').textContent = `Show more (${(rows.length - limit).toLocaleString()} left)`;
   const empty = $('players-empty');
-  empty.textContent = members.length ? 'No players match your filter.' : 'No players yet.';
+  // Empty only because of the server menu (which may have started on the default server), not a filter they set.
+  const onlyServer = server && !query && $('players-show').value === 'all';
+  empty.textContent = !members.length ? 'No players yet.'
+    : onlyServer ? `Nobody is on ${server} or was last on it.` : 'No players match your filter.';
   empty.hidden = rows.length > 0;
 }
 
@@ -674,7 +680,8 @@ function cardBackdrop(url) {
 function playerRow(p) {
   const staff = isStaff();
   const joined = joinedAt(p);
-  const status = [...statusPills(p, { lastServer: !$('players-server').value }), streakChip(p.streak, p.bestStreak)];
+  const status = [...statusPills(p, { lastServer: !$('players-server').value && $('players-sort').value === 'server' }),
+    streakChip(p.streak, p.bestStreak)];
   if (staff && p.suspension) {
     status.push(el('div', { class: 'suspension-note' },
       `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by `,
@@ -2496,6 +2503,8 @@ function applyServers(result) {
 
 /** Switches and the default server are saved as soon as they change; a refused change flips back. */
 async function saveServer(body, control) {
+  // Disabling the control drops keyboard focus, so it goes back to the redrawn one (found by its label).
+  const label = document.activeElement === control ? control.getAttribute('aria-label') : null;
   control.disabled = true;
   try {
     const result = await api('/api/settings/servers', body);
@@ -2504,6 +2513,9 @@ async function saveServer(body, control) {
   } catch (e) {
     toast(e.message);
     renderServersCard();
+  }
+  if (label && (!document.activeElement || document.activeElement === document.body)) {
+    $('servers-card')?.querySelector(`[aria-label="${CSS.escape(label)}"]`)?.focus({ preventScroll: true });
   }
 }
 
@@ -2521,12 +2533,12 @@ function serversCard() {
     return card;
   }
   const picker = el('select', { 'aria-label': 'Default server' }, el('option', { value: '' }, 'All servers'),
-    data.servers.map((s) => el('option', { value: s.name }, s.name)));
+    data.servers.filter((s) => s.registered).map((s) => el('option', { value: s.name }, s.name)));
   picker.value = data.defaultServer;
   picker.addEventListener('change', () => saveServer({ defaultServer: picker.value }, picker));
   card.append(
-    el('p', { class: 'muted' }, 'Every server in Velocity\'s config. Balances are shared by all of them. Each one needs '
-      + 'DiscordLinkedBackend for interactions, the shop, selling, snapshots and Spy.'),
+    el('p', { class: 'muted' }, 'Every server in Velocity\'s config, and any taken out of it until you remove them. Balances '
+      + 'are shared by all of them. Each one needs DiscordLinkedBackend for interactions, the shop, selling, snapshots and Spy.'),
     el('div', { class: 'setting' },
       el('div', { class: 'setting-text' },
         el('div', { class: 'setting-label' }, 'Default server'),
@@ -2554,7 +2566,9 @@ function serverEntry(s) {
     s.minecraftVersion && `Minecraft ${s.minecraftVersion}${p?.folia ? ' (Folia)' : ''}`,
     up && s.tps !== null && el('span', { title: s.mspt !== null ? `${s.mspt} ms per tick` : null }, `TPS ${s.tps}`)]);
   const plugin = dotted([
-    !p ? 'Backend plugin not installed' : p.old ? `${p.name} ${p.version} (old, replace with DiscordLinkedBackend)` : `${p.name} ${p.version}`,
+    !p ? el('span', { title: 'DiscordLinkedBackend reports in once a player joins this server.' },
+      'No backend plugin heard from yet')
+      : p.old ? `${p.name} ${p.version} (old, replace with DiscordLinkedBackend)` : `${p.name} ${p.version}`,
     s.lastSeen && el('span', { title: formatTime(s.lastSeen) }, `last seen ${timeAgo(s.lastSeen)}`)]);
 
   const toggle = (label, help, field) => {
@@ -2572,12 +2586,12 @@ function serverEntry(s) {
       + 'still works everywhere.', 'microEnabled'),
     !s.registered && el('div', { class: 'setting' },
       el('div', { class: 'setting-text' },
-        el('div', { class: 'setting-label' }, 'Take it off the list'),
+        el('div', { class: 'setting-label' }, 'Remove from the list'),
         el('div', { class: 'setting-help' }, 'It\'s no longer in Velocity\'s config. Its log entries stay.')),
       el('div', { class: 'setting-input' }, el('button', { class: 'btn btn-ghost btn-small danger', type: 'button', onclick: () => confirmDialog({
-        title: `Take ${s.name} off the list?`,
+        title: `Remove ${s.name} from the list?`,
         text: 'It goes from the server menus and its switches are forgotten. If it comes back in Velocity\'s config, it\'s added again.',
-        confirmLabel: 'Take off', confirmClass: 'btn-danger',
+        confirmLabel: 'Remove', confirmClass: 'btn-danger',
         onConfirm: async () => {
           const result = await api('/api/settings/servers', { name: s.name, forget: true });
           serversOpen.delete(key);
@@ -2585,11 +2599,14 @@ function serverEntry(s) {
           toast(result.message);
         },
       }) }, 'Remove'))));
-  const open = el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': `${s.name} settings`,
+  // The name says which server, and has the words on the button in it (for voice control).
+  const openLabel = () => (panel.hidden ? `${s.name} settings` : `Hide settings for ${s.name}`);
+  const open = el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': openLabel(),
     'aria-expanded': String(!panel.hidden), onclick: () => {
       if (serversOpen.has(key)) serversOpen.delete(key); else serversOpen.add(key);
       panel.hidden = !serversOpen.has(key);
       open.textContent = panel.hidden ? 'Settings' : 'Hide settings';
+      open.setAttribute('aria-label', openLabel());
       open.setAttribute('aria-expanded', String(!panel.hidden));
     } }, panel.hidden ? 'Settings' : 'Hide settings');
 

@@ -17,6 +17,12 @@ import java.util.stream.Stream;
  */
 final class Migration {
 
+    /** DiscordLinkedFAD's default reload message, which a copied config.yml still has unless it was changed. */
+    private static final String OLD_RELOADED =
+            "\"<green>DiscordLinkedFAD reloaded with <count> interactions.</green>\"";
+    private static final String NEW_RELOADED =
+            "\"<green>DiscordLinkedBackend reloaded with <count> interactions.</green>\"";
+
     private Migration() {
     }
 
@@ -24,6 +30,12 @@ final class Migration {
     static void run(Path folder, Logger logger) {
         Path fad = folder.resolveSibling("DiscordLinkedFAD");
         Path spyFolder = folder.resolveSibling("DiscordLinkedSpy");
+        // The outbox is made on every start, so without it this plugin has never run here. Only then is anything
+        // copied: the old folders stay, so an owner who deletes config.yml for fresh defaults would get the old
+        // one back, and snapshots the proxy already has would be sent twice.
+        if (Files.exists(folder.resolve("outbox"))) {
+            return;
+        }
         List<String> copied = new ArrayList<>();
         if (!Files.exists(folder.resolve("config.yml")) && Files.isRegularFile(fad.resolve("config.yml"))) {
             try (Stream<Path> files = Files.walk(fad)) {
@@ -36,11 +48,12 @@ final class Migration {
             } catch (IOException e) {
                 logger.warning("Couldn't read the old DiscordLinkedFAD folder: " + e.getMessage());
             }
+            if (copied.contains("DiscordLinkedFAD/config.yml")) {
+                renameReloaded(folder.resolve("config.yml"), logger);
+            }
         }
-        // Only before the outbox exists here: snapshots sent from it are deleted once the proxy has them, so
-        // copying the old ones again on a later start would send them twice.
         Path oldOutbox = spyFolder.resolve("outbox");
-        if (!Files.exists(folder.resolve("outbox")) && Files.isDirectory(oldOutbox)) {
+        if (Files.isDirectory(oldOutbox)) {
             int snapshots = 0;
             try (DirectoryStream<Path> files = Files.newDirectoryStream(oldOutbox, "*.bin")) {
                 for (Path file : files) {
@@ -63,6 +76,19 @@ final class Migration {
         if (!copied.isEmpty()) {
             logger.info("Copied from the old plugins' folders: " + String.join(", ", copied)
                     + ". The old folders are left as they are; delete them once everything works.");
+        }
+    }
+
+    /** The copied config.yml's reload message names this plugin, unless the owner wrote their own. */
+    private static void renameReloaded(Path config, Logger logger) {
+        try {
+            String text = Files.readString(config);
+            String renamed = text.replace(OLD_RELOADED, NEW_RELOADED);
+            if (!renamed.equals(text)) {
+                Files.writeString(config, renamed);
+            }
+        } catch (IOException e) {
+            logger.warning("Couldn't update the reload message in " + config + ": " + e.getMessage());
         }
     }
 

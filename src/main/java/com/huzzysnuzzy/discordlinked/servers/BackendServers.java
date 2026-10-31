@@ -183,14 +183,17 @@ public final class BackendServers {
         return servers;
     }
 
-    /** The server the website's server pickers start on, or "" for all servers (also if it no longer exists). */
+    /**
+     * The server the website's server pickers start on, or "" for all servers (also while it's not in Velocity's
+     * config: nobody can be on it then, and the setting comes back into use if the server does).
+     */
     public String defaultServer() {
         String server = plugin.config().defaultServer();
         if (server.isEmpty()) {
             return "";
         }
         String name = name(server);
-        return name == null ? "" : name;
+        return name == null || !registered().contains(key(name)) ? "" : name;
     }
 
     // ---- From the backend plugin (discordlinked:fad) ----
@@ -333,6 +336,9 @@ public final class BackendServers {
     /** Sets the server the website's server pickers start on; "" = all servers. Returns its name as spelt. */
     public synchronized String setDefaultServer(String server, String actor) throws IOException {
         String name = server.isBlank() ? "" : known(server).name;
+        if (!name.isEmpty() && !registered().contains(key(name))) {
+            throw new IllegalArgumentException(name + " isn't in Velocity's config, so nobody can start on it.");
+        }
         String old = plugin.config().defaultServer();
         if (name.equals(old)) {
             return name;
@@ -361,7 +367,8 @@ public final class BackendServers {
     // ---- Helpers ----
 
     private Server view(Entry entry, boolean registered, int playersHere, long now) {
-        Ping ping = entry.ping;
+        // Only servers in Velocity's config are pinged, so a removed one's last answer would be kept for ever.
+        Ping ping = registered ? entry.ping : null;
         Status status = entry.status;
         boolean fresh = status != null && now - entry.statusAt < STATUS_FRESH_MILLIS;
         boolean up = ping != null && ping.reachable();
