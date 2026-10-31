@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
  * players switch what they have on and off on their profile, one of each kind at a time.
  *
  * <p>Everything is decided here. Each player's Minecraft server is told what they use (prefix text, trail particle,
- * from when KeepInventory works) when they join it and whenever it changes; DiscordLinkedFAD applies it.
+ * from when KeepInventory works) when they join it and whenever it changes; the backend plugin applies it.
  */
 public final class Cosmetics {
 
@@ -45,7 +45,7 @@ public final class Cosmetics {
     public static final List<String> KINDS = List.of(PREFIX, TRAIL, AURA, CARD, KEEP_INVENTORY);
 
     /**
-     * Particles a trail or aura can use, in every version DiscordLinkedFAD runs on. Only the {@link #COLORABLE} ones
+     * Particles a trail or aura can use, in every version the backend plugin runs on. Only the {@link #COLORABLE} ones
      * take a colour; the rest always look like themselves.
      */
     public static final List<String> PARTICLES = List.of("dust", "entity_effect", "heart", "flame", "small_flame", "soul_fire_flame", "note",
@@ -472,7 +472,7 @@ public final class Cosmetics {
                 .ifPresent(this::push)).delay(PUSH_DELAY_MS, TimeUnit.MILLISECONDS).schedule();
     }
 
-    /** A server (re)started DiscordLinkedFAD: tell it about everyone on it. */
+    /** A server (re)started its backend plugin: tell it about everyone on it. */
     void serverReady(String server) {
         for (Player player : plugin.proxy().getAllPlayers()) {
             player.getCurrentServer().filter(connection -> connection.getServerInfo().getName().equals(server))

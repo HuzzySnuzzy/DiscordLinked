@@ -190,6 +190,15 @@ final class FadCommands {
 
     /** The checks every selling command shares. Returns the player, or null after saying why not. */
     private static Player seller(DiscordLinkedBackend plugin, Command command, CommandSender sender) {
+        return seller(plugin, command, sender, true);
+    }
+
+    /**
+     * Like {@link #seller(DiscordLinkedBackend, Command, CommandSender)}, but with {@code needOpen} false selling only
+     * has to be supported by the proxy, not open here: /exchange is spending, so it works on servers where earning
+     * microcredits is off (the proxy still says no while the whole market is closed).
+     */
+    private static Player seller(DiscordLinkedBackend plugin, Command command, CommandSender sender, boolean needOpen) {
         if (!command.testPermission(sender)) {
             return null;
         }
@@ -197,8 +206,12 @@ final class FadCommands {
             sender.sendMessage(plugin.settings().message("player-only"));
             return null;
         }
-        if (!plugin.sellPrices().available()) {
-            player.sendMessage(plugin.settings().message(plugin.sellPrices().known() ? "sell-closed" : "sell-unsupported"));
+        if (!plugin.sellPrices().known()) {
+            player.sendMessage(plugin.settings().message("sell-unsupported"));
+            return null;
+        }
+        if (needOpen && !plugin.sellPrices().available()) {
+            player.sendMessage(plugin.settings().message("sell-closed"));
             return null;
         }
         return player;
@@ -401,7 +414,7 @@ final class FadCommands {
 
         @Override
         public boolean execute(CommandSender sender, String label, String[] args) {
-            Player player = seller(plugin, this, sender);
+            Player player = seller(plugin, this, sender, false);
             if (player == null) {
                 return true;
             }

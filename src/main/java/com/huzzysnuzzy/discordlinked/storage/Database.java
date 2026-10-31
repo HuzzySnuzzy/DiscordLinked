@@ -1327,7 +1327,7 @@ public final class Database implements AutoCloseable {
         }
     }
 
-    // ---- Community: credits, advancements, interactions (DiscordLinkedFAD) ----
+    // ---- Community: credits, advancements, interactions (from the backend plugin) ----
 
     private static final Map<String, String> LEADERBOARD_ORDER = Map.of(
             "credits", "credits", "earned", "earned", "playtime", "active_seconds",

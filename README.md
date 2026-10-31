@@ -1,7 +1,8 @@
 # DiscordLinked
 
 A Velocity proxy plugin that runs a Discord bot. Players must link a Discord account before they can join,
-and their activity is recorded for admins.
+and their activity is recorded for admins. Its partner plugin,
+[DiscordLinkedBackend](#the-backend-plugin-discordlinkedbackend), goes on the Minecraft servers behind the proxy.
 
 ## How linking works
 
@@ -27,11 +28,108 @@ Set `chat-channel-id` in `config.properties`, then turn on either direction inde
 
 Chat that another plugin blocks (mutes, filters) is not sent to Discord. Mentions like `@everyone` never ping.
 
-## Community: interactions & credits (DiscordLinkedFAD)
+## The backend plugin: DiscordLinkedBackend
 
-**DiscordLinkedFAD** is a second companion plugin for your **Paper or Folia** servers (1.21.4 or newer).
-Put `DiscordLinkedFAD-x.y.z.jar` in the `plugins/` folder of every Minecraft server behind the proxy. The
-proxy (this plugin, 0.10.0 or newer) keeps the credits, so they're the same on every server.
+Velocity itself can't add commands to the Minecraft servers, teleport players, change game modes or see
+inventories, so DiscordLinked comes with a second plugin for that: **DiscordLinkedBackend**. Put
+`DiscordLinkedBackend-x.y.z.jar` in the `plugins/` folder of **every Paper or Folia server** behind the proxy
+(1.21.4 or newer). Download **DiscordLinked** from a GitHub Actions run (see [Building](#building)): the zip has
+both jars, `DiscordLinked-x.y.z.jar` for Velocity's `plugins/` folder and `DiscordLinkedBackend-x.y.z.jar` for
+the Minecraft servers.
+
+It brings:
+
+- interactions, credits for playing and advancements, selling for microcredits, Shop deliveries and cosmetics
+  (see [Community](#community-interactions--credits));
+- the website's Spy sessions, inventory viewer, inventory snapshots and teleports (see
+  [Moderate page & Spy](#moderate-page--spy));
+- who has ever played on that server, for the website's Players list.
+
+Its settings are in `plugins/DiscordLinkedBackend/config.yml`: the interactions, AFK time, command names, how
+cosmetics are drawn and its messages. Run `/discordlinkedbackend reload` (or `/dlb reload`) after editing;
+brand-new commands need a server restart. Use the same `config.yml` on every server. On Folia it schedules
+everything on each player's own region thread, so an admin and the player they spy on can be in different
+regions.
+
+Permissions: `discordlinkedfad.admin` (the reload command) and `discordlinkedfad.cooldown.bypass` are for ops by
+default; `discordlinkedfad.credits` (`/credits`, `/mct`), `discordlinkedfad.sell` (`/sell`, `/sellhand`, `/worth`,
+`/exchange`), `discordlinkedfad.interactions` (`/interactions`) and `discordlinkedfad.interact.<name>` (one per
+interaction) are for everyone. Spy, inventories and teleports are controlled from the website, so they need none.
+
+The proxy and the backend plugin talk over Minecraft's plugin messaging channel, and the proxy drops any such
+message sent by a player's client, so players can't trigger it. As with any Velocity network, make sure your
+backend servers can't be joined directly, bypassing the proxy.
+
+### Upgrading from DiscordLinkedFAD and DiscordLinkedSpy
+
+Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optionally) DiscordLinkedFAD.
+DiscordLinkedBackend replaces both. On every Minecraft server:
+
+1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
+   `DiscordLinkedBackend-0.22.0.jar` there instead.
+2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
+   into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
+   hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
+   overwritten, and the old folders are left alone: delete them once everything works.
+
+Good to know:
+
+- The permissions kept their names (`discordlinkedfad.*`), so your LuckPerms setup keeps working.
+  `/discordlinkedfad reload` and `/dlfad reload` still work, and so does `/discordlinkedfad:sell`.
+- While an old jar is still in `plugins/`, DiscordLinkedBackend says so in the console and switches itself off,
+  so nothing is done twice. Remove the old jar and restart.
+- It needs **Paper or Folia 1.21.4 or newer**. DiscordLinkedSpy also ran on 1.20.4; update older servers first.
+- Admins who were in the middle of a spy session when their server crashed are still put back where they were
+  the next time they join.
+- The proxy and the servers can be updated in any order: this proxy still works with the old jars, and
+  DiscordLinkedBackend works with an older proxy. Settings → **Backend servers** shows which servers still run
+  DiscordLinkedFAD (an old DiscordLinkedSpy can't be detected).
+
+### Several servers
+
+Everyone has one balance for the whole network: credits, microcredits, groups and unlocks are the same on every
+server. Settings → **Backend servers** on the website (settings owner only) lists every server in Velocity's
+config with:
+
+- whether it's online (checked every 30 seconds), how many players are on it out of how many slots, its Minecraft
+  version (and Folia), and its TPS while someone is on it (Folia has no TPS);
+- its backend plugin with the version, and when the proxy last heard from it. A server still on DiscordLinkedFAD
+  says "(old, replace with DiscordLinkedBackend)". One the proxy has never heard from, or one with only an old
+  DiscordLinkedSpy, says "Backend plugin not installed". The plugin can only talk to the proxy while someone is on
+  its server, so an empty server shows when it was last heard from.
+
+**Settings** next to a server opens its two switches (named after your currencies). They apply straight away,
+and every change is in the Logs (**Settings changes**, with the server's name):
+
+- **Earn credits** off: playing there still counts as playtime (for the Playtime stat and leaderboard), but pays
+  no credits, and that time doesn't count toward the next playtime reward. Advancements made there are ignored
+  completely (not recorded, paid or announced), so they still pay the first time the player makes them on a
+  server where earning is on. The daily login reward is paid when someone joins the network, before they're on
+  a server, so it's paid either way.
+- **Earn microcredits** off: nobody can sell there. `/sell`, `/sellhand` and `/worth` say selling is closed, and
+  anything sold anyway is given back. Exchanging microcredits for credits still works everywhere, in game and
+  on the website (it's spending, not earning).
+- The Shop, gifts, cosmetics, interactions and admins giving or taking credits work the same on every server.
+
+**Default server**, above the list, is where the server menus on Players and Moderate start (`default-server`
+in `config.properties`, empty = All servers). If it names a server that's gone, they start on All servers.
+
+With two or more servers the website gets server menus:
+
+- **Players** shows who's on that server, or was last on it, and can sort by **Server A–Z** (then by recently
+  seen). With All servers picked, offline players show which server they were last on.
+- **Moderate** lists every server, also the ones nobody is on right now.
+- **Logs** shows one server's events, starting on All servers. **Download CSV** and **Export to Google Sheets**
+  follow it, and both have a Server column. Events from before 0.22.0 have no server.
+
+Each viewer's pick is remembered in their own browser, per page; the default server is only used until they pick
+one. A server that's taken out of Velocity's config stays on the list, marked "Not in Velocity's config", until
+you **Remove** it under its Settings. Its log entries stay.
+
+## Community: interactions & credits
+
+These need [DiscordLinkedBackend](#the-backend-plugin-discordlinkedbackend) on your Minecraft servers. The proxy
+keeps the credits, so they're the same on every server.
 
 **Interactions.** `/pet`, `/hug`, `/kiss`, `/boop`, `/nuzzle`, `/cuddle`, `/pounce`, `/stepon`, `/lick`,
 `/nom`, `/meow`, `/bark`, `/purr`, `/howl`, `/wag`, `/blush` and `/growl` out of the box. Each picks a random
@@ -44,9 +142,9 @@ and in Discord (in `fad-channel-id`, or the chat channel), with the linked accou
 
 > @Bob's face lights up when @Alice presses their lips against theirs, mwahhhh!~
 
-- Everything about them is in `plugins/DiscordLinkedFAD/config.yml`: add your own (each becomes a command),
-  change the lines, sounds, particles, aliases and cooldown. Run `/discordlinkedfad reload` after editing;
-  brand-new commands need a server restart. Use the same `config.yml` on every server.
+- Everything about them is in `plugins/DiscordLinkedBackend/config.yml`: add your own (each becomes a command),
+  change the lines, sounds, particles, aliases and cooldown. Run `/discordlinkedbackend reload` (or `/dlb reload`)
+  after editing; brand-new commands need a server restart. Use the same `config.yml` on every server.
 - The same interactions are **slash commands in Discord** (`/hug @someone`), shown in game as
   `[Discord] …`. If the member they picked is online, the sound and particles play where they are.
 - `/interactions` lists them; **`/interactions off`** stops anyone picking you, in game and on Discord
@@ -59,12 +157,15 @@ and in Discord (in `fad-channel-id`, or the chat channel), with the linked accou
 website's Settings page (e.g. Pawbuck / Pawbucks). Players earn them for:
 
 - **Playing**: `credits-playtime-amount` for every `credits-playtime-minutes` of *active* play (default 5 per
-  15 minutes). AFK time doesn't count: after `afk-minutes` (in DiscordLinkedFAD's config.yml, default 5)
+  15 minutes). AFK time doesn't count: after `afk-minutes` (in DiscordLinkedBackend's config.yml, default 5)
   without looking around, chatting or using commands, a player is AFK. AFK pools and water streams don't count
   as activity.
-- **Advancements**: the first time a player makes one (on any server), by its kind: task 10, goal 25,
-  challenge 50 by default. Only advancements announced in chat count, so recipe unlocks never do.
+- **Advancements**: the first time a player makes one (on any server where earning credits is on), by its
+  kind: task 10, goal 25, challenge 50 by default. Only advancements announced in chat count, so recipe
+  unlocks never do.
   Advancements are also announced in Discord (`fad-discord-advancements`).
+- Earning credits can be switched off on single servers; see [Several servers](#several-servers). The daily
+  login reward below is paid either way.
 
 `/credits`, `/credits <player>` and `/credits top` in game; `/credits [player]` and `/leaderboard` in
 Discord. Admins can give or take credits on a player's page (with a reason; it's logged).
@@ -98,7 +199,7 @@ the Discord join message shows it: ":green_circle: **Huzzeh** joined the server 
   slot to put down, or tap an item and use **+1** / **+64**.
 - **Check out** takes the credits and puts the order in the player's inventory as **one chest holding the
   items** (named "Shop order"). They pay for the chest too. They must be online on a server with
-  DiscordLinkedFAD and have a free inventory slot; otherwise nothing is charged. Every order (and every refused
+  DiscordLinkedBackend and have a free inventory slot; otherwise nothing is charged. Every order (and every refused
   one) is in the Logs (**Shop orders** filter) and in the player's credit history.
 - Only items that exist in your servers' Minecraft version are offered. Things that can't be had in survival,
   or only make sense with extra data (spawn eggs, operator blocks, enchanted books, potions, maps) aren't sold.
@@ -114,8 +215,8 @@ the Discord join message shows it: ":green_circle: **Huzzeh** joined the server 
   gives them their own price percentage.
 
 **Market: selling for microcredits.** Players sell items in game for **microcredits**, a second currency with
-its own leaderboard, made for people building farms and factories. Needs DiscordLinked and DiscordLinkedFAD
-0.16.0 or newer.
+its own leaderboard, made for people building farms and factories. Selling can be switched off on single servers
+(see [Several servers](#several-servers)).
 - `/sell` opens a double chest: put items in and close it (or click **Sell now**) to sell them. The bottom row
   shows what it's all worth as you go; **Cancel** gives everything back. Leaving the game, dying or teleporting
   with it open gives everything back too, so nothing is sold by surprise.
@@ -138,8 +239,8 @@ its own leaderboard, made for people building farms and factories. Needs Discord
   under Community → Leaderboards → Microcredits. Player pages show their microcredits and rank; staff also see
   the sale history. The settings owner can turn selling off for single items or give them their own sell
   percentage in the Shop's **Edit items**. Sales and exchanges are in the Logs (**Sales & exchanges** filter).
-- If another plugin (like EssentialsX) already has `/sell` or `/worth`, rename DiscordLinkedFAD's commands in
-  its config.yml, or use `/discordlinkedfad:sell`.
+- If another plugin (like EssentialsX) already has `/sell` or `/worth`, rename these commands in
+  DiscordLinkedBackend's config.yml, or use `/discordlinkedfad:sell` (the commands kept DiscordLinkedFAD's prefix).
 
 **Groups: sharing microcredits.** Players team up on the website (Community → **Groups**):
 
@@ -161,13 +262,12 @@ its own leaderboard, made for people building farms and factories. Needs Discord
 
 **Cosmetics.** Shop → **Cosmetics** on the website sells things that aren't items, for credits only. They're
 bought once and kept; players switch them on and off under **Your unlocks** on their own profile (click your
-name in the top bar). One of each kind is on at a time, and a new purchase is switched on straight away. Needs
-DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers (0.20.0 for auras and particle looks).
+name in the top bar). One of each kind is on at a time, and a new purchase is switched on straight away.
 
 - **Prefixes** in front of the player's name in chat and the tab list, with `&` colour codes (`&b[Builder]`,
   `&6&l[Tycoon]`, hex as `&#ff88cc`). With **LuckPerms** on a server they're LuckPerms prefixes, so every chat
   and tab plugin that shows LuckPerms prefixes shows them. They're temporary (never saved in LuckPerms) and get
-  priority `cosmetics.prefix-priority` (DiscordLinkedFAD's config.yml, default 150). LuckPerms shows the
+  priority `cosmetics.prefix-priority` (DiscordLinkedBackend's config.yml, default 150). LuckPerms shows the
   highest-priority prefix: put it above your rank prefixes to replace them while it's on, or below them to only
   show it for players without one (or set up LuckPerms' prefix stacking to show both). Without LuckPerms the
   prefix goes in front of the player's display name.
@@ -180,7 +280,7 @@ DiscordLinkedFAD 0.18.0 or newer on the Minecraft servers (0.20.0 for auras and 
   swirls**, also get a colour menu (white, rainbow, a preset or any custom colour); every other particle always
   keeps its own colour. Changes show in game straight away, and the
   previews on the website use the same shapes. `cosmetics.trail-interval-ticks` (how often they're drawn,
-  default 2) and `cosmetics.trail-particles` (how many particles a cloud has) are in DiscordLinkedFAD's config.yml.
+  default 2) and `cosmetics.trail-particles` (how many particles a cloud has) are in DiscordLinkedBackend's config.yml.
 - **Profile cards**: a picture behind the player's name in the Players list, fading out to the right, and at
   the top of their profile. The settings owner makes them: Shop → Cosmetics → **Edit** → **New profile card**,
   drop in a PNG, JPEG or GIF (up to 8 MB) and set a price. Pictures are re-saved (only the pixels are kept) and
@@ -206,7 +306,7 @@ while they're logged in.
   **Home** (who's online and on which server, member and staff counts, newest members, recently online),
   **Players** (the list and simple profiles: Minecraft and Discord identity, member since, online or last seen,
   credits, playtime and advancements), **Community** (leaderboards, groups and interactions) and the **Shop** (items,
-  cosmetics, and selling & exchanging), the last two when DiscordLinkedFAD's features are on. Nothing administrative: no IPs, notes, suspensions, inventories,
+  cosmetics, and selling & exchanging), the last two when the community features are on. Nothing administrative: no IPs, notes, suspensions, inventories,
   logs, AFK time or credit history. The server enforces this, not just the page.
 - **Admins** (`admin-role-id`) get the admin view below. The **On duty** switch in the top bar (on by
   default) flips them to the community view and back; switching is logged.
@@ -214,7 +314,7 @@ while they're logged in.
   streamed screen.
 
 - **Players**: everyone who has played, linked or not, also from before DiscordLinked was installed
-  (DiscordLinkedSpy sends each server's player data, names and first and last time played, to the proxy when
+  (the backend plugin sends each server's player data, names and first and last time played, to the proxy when
   someone joins that server, at most every 12 hours). Each row has the Minecraft head, Discord avatar, names,
   UUID/ID, status (online with server, or offline with when they were last seen, e.g. "Offline · 3 days
   ago"), login streak and the action buttons. Show everyone, online, linked, not linked, staff or suspended
@@ -222,6 +322,8 @@ while they're logged in.
   or ID. Names are **gold** for admins (their Discord account has `admin-role-id`) and **dark red** for
   suspended players. People who used the website with Discord but never linked a Minecraft account are in the
   list too, as **Website only** (under Everyone and Not linked), with when they first and last visited.
+  With two or more servers there's also a server menu and a **Server A–Z** sort (see
+  [Several servers](#several-servers)).
 - **Find any player**: the search box in the top bar finds everyone who has ever connected, linked or not,
   by Minecraft name, UUID, Discord name or Discord ID.
 - **Player page** (click any name): profile with a NameMC link, Discord details, current suspension,
@@ -240,14 +342,16 @@ while they're logged in.
     current items are saved as a "Before restore" snapshot first, so a restore can be undone. If the player
     is offline, the restore is applied when they next join. Restores are logged and posted to the log
     channel. `inventory-snapshots-per-player` (default 100) sets how many are kept.
-  - Needs the companion plugin. Item icons are loaded by your browser from the `minecraft-textures`
-    package on jsDelivr.
+  - Needs DiscordLinkedBackend on the servers. Item icons are loaded by your browser from the
+    `minecraft-textures` package on jsDelivr.
 - **Settings** (the gear icon, only visible to one person): change the plugin's settings from the browser:
   linking, Discord channels and roles, chat bridge, logging and how long logs are kept, snapshot limits and
   age, spy distance, website and Google Sheets. Changes are written into `config.properties` (comments kept)
   and most apply immediately; ones marked "needs restart" apply after the next proxy restart. Every change
   is logged. The bot token and client secret only show as set / not set and can't be changed here. A Data
   section shows the database size and has **Clean up now** and **Compact database** buttons.
+  **Backend servers** near the top lists every Minecraft server and has their switches for earning credits
+  and microcredits, and the default server (see [Several servers](#several-servers)).
   Only the Discord server's owner can see Settings, unless `web-owner-id` names someone else.
 - **Retention**: `chat-log-retention-days` (default 90) and `log-retention-days` (default forever) delete
   old logs, and `inventory-snapshot-retention-days` old snapshots. Cleanup runs hourly.
@@ -270,10 +374,13 @@ while they're logged in.
   `http://localhost:<web-port>`, and put its token in `web-tunnel-token`.
 - **Teleports**: on a player page, **Teleport to them** puts your own Minecraft character where they are (or,
   if they're offline, where they logged out) and **Teleport to their bed** at their bed or respawn anchor,
-  moving you to their server first if needed. Needs DiscordLinkedSpy 0.14+ on the servers; logout spots are
-  saved from then on (older ones come from the server's own player data). Logged as **Teleport**.
+  moving you to their server first if needed. Needs DiscordLinkedBackend on the servers. It saves where players
+  log out; for anyone who hasn't logged out since it (or DiscordLinkedSpy 0.14+) was installed, the spot comes
+  from the server's own player data. Logged as **Teleport**.
 - **Logs**: every event, newest first, filterable and searchable, with **Download CSV** and
-  **Export to Google Sheets** buttons (also on each player page for just that player).
+  **Export to Google Sheets** buttons (also on each player page for just that player). Every event is saved
+  with the server it happened on (the exports have a Server column), and with two or more servers there's a
+  server menu (see [Several servers](#several-servers)).
 
 Suspended players are kicked if online and can't join until the suspension ends, even with
 `discordlinked.bypass`. Unlinked players can be suspended too (e.g. alts), which stops them joining once
@@ -304,21 +411,8 @@ filterable by server, with **Spy**, **Kick** and **Suspend** buttons.
 - Every session's start and end, with its length and why it ended, is in the logs (**Spy sessions**
   filter) and the Discord log channel.
 
-Spy and the inventory viewer need the small companion plugin on the Minecraft servers, because Velocity
-itself can't teleport players, change game modes or see inventories:
-
-1. Download **DiscordLinked** from the GitHub Actions run; the zip contains three jars.
-2. `DiscordLinked-x.y.z.jar` goes in Velocity's `plugins/` folder as before.
-3. `DiscordLinkedSpy-x.y.z.jar` goes in the `plugins/` folder of **every Paper, Purpur or Folia server**
-   behind the proxy (1.20.4 or newer). It has no config. On Folia it schedules everything on each player's
-   own region thread, so the admin and the player can be in different regions. It also tells the proxy
-   who has ever played on that server, for the website's Players list.
-4. `DiscordLinkedFAD-x.y.z.jar` (optional) goes next to it for interactions and credits; see
-   [Community](#community-interactions--credits-discordlinkedfad).
-
-The proxy and the companion plugin talk over Minecraft's plugin messaging channel, and the proxy drops any
-such message sent by a player's client, so players can't trigger it. As with any Velocity network, make
-sure your backend servers can't be joined directly, bypassing the proxy.
+Spy and the inventory viewer need [DiscordLinkedBackend](#the-backend-plugin-discordlinkedbackend) on the
+Minecraft servers, because Velocity itself can't teleport players, change game modes or see inventories.
 
 ### Setting it up
 
@@ -404,8 +498,8 @@ Discord:
 | `/history <player>` | Moderate Members | Last 20 tracked events |
 | `/forceunlink <player>` | Moderate Members | Remove someone's link |
 | `/dla` | everyone | One-time login link for the website |
-| `/credits [player]`, `/leaderboard` | everyone | Credits (with DiscordLinkedFAD) |
-| `/hug @someone`, `/kiss`, `/meow`… | everyone | Interactions from DiscordLinkedFAD's config.yml |
+| `/credits [player]`, `/leaderboard` | everyone | Credits |
+| `/hug @someone`, `/kiss`, `/meow`… | everyone | Interactions from DiscordLinkedBackend's config.yml |
 | `/interactions enabled:<True/False>` | everyone | Let others pick you for interactions, or not |
 | `/mct [player]` | everyone | Microcredit leaderboard (with selling on) |
 
@@ -418,9 +512,10 @@ Admin command visibility can be changed in Server Settings → Integrations → 
 
 In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`.
 
-In game with DiscordLinkedFAD: every interaction (`/hug <player>`…), `/interactions [off|on]`,
+In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, and
-`/discordlinkedfad reload` (op).
+`/discordlinkedbackend reload` (or `/dlb reload`; op). Their permissions are under
+[The backend plugin](#the-backend-plugin-discordlinkedbackend).
 
 `/dla` (in Discord and in game) is the way to the website, for everyone: a one-time login link. Admins get the
 admin view; with `web-member-access` on, everyone else in the Discord server gets the community view, linked to
@@ -440,8 +535,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.21.1.jar` (Velocity), `spy-paper/build/libs/DiscordLinkedSpy-0.21.1.jar`
-and `fad-paper/build/libs/DiscordLinkedFAD-0.21.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.22.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.22.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup
@@ -453,3 +548,5 @@ download them from the run's **Artifacts** section.
    `plugins/discordlinked/config.properties` and `messages.properties`.
 4. Fill in `bot-token` and `guild-id` (and optionally `linked-role-id`, `log-channel-id`), then restart.
    If you use a linked role, drag the bot's role above it in Server Settings → Roles.
+5. Put `DiscordLinkedBackend-x.y.z.jar` in the `plugins/` folder of every Minecraft server behind the proxy
+   (see [The backend plugin](#the-backend-plugin-discordlinkedbackend)).

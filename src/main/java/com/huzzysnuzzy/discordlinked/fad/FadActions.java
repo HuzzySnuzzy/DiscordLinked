@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The interactions the Minecraft servers offer, as last sent by DiscordLinkedFAD (from its config.yml). Saved to
+ * The interactions the Minecraft servers offer, as last sent by the backend plugin (from its config.yml). Saved to
  * {@code fad-actions.json} so Discord's slash commands work right after a proxy restart. Also turns an
  * interaction line into chat text for Minecraft and Discord.
  */
@@ -70,12 +70,12 @@ public final class FadActions {
                 currentJson = json;
             } catch (IOException | RuntimeException e) {
                 logger.warn("Couldn't read {}; it will be sent again when a player joins a server with "
-                        + "DiscordLinkedFAD: {}", file.getFileName(), e.getMessage());
+                        + "DiscordLinkedBackend: {}", file.getFileName(), e.getMessage());
             }
         }
     }
 
-    /** The current interactions, or null if no server with DiscordLinkedFAD has connected yet. */
+    /** The current interactions, or null if no server with the backend plugin has connected yet. */
     public Definitions current() {
         return current;
     }
