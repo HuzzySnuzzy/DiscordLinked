@@ -1927,6 +1927,8 @@ function renderInteractions() {
       el('li', {}, `${credits(r.playtimeAmount, d.currency)} for every ${r.playtimeMinutes} minutes of active play`),
       el('li', {}, `${r.task} / ${r.goal} / ${credits(r.challenge, d.currency)} for each new advancement (task / goal / challenge)`),
       el('li', {}, 'A daily reward for your first join of the day, more the longer your streak')),
+    r.creditsOff?.length > 0 && el('p', { class: 'muted' },
+      `Playtime and advancements don't earn ${d.currency.many} on ${r.creditsOff.join(', ')}.`),
     state.me.isOwner && el('p', { class: 'muted' }, `Rename ${d.currency.many} or change what players earn in `,
       el('a', { href: '#/settings' }, 'Settings'), '.'));
   keepFocus($('community-interactions'), () => $('community-interactions')
@@ -4071,7 +4073,7 @@ function fillMarket() {
       } }, `${cur.many} leaderboard →`));
   }
 
-  $('market-how').replaceChildren(el('h2', {}, 'How to sell'),
+  $('market-how').replaceChildren(...[el('h2', {}, 'How to sell'),
     el('ul', { class: 'market-how' },
       el('li', {}, el('code', {}, '/sell'), ' opens a chest: put items in and close it.'),
       el('li', {}, el('code', {}, '/sellhand'), ' sells what you hold, ', el('code', {}, '/sellhand all'), ' every one of it you have.'),
@@ -4080,7 +4082,8 @@ function fillMarket() {
     el('p', { class: 'muted' }, `Items sell for ${d.sellPercent}% of their Shop price. Enchanted, named, damaged or filled items can't be sold.`
       + (d.dropping ? ` Prices drop the more of an item everyone sells (half price after ${d.dropAfter.toLocaleString()} `
         + `${d.credits.many}' worth) and recover over time (halfway every ${d.recoveryHours} hours).` : '')),
-    el('p', { class: 'muted market-totals' }, `${micro(d.held, cur)} held · ${micro(d.earned, cur)} earned by everyone`));
+    d.sellOff?.length > 0 && el('p', { class: 'muted' }, `Selling is off on ${d.sellOff.join(', ')}.`),
+    el('p', { class: 'muted market-totals' }, `${micro(d.held, cur)} held · ${micro(d.earned, cur)} earned by everyone`)].filter(Boolean));
 
   const marketTab = $('market-search').value.trim() ? null : market.tab; // searching shows every category
   $('market-tabs').replaceChildren(...SHOP_TABS.map(([tab, icon]) => el('button', {

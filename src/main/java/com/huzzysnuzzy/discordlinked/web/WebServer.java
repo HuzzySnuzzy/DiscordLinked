@@ -78,6 +78,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
@@ -1221,7 +1222,8 @@ public final class WebServer {
                         .put("playtimeMinutes", c.creditsPlaytimeMinutes())
                         .put("task", c.creditsAdvancementTask())
                         .put("goal", c.creditsAdvancementGoal())
-                        .put("challenge", c.creditsAdvancementChallenge()))
+                        .put("challenge", c.creditsAdvancementChallenge())
+                        .put("creditsOff", serversWithout(BackendServers.Server::creditsEnabled)))
                 .put("discordCommands", c.fadDiscordCommands())
                 .put("synced", definitions != null)
                 .put("market", plugin.community().market().open())
@@ -1230,6 +1232,12 @@ public final class WebServer {
                 .put("recent", recent)
                 .put("actions", actions)
                 .put("servers", servers);
+    }
+
+    /** The servers in Velocity's config that have this switch turned off, so players can be told (A-Z). */
+    private DataArray serversWithout(Predicate<BackendServers.Server> enabled) {
+        return DataArray.fromCollection(plugin.servers().list().stream()
+                .filter(s -> s.registered() && !enabled.test(s)).map(BackendServers.Server::name).toList());
     }
 
     // ---- Shop ----
@@ -1940,6 +1948,7 @@ public final class WebServer {
                 .put("dropping", c.sellPriceDrop())
                 .put("dropAfter", c.sellPriceDropAfter())
                 .put("recoveryHours", c.sellPriceRecoveryHours())
+                .put("sellOff", serversWithout(BackendServers.Server::microEnabled))
                 .put("held", totals.getOrDefault("micro", 0L))
                 .put("earned", totals.getOrDefault("microEarned", 0L))
                 .put("manage", session.staff() && isOwner(session))
