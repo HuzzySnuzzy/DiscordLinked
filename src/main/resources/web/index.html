@@ -64,6 +64,7 @@
           <option value="market">Sales &amp; exchanges</option>
           <option value="cosmetics">Cosmetic purchases &amp; gifts</option>
         </select>
+        <select id="logs-server" aria-label="Filter logs by server" hidden><option value="">All servers</option></select>
         <input id="logs-search" type="search" placeholder="Player or admin name…" aria-label="Search logs">
         <button id="logs-csv" class="btn btn-ghost" type="button">Download CSV</button>
         <button id="logs-sheets" class="btn btn-ghost" type="button" hidden>Export to Google Sheets</button>
@@ -99,6 +100,7 @@
         <h1>Players <span id="players-count" class="count"></span></h1>
         <div class="legend" id="players-legend"></div>
         <select id="players-show" aria-label="Which players"></select>
+        <select id="players-server" aria-label="Filter players by server" hidden><option value="">All servers</option></select>
         <select id="players-sort" aria-label="Sort players"></select>
         <input id="players-search" type="search" placeholder="Filter players…" aria-label="Filter players">
       </div>

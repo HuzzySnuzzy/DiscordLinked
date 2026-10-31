@@ -237,7 +237,8 @@ function playerName(p, extraClass = '') {
   return el('a', { class: `name ${nameClass(p)} ${extraClass}`, href: playerHref(p.uuid) }, p.minecraftName);
 }
 
-function statusPills(p) {
+/** With lastServer, an offline player's pill says which server they were on last (the Players list, while it shows every server). */
+function statusPills(p, { lastServer = false } = {}) {
   const pills = [];
   if (p.suspension) {
     pills.push(el('span', { class: 'pill suspended' }, `Suspended · ${formatRemaining(p.suspension.expiresAt)} left`));
@@ -248,8 +249,9 @@ function statusPills(p) {
   } else if (p.online) {
     pills.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
   } else if (!p.suspension) {
-    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}` : 'Offline · never played';
-    pills.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}` : null }, seen));
+    const where = lastServer && p.lastServer && (state.me?.servers || []).length > 1 ? ` on ${p.lastServer}` : '';
+    const seen = p.lastSeen ? `Offline · ${timeAgo(p.lastSeen)}${where}` : 'Offline · never played';
+    pills.push(el('span', { class: 'pill', title: p.lastSeen ? `Last seen ${formatTime(p.lastSeen)}${where}` : null }, seen));
   }
   if (p.onWebsite) pills.push(el('span', { class: 'pill web', title: 'Has this website open right now' }, 'On the website'));
   return pills;
@@ -530,6 +532,39 @@ function remember(key, value) {
   try { localStorage.setItem(key, value); } catch (e) { /* storage unavailable */ }
 }
 
+// ---- Server menus (Players, Moderate and Logs) ----
+
+/** Server names match whatever their case (Velocity's config and older rows can spell them differently). */
+const sameServer = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+/** Each server menu's choice on this visit, for when localStorage isn't available. */
+const serverChoices = {};
+
+/**
+ * Fills a server menu with All servers and every backend server, and selects what this viewer picked there last time
+ * (remembered per page), or else the default server from Settings (Logs start on All servers). Servers someone is on
+ * that the list doesn't have yet can be added with extra. With only one server the menu stays hidden.
+ */
+function fillServerMenu(select, key, { useDefault = true, extra = [] } = {}) {
+  const names = [...(state.me.servers || [])];
+  for (const name of extra) if (name && !names.some((n) => sameServer(n, name))) names.push(name);
+  names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  const find = (name) => names.find((n) => sameServer(n, name)) || '';
+  const picked = serverChoices[key] ?? stored(key);
+  select.replaceChildren(el('option', { value: '' }, 'All servers'), ...names.map((name) => el('option', { value: name }, name)));
+  // "" is a choice too (All servers); a server that's gone falls back to the default.
+  select.value = names.length < 2 || picked === '' ? '' : find(picked) || (useDefault ? find(state.me.defaultServer) : '');
+  select.hidden = names.length < 2;
+}
+
+function rememberServer(select, key) {
+  serverChoices[key] = select.value;
+  remember(key, select.value);
+}
+
+/** The server a player is on, or else the one they were last on ('' if there's none). */
+const playerServer = (p) => (p.online && p.server) || p.lastServer || '';
+
 /** When they joined the community: when they linked, or else when they first played. */
 const joinedAt = (p) => p.linkedAt || p.firstPlayed || null;
 
@@ -546,11 +581,14 @@ const SORTS = {
   streak: (a, b) => ((b.streak || 0) - (a.streak || 0)) || SORTS.seen(a, b),
   admins: (a, b) => (b.isAdmin - a.isAdmin) || SORTS['name-asc'](a, b),
   suspended: (a, b) => (!!b.suspension - !!a.suspension) || SORTS['name-asc'](a, b),
+  // Servers A–Z (players without one last), then recently seen on each.
+  server: (a, b) => (!playerServer(a) - !playerServer(b))
+    || playerServer(a).localeCompare(playerServer(b), undefined, { sensitivity: 'base' }) || SORTS.seen(a, b),
 };
 // [value, label, staff only]
 const PLAYER_SORTS = [['seen', 'Recently seen'], ['online', 'Online first'], ['name-asc', 'Name A–Z'],
-  ['name-desc', 'Name Z–A'], ['joined-new', 'Newest members'], ['joined-old', 'Oldest members'], ['streak', 'Longest streak'],
-  ['admins', 'Staff first'], ['suspended', 'Suspended first', true]];
+  ['name-desc', 'Name Z–A'], ['server', 'Server A–Z'], ['joined-new', 'Newest members'], ['joined-old', 'Oldest members'],
+  ['streak', 'Longest streak'], ['admins', 'Staff first'], ['suspended', 'Suspended first', true]];
 const PLAYER_FILTERS = [['all', 'Everyone'], ['online', 'Online now'], ['linked', 'Linked members'],
   ['unlinked', 'Not linked'], ['staff', 'Staff'], ['suspended', 'Suspended', true]];
 const PLAYER_FILTER_TESTS = {
@@ -558,16 +596,19 @@ const PLAYER_FILTER_TESTS = {
   staff: (p) => p.isAdmin, suspended: (p) => !!p.suspension,
 };
 
-/** The sort and filter menus differ for staff and everyone else. */
+/** The sort and filter menus differ for staff and everyone else, and the server ones only show with two or more servers. */
 function setupPlayerControls() {
   const staff = isStaff();
+  const servers = (state.me.servers || []).length > 1;
   const fill = (select, options, current, fallback) => {
     select.replaceChildren(...options.filter(([, , staffOnly]) => staff || !staffOnly)
       .map(([value, label]) => el('option', { value }, label)));
     select.value = [...select.options].some((o) => o.value === current) ? current : fallback;
   };
-  fill($('players-sort'), PLAYER_SORTS, $('players-sort').value || stored('dl-players-sort'), 'seen');
+  fill($('players-sort'), PLAYER_SORTS.filter(([value]) => servers || value !== 'server'),
+    $('players-sort').value || stored('dl-players-sort'), 'seen');
   fill($('players-show'), PLAYER_FILTERS, $('players-show').value, 'all');
+  fillServerMenu($('players-server'), 'dl-players-server');
   $('players-legend').replaceChildren(...[el('span', {}, el('i', { class: 'dot dot-admin' }), ' Staff'),
     staff && el('span', {}, el('i', { class: 'dot dot-suspended' }), ' Suspended')].filter(Boolean));
 }
@@ -595,7 +636,9 @@ function renderPlayers() {
   const staff = isStaff();
   const members = state.members || [];
   const query = $('players-search').value.trim().toLowerCase();
-  const shown = members.filter(PLAYER_FILTER_TESTS[$('players-show').value] || PLAYER_FILTER_TESTS.all);
+  const server = $('players-server').value;
+  const shown = members.filter(PLAYER_FILTER_TESTS[$('players-show').value] || PLAYER_FILTER_TESTS.all)
+    .filter((p) => !server || sameServer(playerServer(p), server));
   const rows = shown
     .filter((p) => !query || [p.minecraftName || '', p.uuid || '', p.discordName || '', staff ? p.discordId || '' : '']
       .some((value) => value.toLowerCase().includes(query)))
@@ -631,7 +674,7 @@ function cardBackdrop(url) {
 function playerRow(p) {
   const staff = isStaff();
   const joined = joinedAt(p);
-  const status = [...statusPills(p), streakChip(p.streak, p.bestStreak)];
+  const status = [...statusPills(p, { lastServer: !$('players-server').value }), streakChip(p.streak, p.bestStreak)];
   if (staff && p.suspension) {
     status.push(el('div', { class: 'suspension-note' },
       `Until ${formatTime(p.suspension.expiresAt)} — "${p.suspension.reason}" — by `,
@@ -671,6 +714,10 @@ function playerRow(p) {
 const resetPlayersLimit = () => { state.playersLimit = 200; renderPlayers(); };
 $('players-search').addEventListener('input', resetPlayersLimit);
 $('players-show').addEventListener('change', resetPlayersLimit);
+$('players-server').addEventListener('change', () => {
+  rememberServer($('players-server'), 'dl-players-server');
+  resetPlayersLimit();
+});
 $('players-sort').addEventListener('change', () => {
   remember('dl-players-sort', $('players-sort').value);
   resetPlayersLimit();
@@ -681,7 +728,7 @@ $('players-more').addEventListener('click', () => { state.playersLimit = (state.
 
 function logParams(uuid) {
   if (uuid) return new URLSearchParams({ filter: 'all', q: '', uuid });
-  return new URLSearchParams({ filter: $('logs-filter').value, q: $('logs-search').value.trim() });
+  return new URLSearchParams({ filter: $('logs-filter').value, q: $('logs-search').value.trim(), server: $('logs-server').value });
 }
 
 async function loadLogs(reset) {
@@ -707,7 +754,7 @@ async function loadLogs(reset) {
     state.logsBefore = data.nextBefore;
     $('logs-more').hidden = !data.nextBefore;
     $('logs-empty').hidden = $('logs-body').children.length > 0;
-    $('logs-empty').textContent = $('logs-filter').value !== 'all' || $('logs-search').value.trim()
+    $('logs-empty').textContent = $('logs-filter').value !== 'all' || $('logs-server').value || $('logs-search').value.trim()
       ? 'No log entries match this filter.' : 'Nothing logged yet.';
   } catch (e) {
     if (seq !== state.logsSeq) return;
@@ -756,7 +803,7 @@ async function exportSheets(button, uuid) {
   try {
     const params = logParams(uuid);
     const data = await api('/api/logs/export-sheets',
-      { filter: params.get('filter'), q: params.get('q'), uuid: params.get('uuid') || '' });
+      { filter: params.get('filter'), q: params.get('q'), uuid: params.get('uuid') || '', server: params.get('server') || '' });
     toast(`Exported ${data.rows} rows.`, { href: data.url, text: 'Open spreadsheet' });
   } catch (e) {
     toast(e.message);
@@ -772,6 +819,10 @@ $('logs-search').addEventListener('input', () => {
   searchTimer = setTimeout(() => loadLogs(true), 300);
 });
 $('logs-filter').addEventListener('change', () => loadLogs(true));
+$('logs-server').addEventListener('change', () => {
+  rememberServer($('logs-server'), 'dl-logs-server');
+  loadLogs(true);
+});
 $('logs-more').addEventListener('click', () => loadLogs(false));
 $('logs-csv').addEventListener('click', () => downloadCsv());
 $('logs-sheets').addEventListener('click', (e) => exportSheets(e.currentTarget));
@@ -1301,7 +1352,7 @@ function renderInventoryNow() {
     return;
   }
   if (!inv.snapshots.length) {
-    box.replaceChildren(el('p', { class: 'muted' }, 'No snapshots yet. They are saved on death, join, quit and world change (needs the DiscordLinkedSpy plugin).'));
+    box.replaceChildren(el('p', { class: 'muted' }, 'No snapshots yet. They are saved on death, join, quit and world change (needs DiscordLinkedBackend on the server).'));
     return;
   }
   const list = el('div', { class: 'snap-list' }, inv.snapshots.map((snap) => {
@@ -1545,7 +1596,7 @@ $('global-search').addEventListener('blur', (e) => {
   if (e.relatedTarget && !e.relatedTarget.closest('.global-search')) hideGlobalResults();
 });
 
-// ---- Community: credits and interactions (DiscordLinkedFAD) ----
+// ---- Community: credits and interactions (from DiscordLinkedBackend) ----
 
 /** "1 Pawbuck", "1,250 Pawbucks". */
 const credits = (n, currency) => `${n.toLocaleString()} ${Math.abs(n) === 1 ? currency.one : currency.many}`;
@@ -1636,7 +1687,7 @@ function communitySection(p, c) {
         el('td', {}, a.server),
         el('td', { class: 'nowrap muted' }, formatTime(a.earnedAt)));
     }))))
-    : emptyCard(staff ? 'No advancements since DiscordLinkedFAD was installed.' : 'No advancements yet.');
+    : emptyCard(staff ? 'No advancements since the backend plugin was installed.' : 'No advancements yet.');
 
   return [
     el('h2', { class: 'section-title' }, `${currency.many} & interactions`,
@@ -1848,7 +1899,7 @@ function renderInteractions() {
         el('span', { title: formatTime(i.time) }, timeAgo(i.time))))))
       : el('p', { class: 'muted' }, 'No interactions yet.'));
   const servers = d.servers.map((x) => `${x.name} (${x.version})`).join(', ');
-  // Members only see the commands once DiscordLinkedFAD has sent them; staff are told how to get there.
+  // Members only see the commands once the backend plugin has sent them; staff are told how to get there.
   const actions = (d.synced || isStaff()) && el('div', { class: 'card panel' },
     el('h2', {}, d.synced ? withCount('Interaction commands', d.actions.length) : 'Interaction commands'),
     d.synced
@@ -1856,13 +1907,13 @@ function renderInteractions() {
         class: 'chip', title: `${a.description} · ${a.lines} lines · ${a.target === 'required' ? 'needs a player' : a.target === 'optional' ? 'player optional' : 'no player'}`,
       }, `/${a.name} · ${a.uses.toLocaleString()}`)))
       : el('p', { class: 'muted' }, d.servers.length
-        ? `DiscordLinkedFAD is running on ${servers}; its commands show up here once a player joins.`
-        : 'Put DiscordLinkedFAD on your Minecraft servers; its interactions show up here once a player joins one of them.'),
+        ? `The backend plugin is running on ${servers}; its commands show up here once a player joins.`
+        : 'Put DiscordLinkedBackend on your Minecraft servers; its interactions show up here once a player joins one of them.'),
     d.synced && el('p', { class: 'muted' }, d.discordCommands
       ? 'These also work as slash commands in Discord (e.g. /hug @someone).'
       : isStaff() && 'Slash commands for these are turned off in Settings.'),
-    d.synced && d.servers.length > 0 && el('p', { class: 'muted' }, `DiscordLinkedFAD is running on ${servers}.`),
-    isStaff() && el('p', { class: 'muted' }, 'The lines, sounds and commands are set in DiscordLinkedFAD\'s config.yml on each server.'));
+    d.synced && d.servers.length > 0 && el('p', { class: 'muted' }, `The backend plugin is running on ${servers}.`),
+    isStaff() && el('p', { class: 'muted' }, 'The lines, sounds and commands are set in DiscordLinkedBackend\'s config.yml on each server.'));
   const earning = el('div', { class: 'card panel' },
     el('h2', {}, `How to earn ${d.currency.many}`),
     el('ul', { class: 'market-how' },
@@ -2057,12 +2108,9 @@ async function loadModerate() {
 function renderModerate() {
   const data = state.online;
   if (!data) return;
+  // Every server, with or without players on it, starting on the default server.
   const select = $('moderate-server');
-  const servers = [...new Set(data.players.map((p) => p.server).filter(Boolean))].sort();
-  const chosen = select.value;
-  select.replaceChildren(el('option', { value: '' }, 'All servers'), ...servers.map((s) => el('option', { value: s }, s)));
-  select.value = servers.includes(chosen) ? chosen : '';
-  select.hidden = servers.length < 2 && !select.value;
+  fillServerMenu(select, 'dl-moderate-server', { extra: data.players.map((p) => p.server) });
 
   const self = $('moderate-self');
   const selfText = {
@@ -2075,13 +2123,16 @@ function renderModerate() {
 
   const query = $('moderate-search').value.trim().toLowerCase();
   const players = data.players
-    .filter((p) => !select.value || p.server === select.value)
+    .filter((p) => !select.value || sameServer(p.server, select.value))
     .filter((p) => !query || [p.minecraftName, p.discordName || ''].some((v) => v.toLowerCase().includes(query)))
     .sort(SORTS['name-asc']);
-  $('moderate-count').textContent = `(${data.players.length.toLocaleString()} online)`;
+  $('moderate-count').textContent = select.value || query
+    ? `(${players.length.toLocaleString()} of ${data.players.length.toLocaleString()} online)`
+    : `(${data.players.length.toLocaleString()} online)`;
   keepFocus($('moderate-grid'), () => $('moderate-grid').replaceChildren(...players.map((p) => moderateCard(p, data.selfStatus === 'online'))));
   const empty = $('moderate-empty');
-  empty.textContent = data.players.length ? 'No players match your filter.' : 'Nobody is online right now.';
+  empty.textContent = !data.players.length ? 'Nobody is online right now.'
+    : select.value && !query ? `Nobody is on ${select.value} right now.` : 'No players match your filter.';
   empty.hidden = players.length > 0;
 }
 
@@ -2111,7 +2162,10 @@ function moderateCard(p, canSpy) {
 }
 
 $('moderate-search').addEventListener('input', renderModerate);
-$('moderate-server').addEventListener('change', renderModerate);
+$('moderate-server').addEventListener('change', () => {
+  rememberServer($('moderate-server'), 'dl-moderate-server');
+  renderModerate();
+});
 
 // ---- Spy sessions: while one runs, the whole site is locked behind this panel ----
 
@@ -2264,6 +2318,8 @@ const settingsEdits = {};
 
 async function loadSettings() {
   if (!state.settings) $('settings-body').replaceChildren(loadingNote());
+  // Alongside the rest: the servers are pinged first if they haven't been lately, which can take a moment.
+  const servers = loadServers();
   try {
     state.settings = await api('/api/settings');
   } catch (e) {
@@ -2281,6 +2337,7 @@ async function loadSettings() {
   } catch (e) {
     state.domain = null;
   }
+  await servers;
   renderSettings();
   watchDomain();
 }
@@ -2401,6 +2458,155 @@ function domainCard() {
   return card;
 }
 
+// ---- Backend servers: each server's status and plugin, and where players earn ----
+
+/** Servers whose settings are open (they stay open through refreshes), by lower-case name. */
+const serversOpen = new Set();
+
+/** Fetches the server list; a later failure keeps showing the last one. */
+async function loadServers() {
+  try {
+    state.servers = await api('/api/settings/servers');
+    state.serversError = null;
+  } catch (e) {
+    state.serversError = e.message;
+  }
+}
+
+function renderServersCard() {
+  const card = $('servers-card');
+  if (card) keepFocus($('settings-body'), () => card.replaceWith(serversCard()));
+}
+
+/** Reloads just the Backend servers card (Settings refreshes it every 30 seconds for the servers' status). */
+async function refreshServers() {
+  await loadServers();
+  renderServersCard();
+}
+
+/** A saved change: the new list, and the server menus on the other pages follow the new default. */
+function applyServers(result) {
+  state.servers = result;
+  state.serversError = null;
+  state.me.servers = result.servers.map((s) => s.name);
+  state.me.defaultServer = result.defaultServer;
+  applyMode();
+  renderServersCard();
+}
+
+/** Switches and the default server are saved as soon as they change; a refused change flips back. */
+async function saveServer(body, control) {
+  control.disabled = true;
+  try {
+    const result = await api('/api/settings/servers', body);
+    applyServers(result);
+    toast(result.message);
+  } catch (e) {
+    toast(e.message);
+    renderServersCard();
+  }
+}
+
+/** A saved setting's value (not an unsaved edit), e.g. what credits are called. */
+const savedSetting = (key) => state.settings?.groups.flatMap((g) => g.fields).find((f) => f.key === key)?.value;
+
+/** Parts of a line with " · " between them. */
+const dotted = (parts) => parts.filter(Boolean).flatMap((part, i) => (i ? [' · ', part] : [part]));
+
+function serversCard() {
+  const card = el('div', { class: 'card panel settings-group', id: 'servers-card' }, el('h2', {}, 'Backend servers'));
+  const data = state.servers;
+  if (!data) {
+    card.append(el('p', { class: 'muted', role: 'alert' }, state.serversError || 'Loading…', ' ', retryButton(refreshServers)));
+    return card;
+  }
+  const picker = el('select', { 'aria-label': 'Default server' }, el('option', { value: '' }, 'All servers'),
+    data.servers.map((s) => el('option', { value: s.name }, s.name)));
+  picker.value = data.defaultServer;
+  picker.addEventListener('change', () => saveServer({ defaultServer: picker.value }, picker));
+  card.append(
+    el('p', { class: 'muted' }, 'Every server in Velocity\'s config. Balances are shared by all of them. Each one needs '
+      + 'DiscordLinkedBackend for interactions, the shop, selling, snapshots and Spy.'),
+    el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' },
+        el('div', { class: 'setting-label' }, 'Default server'),
+        el('div', { class: 'setting-help' }, 'Where the server menus on Players and Moderate start, for anyone who hasn\'t picked one there.'),
+        el('div', { class: 'setting-key mono' }, 'default-server')),
+      el('div', { class: 'setting-input' }, picker)),
+    ...(data.servers.length ? data.servers.map(serverEntry)
+      : [el('p', { class: 'muted' }, 'No servers yet. They\'re listed here from Velocity\'s config.')]));
+  return card;
+}
+
+function serverEntry(s) {
+  const creditsName = savedSetting('credits-name-plural') || 'credits';
+  const microName = savedSetting('microcredits-name-plural') || 'microcredits';
+  const key = s.name.toLowerCase();
+  const p = s.plugin;
+  const status = s.registered
+    ? el('span', { class: `pill ${s.online ? 'online' : ''}`, title: s.checkedAt ? `Checked ${timeAgo(s.checkedAt)}` : null },
+      s.online ? 'Online' : s.online === false ? 'Offline' : 'Checking…')
+    : el('span', { class: 'badge warn' }, 'Not in Velocity\'s config');
+  // Players and TPS only while it's up (the last TPS stays for a while after a server goes down).
+  const up = s.registered && s.online;
+  const facts = dotted([
+    up && (s.maxPlayers === null ? `${s.players} player${s.players === 1 ? '' : 's'}` : `${s.players}/${s.maxPlayers} players`),
+    s.minecraftVersion && `Minecraft ${s.minecraftVersion}${p?.folia ? ' (Folia)' : ''}`,
+    up && s.tps !== null && el('span', { title: s.mspt !== null ? `${s.mspt} ms per tick` : null }, `TPS ${s.tps}`)]);
+  const plugin = dotted([
+    !p ? 'Backend plugin not installed' : p.old ? `${p.name} ${p.version} (old, replace with DiscordLinkedBackend)` : `${p.name} ${p.version}`,
+    s.lastSeen && el('span', { title: formatTime(s.lastSeen) }, `last seen ${timeAgo(s.lastSeen)}`)]);
+
+  const toggle = (label, help, field) => {
+    const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `${label} on ${s.name}` });
+    box.checked = s[field];
+    box.addEventListener('change', () => saveServer({ name: s.name, [field]: box.checked }, box));
+    return el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, label), el('div', { class: 'setting-help' }, help)),
+      el('div', { class: 'setting-input' }, el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }))));
+  };
+  const panel = el('div', { class: 'server-settings', hidden: !serversOpen.has(key) },
+    toggle(`Earn ${creditsName}`, `Off: playtime here still counts but pays nothing, and advancements made here are ignored, so `
+      + 'they can still pay on another server.', 'creditsEnabled'),
+    toggle(`Earn ${microName}`, `Off: players here can't sell items (/sell, /sellhand). Exchanging ${microName} for ${creditsName} `
+      + 'still works everywhere.', 'microEnabled'),
+    !s.registered && el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' },
+        el('div', { class: 'setting-label' }, 'Take it off the list'),
+        el('div', { class: 'setting-help' }, 'It\'s no longer in Velocity\'s config. Its log entries stay.')),
+      el('div', { class: 'setting-input' }, el('button', { class: 'btn btn-ghost btn-small danger', type: 'button', onclick: () => confirmDialog({
+        title: `Take ${s.name} off the list?`,
+        text: 'It goes from the server menus and its switches are forgotten. If it comes back in Velocity\'s config, it\'s added again.',
+        confirmLabel: 'Take off', confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          const result = await api('/api/settings/servers', { name: s.name, forget: true });
+          serversOpen.delete(key);
+          applyServers(result);
+          toast(result.message);
+        },
+      }) }, 'Remove'))));
+  const open = el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': `${s.name} settings`,
+    'aria-expanded': String(!panel.hidden), onclick: () => {
+      if (serversOpen.has(key)) serversOpen.delete(key); else serversOpen.add(key);
+      panel.hidden = !serversOpen.has(key);
+      open.textContent = panel.hidden ? 'Settings' : 'Hide settings';
+      open.setAttribute('aria-expanded', String(!panel.hidden));
+    } }, panel.hidden ? 'Settings' : 'Hide settings');
+
+  return el('div', { class: 'server', 'data-key': `server:${key}` },
+    el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' },
+        el('div', { class: 'setting-label' }, s.name, status,
+          s.isDefault && el('span', { class: 'badge info' }, 'Default'),
+          !s.creditsEnabled && el('span', { class: 'badge warn', title: `Players here don't earn ${creditsName}` }, `${creditsName} off`),
+          !s.microEnabled && el('span', { class: 'badge warn', title: `Players here can't sell for ${microName}` }, `${microName} off`),
+          p?.old && el('span', { class: 'badge warn' }, 'Old plugin')),
+        facts.length > 0 && el('div', { class: 'setting-help' }, facts),
+        el('div', { class: 'setting-help' }, plugin)),
+      el('div', { class: 'setting-input' }, open)),
+    panel);
+}
+
 const formatBytes = (n) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB`
   : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
 
@@ -2484,7 +2690,7 @@ function renderSettings() {
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'compact') }, 'Compact database')));
 
   keepFocus($('settings-body'), () => $('settings-body')
-    .replaceChildren(el('div', { class: 'settings-grid' }, state.domain?.tunnel && domainCard(), ...groups, secrets, dataCard)));
+    .replaceChildren(el('div', { class: 'settings-grid' }, state.domain?.tunnel && domainCard(), serversCard(), ...groups, secrets, dataCard)));
   updateSettingsBar();
 }
 
@@ -3160,7 +3366,7 @@ function styleText(style) {
 
 /**
  * Where a trail's or aura's particles are, as offsets from the feet in blocks: the same maths as
- * DiscordLinkedFAD's ParticleShapes, so the preview looks like the game. Seen from the front (yaw 0).
+ * DiscordLinkedBackend's ParticleShapes, so the preview looks like the game. Seen from the front (yaw 0).
  */
 function stylePoints(style, tick) {
   const pts = [];
@@ -3993,6 +4199,7 @@ function applyMode() {
   document.body.classList.toggle('member-view', !staff);
   $('brand').href = homeHash();
   $('logs-sheets').hidden = !state.me.sheetsEnabled;
+  fillServerMenu($('logs-server'), 'dl-logs-server', { useDefault: false });
   $('settings-link').hidden = !state.me.isOwner;
   $('duty').hidden = !state.me.isAdmin;
   $('duty').classList.toggle('off', state.me.isAdmin && !state.me.onDuty);
@@ -4075,6 +4282,7 @@ function prependLog(entry) {
   const filter = $('logs-filter').value;
   const query = $('logs-search').value.trim().toLowerCase();
   if (filter !== 'all' && !entry.filters.includes(filter)) return;
+  if ($('logs-server').value && !sameServer(entry.server, $('logs-server').value)) return;
   if (query && !`${entry.player} ${entry.actor}`.toLowerCase().includes(query)) return;
   const body = $('logs-body');
   const row = logRow(entry, true);
@@ -4272,6 +4480,8 @@ setInterval(() => {
   if (dialogOpen() || document.hidden) return;
   if (!$('view-home').hidden) loadHome();
   else if (!$('view-players').hidden) loadPlayers();
+  // Not while a menu in the card is open: it would close under the pointer.
+  else if (!$('view-settings').hidden && !document.activeElement?.closest('#servers-card select')) refreshServers();
 }, 30000);
 setInterval(() => {
   if (dialogOpen() || document.hidden || state.spy) return;

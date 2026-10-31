@@ -1095,6 +1095,10 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 .domain-step p { margin: 0; }
 .domain-login { margin: 6px 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--glass-soft); border: 1px solid var(--glass-border); }
 .domain-login p { margin: 4px 0; }
+/* ---- Settings: backend servers ---- */
+/* A server's switches open under it, inset like the Discord login box above. */
+.server-settings { margin: 0 0 12px; padding: 0 12px; border-radius: 12px; background: var(--glass-soft); border: 1px solid var(--glass-border); }
+.server-settings > .setting:first-child { border-top: none; }
 .msglog-state { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .msglog-note { font-size: 13px; margin-top: 2px; }
 
