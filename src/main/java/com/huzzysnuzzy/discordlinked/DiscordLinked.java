@@ -96,6 +96,7 @@ public final class DiscordLinked {
         proxy.getChannelRegistrar().register(InventoryRequests.CHANNEL);
         proxy.getEventManager().register(this, inventories);
         servers.start();
+        proxy.getEventManager().register(this, servers);
         community.start();
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),

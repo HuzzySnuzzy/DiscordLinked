@@ -2545,6 +2545,8 @@ function versionAtLeast(version, min) {
 const ANSWERS_PINGS_FROM = '0.22.1';
 /** It reports every 30 seconds, so a server heard from within this of its last ping counts as working. */
 const HEARD_RECENTLY_MS = 90 * 1000;
+/** A HELLO's plugin is decided within 10 seconds; a ping well after it with none decided means it never was. */
+const DECIDING_MS = 15 * 1000;
 
 /**
  * What a server's entry says about its backend plugin: the line, an optional help line under it and an optional
@@ -2556,25 +2558,27 @@ function serverPlugin(s, data) {
   const seen = s.lastSeen && el('span', { title: formatTime(s.lastSeen) }, `last seen ${timeAgo(s.lastSeen)}`);
   const unanswered = s.registered && s.online && data.probe && s.answered === false;
   if (!p) {
-    // Said hello; whether it's DiscordLinkedBackend or the old DiscordLinkedFAD is decided within 10 seconds.
-    if (s.lastSeen) return { line: dotted(['Reporting in…', seen]) };
+    // Said hello; whether it's DiscordLinkedBackend or the old DiscordLinkedFAD is decided within 10 seconds. A
+    // proxy restart in those seconds leaves it undecided, so later it's like a server never heard from.
+    if (s.lastSeen && s.checkedAt && s.checkedAt - s.lastSeen < DECIDING_MS) return { line: dotted(['Reporting in…', seen]) };
     if (unanswered) {
       const tooOld = versionAtLeast(s.minecraftVersion, '1.21.4') === false;
       if (tooOld) {
         return { badge: 'Plugin not found',
-          line: `DiscordLinkedBackend needs Minecraft 1.21.4 or newer (this server runs ${s.minecraftVersion})` };
+          line: dotted([`DiscordLinkedBackend needs Minecraft 1.21.4 or newer (this server runs ${s.minecraftVersion})`, seen]) };
       }
-      return { badge: 'Plugin not found', line: 'DiscordLinkedBackend not found',
+      return { badge: 'Plugin not found', line: dotted(['DiscordLinkedBackend not found', seen]),
         help: `Put DiscordLinkedBackend-${data.version}.jar in this server's plugins folder and restart it`
           + (s.players ? '. ' : ' (0.22.0 only reports in once a player joins). ')
           + 'If it\'s there, the server\'s console says why it\'s off, for example an old DiscordLinkedFAD or DiscordLinkedSpy jar.' };
     }
-    // Up, but the ping couldn't ask: Velocity is older than 3.4.0, or the server turned that ping away.
-    return { line: 'No backend plugin heard from yet', help: s.registered && s.online && (data.probe
-      ? 'The server didn\'t answer the proxy\'s status ping (a plugin there may turn away unknown host names), so '
-        + 'DiscordLinkedBackend reports in once a player joins it.'
-      : 'DiscordLinkedBackend reports in once a player joins this server. With Velocity 3.4.0 or newer, servers are '
-        + 'identified with nobody on them.') };
+    // Up, but the ping couldn't ask: this Velocity build can't, or the server turned that ping away.
+    return { line: s.lastSeen ? dotted(['No backend plugin identified yet', seen]) : 'No backend plugin heard from yet',
+      help: s.registered && s.online && (data.probe
+        ? 'The server answers pings, but turned away the proxy\'s status check (a plugin there may block unknown host '
+          + 'names), so DiscordLinkedBackend shows up once a player joins it.'
+        : 'DiscordLinkedBackend shows up once a player joins this server. Update Velocity (3.4.0 or newer, or a '
+          + '3.4.0-SNAPSHOT build from February 2025 or later) to have servers identified with nobody on them.') };
   }
   const name = p.version ? `${p.name} ${p.version}` : p.name;
   if (p.old) return { badge: 'Old plugin', line: dotted([`${name} (old, replace with DiscordLinkedBackend)`, seen]) };
@@ -2585,7 +2589,7 @@ function serverPlugin(s, data) {
   // Still reporting through a player (STATUS) counts as working. Both times are the proxy's, so the viewer's clock
   // doesn't matter.
   if (unanswered && !(s.lastSeen && s.checkedAt - s.lastSeen < HEARD_RECENTLY_MS)) {
-    return { badge: 'Not answering', line,
+    return { badge: 'Plugin not answering', line,
       help: 'It no longer answers the proxy\'s pings: it was removed, or it\'s off (the server\'s console says why).' };
   }
   return { line };

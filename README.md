@@ -98,14 +98,15 @@ If Settings → **Backend servers** says **Plugin not found** for a server, chec
 
 1. `DiscordLinkedBackend-x.y.z.jar` is in its `plugins/` folder (not in a subfolder), and the server was restarted
    after you put it there. `/plugins` in its console lists DiscordLinkedBackend in green when it's running.
-2. It's **Paper or Folia 1.21.4 or newer**. Older Paper refuses the jar ("Unsupported API version"), and Spigot
-   and CraftBukkit can't run it.
+2. It's **Paper or Folia 1.21.4 or newer**. Paper before 1.21 refuses the jar ("Unsupported API version"); Paper
+   1.21 to 1.21.3 may load it, but it isn't made for them and can fail with errors in the console, so update the
+   server. Spigot and CraftBukkit can't run it.
 3. The old jars are gone: while `DiscordLinkedFAD-….jar` or `DiscordLinkedSpy-….jar` is in `plugins/`,
    DiscordLinkedBackend says so in the console and switches itself off.
 4. The console from the server's start: an error from DiscordLinkedBackend there says why it didn't start.
 5. Both jars are up to date and the same version: `DiscordLinked-x.y.z.jar` on the proxy and
    `DiscordLinkedBackend-x.y.z.jar` on every server. DiscordLinkedBackend 0.22.0 only shows up once a player
-   joins; 0.22.1 and newer shows up within 30 seconds, with nobody on (on Velocity 3.4.0 or newer).
+   joins; 0.22.1 and newer shows up within 30 seconds, with nobody on (on Velocity 3.4.0 or newer, see below).
 
 ### Several servers
 
@@ -118,12 +119,15 @@ config with:
 - its backend plugin with the version, and when the proxy last heard from it.
 
 The proxy asks each server's DiscordLinkedBackend how it's doing in that same 30-second ping, so every server is
-identified even with nobody online. This needs **Velocity 3.4.0 or newer** and **DiscordLinkedBackend 0.22.1 or
+identified even with nobody online. This needs **Velocity 3.4.0 or newer** (or a 3.4.0-SNAPSHOT build from
+February 2025 or later: earlier 3.4.0-SNAPSHOT builds can't do it yet) and **DiscordLinkedBackend 0.22.1 or
 newer**. DiscordLinkedBackend 0.22.0 can only report while a player is on its server, so it shows up once someone
 joins, with a hint to update it. The proxy sends these pings to the host name `discordlinked-status.invalid` (a
 name that can't exist), and DiscordLinkedBackend answers only those with its status, so players' server lists never
-show it. On an older Velocity the proxy logs one line saying so and pings as before. If DiscordLinkedBackend can't
-answer a ping, it logs one warning in that server's console.
+show it (and with `ping-passthrough` on, someone who uses that name on purpose gets the proxy's own MOTD). A ping
+that another plugin on the server turns away stays turned away. On an older Velocity build the proxy logs one line
+saying so and pings as before. If DiscordLinkedBackend can't answer a ping, it logs one warning in that
+server's console.
 
 What a server's entry can say about its plugin:
 
@@ -132,12 +136,13 @@ What a server's entry can say about its plugin:
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same). See
   [Backend plugin not found?](#backend-plugin-not-found). On a server older than 1.21.4 it says
   DiscordLinkedBackend needs Minecraft 1.21.4 or newer.
-- **Not answering**: DiscordLinkedBackend answered before but doesn't any more, so it was removed or it switched
-  itself off (the server's console says why). The version it last reported stays.
+- **Plugin not answering**: DiscordLinkedBackend answered before but doesn't any more, so it was removed or it
+  switched itself off (the server's console says why). The version it last reported stays.
 - **Old plugin**: the server still runs DiscordLinkedFAD, "(old, replace with DiscordLinkedBackend)". A server
   with only an old DiscordLinkedSpy says Plugin not found.
-- "No backend plugin heard from yet": the proxy couldn't ask, because Velocity is older than 3.4.0 or a plugin on
-  that server turns away pings for unknown host names. It shows up once a player joins.
+- "No backend plugin heard from yet": the server is offline (or still being checked) and has never reported in, or
+  the proxy couldn't ask, because the Velocity build is too old or a plugin on that server turns away pings for
+  unknown host names. It shows up once a player joins.
 
 **Settings** next to a server opens its two switches (named after your currencies). They apply straight away,
 and every change is in the Logs (**Settings changes**, with the server's name):

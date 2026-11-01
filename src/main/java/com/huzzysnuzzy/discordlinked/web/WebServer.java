@@ -1207,9 +1207,11 @@ public final class WebServer {
                         .put("uses", uses.getOrDefault(a.name(), 0L)));
             }
         }
+        // Where the backend plugin runs, also servers nobody has joined (identified through the ping), as on
+        // Settings -> Backend servers. The interactions themselves only come with a HELLO, through a player.
         DataArray servers = DataArray.empty();
         if (staff) {
-            plugin.community().servers().forEach((name, version) ->
+            plugin.servers().running().forEach((name, version) ->
                     servers.add(DataObject.empty().put("name", name).put("version", version)));
         }
         DataObject totals = DataObject.empty();

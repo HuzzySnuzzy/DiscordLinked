@@ -4,6 +4,8 @@ import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.SettingsEditor;
 import com.huzzysnuzzy.discordlinked.storage.Database;
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.server.PingOptions;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
@@ -21,7 +23,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -39,7 +43,8 @@ import java.util.regex.Pattern;
  *
  * <p>Plugin messages only travel through a player, so a server nobody is on can't send STATUS. The pings therefore
  * carry {@link #PROBE_HOST} as their host name, and DiscordLinkedBackend 0.22.1 and newer answers those with its
- * status in the MOTD, which counts as a STATUS. That needs Velocity 3.4.0 or newer; older ones ping as before.
+ * status in the MOTD, which counts as a STATUS. That needs Velocity 3.4.0 or newer (3.4.0-SNAPSHOT builds since
+ * February 2025); older ones ping as before.
  */
 public final class BackendServers {
 
@@ -48,8 +53,9 @@ public final class BackendServers {
     public static final String OLD_PLUGIN = "DiscordLinkedFAD";
     /**
      * The host name the pings carry, so DiscordLinkedBackend answers with its status (StatusPing in the backend
-     * plugin, which has the same name). ".invalid" is reserved and never resolves, so no player connects with it,
-     * and Velocity's ping passthrough sends the player's own host name, so players never see that answer.
+     * plugin, which has the same name). ".invalid" is reserved and never resolves, so no player connects with it by
+     * accident. Velocity's ping passthrough sends the client's own host name to the servers, so someone who points
+     * that name at the proxy on purpose would get the status back: {@link #onProxyPing} swaps it for the proxy's MOTD.
      */
     public static final String PROBE_HOST = "discordlinked-status.invalid";
     /** The status answer is about 200 characters; a MOTD much longer than that isn't one. */
@@ -64,6 +70,11 @@ public final class BackendServers {
     private static final long STATUS_WAIT_SECONDS = 10;
     /** TPS and MSPT are shown while STATUS keeps coming (every 30 seconds while someone is on the server). */
     private static final long STATUS_FRESH_MILLIS = 90_000;
+    /**
+     * The website uses the last-seen time in memory; the stored one only matters after a proxy restart. So with
+     * nothing else changed, a status (every 30 seconds per server, through its ping) writes it this often at most.
+     */
+    private static final long SEEN_SAVE_MILLIS = 5 * 60_000;
     private static final Pattern MINECRAFT_VERSION = Pattern.compile("\\d+\\.\\d+(\\.\\d+)?");
     private static final Pattern VERSION_PARTS = Pattern.compile("^(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?");
 
@@ -106,6 +117,8 @@ public final class BackendServers {
         volatile String pluginVersion;
         volatile String minecraftVersion;
         volatile long lastSeen;
+        /** {@code lastSeen} as last written to the database (see {@link #SEEN_SAVE_MILLIS}). */
+        volatile long savedSeen;
         /** The last HELLO since the proxy started (0 = none) and the version it gave. */
         volatile long helloAt;
         volatile String helloVersion;
@@ -145,6 +158,14 @@ public final class BackendServers {
                 entry.pluginVersion = row.pluginVersion();
                 entry.minecraftVersion = row.minecraftVersion();
                 entry.lastSeen = row.lastSeen() == null ? 0 : row.lastSeen().toEpochMilli();
+                entry.savedSeen = entry.lastSeen;
+                if (OLD_PLUGIN.equals(entry.pluginName) && atLeast(entry.pluginVersion, FIRST_BACKEND_VERSION)) {
+                    // The 0.22.0 proxy stored this for a DiscordLinkedBackend 0.22.0 whose STATUS went missing after
+                    // its HELLO. DiscordLinkedFAD ended with 0.21.x, so it can only be DiscordLinkedBackend.
+                    entry.pluginName = PLUGIN;
+                    String version = entry.pluginVersion;
+                    save(() -> plugin.database().setBackendPlugin(row.name(), PLUGIN, version, null, null));
+                }
                 entries.put(key(row.name()), entry);
             }
         } catch (SQLException e) {
@@ -203,6 +224,25 @@ public final class BackendServers {
         return probeSupported.get();
     }
 
+    /**
+     * Servers where the backend plugin is running, with its version (A-Z): ones whose last ping got
+     * DiscordLinkedBackend's status, so also servers nobody is on, and ones whose plugin said hello since the proxy
+     * started. What the website shows; deliveries and the like go by {@link #withPlugin()}, which needs a HELLO.
+     */
+    public Map<String, String> running() {
+        Set<String> registered = registered();
+        Map<String, String> servers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (Map.Entry<String, Entry> e : entries.entrySet()) {
+            Entry entry = e.getValue();
+            if (registered.contains(e.getKey()) && Boolean.TRUE.equals(entry.answered) && entry.pluginName != null) {
+                servers.put(entry.name, entry.pluginVersion);
+            } else if (entry.helloAt > 0) {
+                servers.put(entry.name, entry.helloVersion);
+            }
+        }
+        return servers;
+    }
+
     /** Servers whose plugin said hello since the proxy started, with the version it gave. */
     public Map<String, String> withPlugin() {
         Map<String, String> servers = new HashMap<>();
@@ -241,6 +281,7 @@ public final class BackendServers {
         entry.helloAt = now;
         entry.helloVersion = version;
         entry.lastSeen = now;
+        entry.savedSeen = now;
         boolean backend = atLeast(version, FIRST_BACKEND_VERSION);
         if (backend) {
             entry.pluginName = PLUGIN;
@@ -270,17 +311,20 @@ public final class BackendServers {
 
     private void status(Entry entry, Status status) {
         long now = System.currentTimeMillis();
+        String minecraft = status.minecraftVersion().isEmpty() ? entry.minecraftVersion : status.minecraftVersion();
+        boolean changed = !status.plugin().equals(entry.pluginName) || !status.version().equals(entry.pluginVersion)
+                || !Objects.equals(minecraft, entry.minecraftVersion);
         entry.status = status;
         entry.statusAt = now;
         entry.lastSeen = now;
         entry.pluginName = status.plugin();
         entry.pluginVersion = status.version();
-        if (!status.minecraftVersion().isEmpty()) {
-            entry.minecraftVersion = status.minecraftVersion();
+        entry.minecraftVersion = minecraft;
+        if (changed || now - entry.savedSeen >= SEEN_SAVE_MILLIS) {
+            entry.savedSeen = now;
+            save(() -> plugin.database().setBackendPlugin(entry.name, status.plugin(), status.version(), minecraft,
+                    Instant.ofEpochMilli(now)));
         }
-        String minecraft = entry.minecraftVersion;
-        save(() -> plugin.database().setBackendPlugin(entry.name, status.plugin(), status.version(), minecraft,
-                Instant.ofEpochMilli(now)));
     }
 
     // ---- Pinging ----
@@ -336,11 +380,13 @@ public final class BackendServers {
         try {
             return Probe.ping(server);
         } catch (LinkageError e) {
-            // Velocity before 3.4.0 has no PingOptions.Builder#virtualHost (before 3.2.0, no PingOptions at all).
+            // PingOptions.Builder#virtualHost came with Velocity 3.4.0, in its 3.4.0-SNAPSHOT builds from 2025-01-31 on
+            // (before 3.2.0 there's no PingOptions at all).
             if (probeSupported.compareAndSet(true, false)) {
-                plugin.logger().info("This Velocity is older than 3.4.0, so its pings can't ask DiscordLinkedBackend "
-                        + "how a server is doing: servers' plugins are only identified once a player joins them, until "
-                        + "Velocity is updated to 3.4.0 or newer.");
+                plugin.logger().info("This Velocity build can't put a host name in its pings, so they can't ask "
+                        + "DiscordLinkedBackend how a server is doing: servers' plugins are only identified once a "
+                        + "player joins them. Update Velocity to its latest build (3.4.0 or newer, or a 3.4.0-SNAPSHOT "
+                        + "from February 2025 or later) to have them identified with nobody on.");
             }
             return null;
         } catch (RuntimeException e) {
@@ -353,6 +399,23 @@ public final class BackendServers {
         static CompletableFuture<ServerPing> ping(RegisteredServer server) {
             return server.ping(PingOptions.builder().virtualHost(PROBE_HOST)
                     .timeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS).build());
+        }
+    }
+
+    /**
+     * With Velocity's ping passthrough on, the servers are pinged with the client's own host name, so someone who
+     * points {@link #PROBE_HOST} at the proxy would get DiscordLinkedBackend's status as the MOTD. They get the
+     * proxy's own MOTD instead, as when passthrough finds nothing. First, so MOTD plugins see the swapped one.
+     */
+    @Subscribe(priority = Short.MAX_VALUE)
+    public void onProxyPing(ProxyPingEvent event) {
+        try {
+            ServerPing ping = event.getPing();
+            if (reported(ping) != null) {
+                event.setPing(ping.asBuilder().description(plugin.proxy().getConfiguration().getMotd()).build());
+            }
+        } catch (RuntimeException e) {
+            plugin.logger().debug("Could not check a ping's MOTD", e);
         }
     }
 
@@ -386,7 +449,7 @@ public final class BackendServers {
         }
         // Without a recent STATUS, the version the server tells pinging clients ("Paper 1.21.4") is the best there is.
         Status status = entry.status;
-        if (status == null || status.minecraftVersion().isEmpty()) {
+        if (status == null || now - entry.statusAt >= STATUS_FRESH_MILLIS || status.minecraftVersion().isEmpty()) {
             String version = minecraftVersion(answer.getVersion().getName());
             if (!version.isEmpty() && !version.equals(entry.minecraftVersion)) {
                 entry.minecraftVersion = version;

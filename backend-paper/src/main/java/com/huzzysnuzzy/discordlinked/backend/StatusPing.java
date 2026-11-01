@@ -34,19 +34,18 @@ final class StatusPing implements Listener {
         this.plugin = plugin;
     }
 
-    /** Last, so a MOTD plugin can't overwrite the answer; it only touches the proxy's own pings. */
-    @EventHandler(priority = EventPriority.MONITOR)
+    /**
+     * Last, so a MOTD plugin can't overwrite the answer; it only touches the proxy's own pings. A ping another plugin
+     * turned away stays turned away (the proxy then pings again without the host name, to see the server is up).
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPing(PaperServerListPingEvent event) {
         try {
             InetSocketAddress host = event.getClient().getVirtualHost();
             if (host == null || !PROBE_HOST.equalsIgnoreCase(host.getHostString())) {
                 return;
             }
-            Component answer = Component.text(json(plugin.link().currentStatus()));
-            event.motd(answer);
-            // Only DiscordLinked's proxy pings this host; a plugin that turns pings away mustn't make the server
-            // look down on the website.
-            event.setCancelled(false);
+            event.motd(Component.text(json(plugin.link().currentStatus())));
         } catch (RuntimeException e) {
             if (!warned) {
                 warned = true;
