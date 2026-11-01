@@ -2556,12 +2556,15 @@ const DECIDING_MS = 15 * 1000;
 function serverPlugin(s, data) {
   const p = s.plugin;
   const seen = s.lastSeen && el('span', { title: formatTime(s.lastSeen) }, `last seen ${timeAgo(s.lastSeen)}`);
-  const unanswered = s.registered && s.online && data.probe && s.answered === false;
+  const up = s.registered && s.online;
+  const unanswered = up && data.probe && s.answered === false;
   if (!p) {
     // Said hello; whether it's DiscordLinkedBackend or the old DiscordLinkedFAD is decided within 10 seconds. A
     // proxy restart in those seconds leaves it undecided, so later it's like a server never heard from.
     if (s.lastSeen && s.checkedAt && s.checkedAt - s.lastSeen < DECIDING_MS) return { line: dotted(['Reporting in…', seen]) };
-    if (unanswered) {
+    // Not there, or off: the server answered the proxy's status ping without it, or someone is on it and it hasn't
+    // reported in (any version does within seconds of a player joining, also where the proxy can't ask).
+    if (unanswered || (up && s.players > 0)) {
       const tooOld = versionAtLeast(s.minecraftVersion, '1.21.4') === false;
       if (tooOld) {
         return { badge: 'Plugin not found',
@@ -2572,9 +2575,9 @@ function serverPlugin(s, data) {
           + (s.players ? '. ' : ' (0.22.0 only reports in once a player joins). ')
           + 'If it\'s there, the server\'s console says why it\'s off, for example an old DiscordLinkedFAD or DiscordLinkedSpy jar.' };
     }
-    // Up, but the ping couldn't ask: this Velocity build can't, or the server turned that ping away.
+    // Up with nobody on, but the ping couldn't ask: this Velocity build can't, or the server turned that ping away.
     return { line: s.lastSeen ? dotted(['No backend plugin identified yet', seen]) : 'No backend plugin heard from yet',
-      help: s.registered && s.online && (data.probe
+      help: up && (data.probe
         ? 'The server answers pings, but turned away the proxy\'s status check (a plugin there may block unknown host '
           + 'names), so DiscordLinkedBackend shows up once a player joins it.'
         : 'DiscordLinkedBackend shows up once a player joins this server. Update Velocity (3.4.0 or newer, or a '

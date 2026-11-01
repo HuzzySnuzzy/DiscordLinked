@@ -133,7 +133,8 @@ What a server's entry can say about its plugin:
 
 - **DiscordLinkedBackend 0.22.1 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
-  (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same). See
+  (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
+  hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
   [Backend plugin not found?](#backend-plugin-not-found). On a server older than 1.21.4 it says
   DiscordLinkedBackend needs Minecraft 1.21.4 or newer.
 - **Plugin not answering**: DiscordLinkedBackend answered before but doesn't any more, so it was removed or it
@@ -141,8 +142,9 @@ What a server's entry can say about its plugin:
 - **Old plugin**: the server still runs DiscordLinkedFAD, "(old, replace with DiscordLinkedBackend)". A server
   with only an old DiscordLinkedSpy says Plugin not found.
 - "No backend plugin heard from yet": the server is offline (or still being checked) and has never reported in, or
-  the proxy couldn't ask, because the Velocity build is too old or a plugin on that server turns away pings for
-  unknown host names. It shows up once a player joins.
+  nobody is on it and the proxy couldn't ask, because the Velocity build is too old or a plugin on that server turns
+  away pings for unknown host names. It shows up once a player joins (if it doesn't, the entry says Plugin not
+  found).
 
 **Settings** next to a server opens its two switches (named after your currencies). They apply straight away,
 and every change is in the Logs (**Settings changes**, with the server's name):
