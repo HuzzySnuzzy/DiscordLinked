@@ -53,7 +53,7 @@ final class ProxyLink implements PluginMessageListener {
         return synced;
     }
 
-    /** Keeps the proxy up to date with this server's status, through anyone online. */
+    /** Keeps the proxy up to date with this server's status, through anyone online (with nobody on: StatusPing). */
     void start() {
         Bukkit.getAsyncScheduler().runAtFixedRate(plugin, task -> Bukkit.getOnlinePlayers().stream().findFirst()
                 .ifPresent(this::status), STATUS_SECONDS, STATUS_SECONDS, TimeUnit.SECONDS);
@@ -101,21 +101,33 @@ final class ProxyLink implements PluginMessageListener {
 
     /**
      * What the website shows about this server (Settings, Backend servers): this plugin, the Minecraft version, the
-     * players and how well it keeps up. TPS and MSPT are -1 where there's no single server tick (Folia).
+     * players and how well it keeps up. TPS and MSPT are -1 where there's no single server tick (Folia) or they
+     * can't be read. Sent as STATUS through a player, and as the answer to the proxy's ping ({@link StatusPing}).
      */
+    record Status(String plugin, String version, String minecraft, boolean folia, int online, int max, double tps,
+                  double mspt, boolean spy) {
+    }
+
+    /** This server's status right now. Safe from any thread (the proxy's ping is answered on a network thread). */
+    Status currentStatus() {
+        // Spy sessions, the inventory viewer and teleports are always part of this plugin.
+        return new Status(plugin.getName(), plugin.getPluginMeta().getVersion(), Bukkit.getMinecraftVersion(),
+                plugin.folia(), Bukkit.getOnlinePlayers().size(), Bukkit.getMaxPlayers(), tps(), mspt(), true);
+    }
+
     void status(Player carrier) {
+        Status status = currentStatus();
         send(carrier, out -> {
             out.writeUTF("STATUS");
-            out.writeUTF(plugin.getName());
-            out.writeUTF(plugin.getPluginMeta().getVersion());
-            out.writeUTF(Bukkit.getMinecraftVersion());
-            out.writeBoolean(plugin.folia());
-            out.writeInt(Bukkit.getOnlinePlayers().size());
-            out.writeInt(Bukkit.getMaxPlayers());
-            out.writeDouble(tps());
-            out.writeDouble(mspt());
-            // Spy sessions, the inventory viewer and teleports are always part of this plugin.
-            out.writeBoolean(true);
+            out.writeUTF(status.plugin());
+            out.writeUTF(status.version());
+            out.writeUTF(status.minecraft());
+            out.writeBoolean(status.folia());
+            out.writeInt(status.online());
+            out.writeInt(status.max());
+            out.writeDouble(status.tps());
+            out.writeDouble(status.mspt());
+            out.writeBoolean(status.spy());
         });
     }
 

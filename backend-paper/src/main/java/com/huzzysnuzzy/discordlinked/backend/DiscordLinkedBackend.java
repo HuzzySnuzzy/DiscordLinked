@@ -33,7 +33,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * everything on the admin website.
  *
  * <p>This replaces DiscordLinkedFAD and DiscordLinkedSpy and talks to the proxy exactly like they did (the same
- * channels and messages, plus a STATUS message that older proxies ignore), so any proxy version keeps working.
+ * channels and messages, plus a STATUS message that older proxies ignore), so any proxy version keeps working. It
+ * also answers the proxy's ping with that status ({@link StatusPing}), so the website sees servers nobody is on.
  *
  * <p>Works on Paper and Folia: players are only touched from their own scheduler, and nothing uses the main
  * thread scheduler.
@@ -74,6 +75,8 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         getServer().getMessenger().registerIncomingPluginChannel(this, ProxyLink.CHANNEL, link);
         getServer().getMessenger().registerOutgoingPluginChannel(this, ProxyLink.CHANNEL);
         link.start();
+        // The proxy's 30-second ping learns this server's status even while nobody is on it.
+        getServer().getPluginManager().registerEvents(new StatusPing(this), this);
         registerCommands();
         PlayerTracker tracker = new PlayerTracker(this);
         getServer().getPluginManager().registerEvents(tracker, this);

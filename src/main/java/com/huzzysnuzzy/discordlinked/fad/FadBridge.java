@@ -62,7 +62,7 @@ final class FadBridge {
                     later(() -> {
                         try {
                             community.hello(server, version, json);
-                            send(connection, out -> out.writeUTF("HELLO_OK"));
+                            helloOk(connection, server);
                             community.cosmetics().serverReady(server);
                         } catch (IllegalArgumentException e) {
                             plugin.logger().warn("The backend plugin on {} sent an unreadable interactions list: {}",
@@ -187,6 +187,19 @@ final class FadBridge {
                     .delay(2, TimeUnit.SECONDS).schedule();
         }
         community.cosmetics().joined(player, server);
+    }
+
+    /**
+     * The answer to HELLO, through the player who carried it. They may have left or moved on by now: then the
+     * server's STATUS comes later (on its timer, or as its answer to the proxy's ping) and its next HELLO, if it
+     * still needs one, comes with the next player.
+     */
+    private void helloOk(ServerConnection connection, String server) {
+        try {
+            send(connection, out -> out.writeUTF("HELLO_OK"));
+        } catch (IllegalStateException e) {
+            plugin.logger().debug("Couldn't answer {}'s HELLO, the player left: {}", server, e.getMessage());
+        }
     }
 
     @Subscribe

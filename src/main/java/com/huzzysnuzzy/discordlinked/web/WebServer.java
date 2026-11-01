@@ -2191,7 +2191,11 @@ public final class WebServer {
 
     // ---- Backend servers ----
 
-    /** Every backend server with its status, plugin and earning switches, and the server pickers' default. */
+    /**
+     * Every backend server with its status, plugin and earning switches, and the server pickers' default.
+     * {@code answered}: whether the last ping got DiscordLinkedBackend's status back (null: no answer, or
+     * {@code probe} is false because Velocity is older than 3.4.0 and its pings can't ask).
+     */
     private DataObject serversJson() {
         String defaultServer = plugin.servers().defaultServer();
         DataArray servers = DataArray.empty();
@@ -2214,10 +2218,12 @@ public final class WebServer {
                     .put("tps", s.tps() == null ? null : Math.round(s.tps() * 100) / 100.0)
                     .put("mspt", s.mspt() == null ? null : Math.round(s.mspt() * 100) / 100.0)
                     .put("lastSeen", s.lastSeen() == null ? null : s.lastSeen().toEpochMilli())
+                    .put("answered", s.answered())
                     .put("creditsEnabled", s.creditsEnabled())
                     .put("microEnabled", s.microEnabled()));
         }
-        return DataObject.empty().put("servers", servers).put("defaultServer", defaultServer);
+        return DataObject.empty().put("servers", servers).put("defaultServer", defaultServer)
+                .put("probe", plugin.servers().probing());
     }
 
     /**

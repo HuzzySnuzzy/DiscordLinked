@@ -5,8 +5,12 @@ import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.SettingsEditor;
 import com.huzzysnuzzy.discordlinked.storage.Database;
 import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.server.PingOptions;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerPing;
+import net.dv8tion.jda.api.utils.data.DataObject;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
 import java.io.IOException;
 import java.sql.SQLException;
@@ -23,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -31,12 +36,26 @@ import java.util.regex.Pattern;
  * server's switches survive it being out of Velocity's config for a while). For each it knows whether it's up
  * (pinged every 30 seconds), what its plugin reported (HELLO, and STATUS from DiscordLinkedBackend) and the settings
  * owner's switches for earning credits and microcredits there. Names are matched ignoring case, like Velocity does.
+ *
+ * <p>Plugin messages only travel through a player, so a server nobody is on can't send STATUS. The pings therefore
+ * carry {@link #PROBE_HOST} as their host name, and DiscordLinkedBackend 0.22.1 and newer answers those with its
+ * status in the MOTD, which counts as a STATUS. That needs Velocity 3.4.0 or newer; older ones ping as before.
  */
 public final class BackendServers {
 
     public static final String PLUGIN = "DiscordLinkedBackend";
-    /** A server that says HELLO but no STATUS runs this, from before it was merged into DiscordLinkedBackend. */
+    /** A server that says HELLO (older than 0.22.0) but no STATUS runs this, from before DiscordLinkedBackend. */
     public static final String OLD_PLUGIN = "DiscordLinkedFAD";
+    /**
+     * The host name the pings carry, so DiscordLinkedBackend answers with its status (StatusPing in the backend
+     * plugin, which has the same name). ".invalid" is reserved and never resolves, so no player connects with it,
+     * and Velocity's ping passthrough sends the player's own host name, so players never see that answer.
+     */
+    public static final String PROBE_HOST = "discordlinked-status.invalid";
+    /** The status answer is about 200 characters; a MOTD much longer than that isn't one. */
+    private static final int MAX_ANSWER_CHARS = 4096;
+    /** DiscordLinkedFAD had the project's version and ended with 0.21.x; from 0.22.0 on, it's DiscordLinkedBackend. */
+    private static final int[] FIRST_BACKEND_VERSION = {0, 22, 0};
     private static final long PING_SECONDS = 30;
     private static final long PING_TIMEOUT_SECONDS = 4;
     /** How long the website waits for fresh pings before it shows what it has. */
@@ -46,6 +65,7 @@ public final class BackendServers {
     /** TPS and MSPT are shown while STATUS keeps coming (every 30 seconds while someone is on the server). */
     private static final long STATUS_FRESH_MILLIS = 90_000;
     private static final Pattern MINECRAFT_VERSION = Pattern.compile("\\d+\\.\\d+(\\.\\d+)?");
+    private static final Pattern VERSION_PARTS = Pattern.compile("^(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?");
 
     /** DiscordLinkedBackend's STATUS: its name and version, and how the server is doing. -1 = not known. */
     public record Status(String plugin, String version, String minecraftVersion, boolean folia, int online, int max,
@@ -60,10 +80,12 @@ public final class BackendServers {
      * @param players    who's on it through this proxy right now (a ping can be 30 seconds old)
      * @param maxPlayers its slots, from the last ping or STATUS
      * @param lastSeen   when its plugin last said something
+     * @param answered   whether the last ping got DiscordLinkedBackend's status back: false if the server answered
+     *                   without it, null if it didn't answer, hasn't been pinged yet or pings can't ask (old Velocity)
      */
     public record Server(String name, boolean registered, Boolean reachable, Instant checkedAt, int players,
                          Integer maxPlayers, String minecraftVersion, String pluginName, String pluginVersion,
-                         Boolean folia, Boolean spy, Double tps, Double mspt, Instant lastSeen,
+                         Boolean folia, Boolean spy, Double tps, Double mspt, Instant lastSeen, Boolean answered,
                          boolean creditsEnabled, boolean microEnabled) {
 
         /** It runs DiscordLinkedFAD from before the merge, which should be replaced with DiscordLinkedBackend. */
@@ -90,6 +112,8 @@ public final class BackendServers {
         volatile Status status;
         volatile long statusAt;
         volatile Ping ping;
+        /** Whether the last ping got the status back (see {@link Server#answered()}). */
+        volatile Boolean answered;
 
         Entry(String name) {
             this.name = name;
@@ -103,6 +127,8 @@ public final class BackendServers {
     private final DiscordLinked plugin;
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
     private volatile long lastRefresh;
+    /** False once this Velocity turned out too old to put {@link #PROBE_HOST} in a ping, for the rest of the run. */
+    private final AtomicBoolean probeSupported = new AtomicBoolean(true);
 
     public BackendServers(DiscordLinked plugin) {
         this.plugin = plugin;
@@ -172,6 +198,11 @@ public final class BackendServers {
         return entry == null || entry.micro;
     }
 
+    /** Whether the pings ask DiscordLinkedBackend for its status; false on Velocity older than 3.4.0. */
+    public boolean probing() {
+        return probeSupported.get();
+    }
+
     /** Servers whose plugin said hello since the proxy started, with the version it gave. */
     public Map<String, String> withPlugin() {
         Map<String, String> servers = new HashMap<>();
@@ -200,7 +231,9 @@ public final class BackendServers {
 
     /**
      * A server's plugin said hello. DiscordLinkedBackend follows up with STATUS right away; if none comes, it's
-     * DiscordLinkedFAD from before the merge.
+     * DiscordLinkedFAD from before the merge. A HELLO from 0.22.0 or newer can only be DiscordLinkedBackend (the old
+     * plugin ended with 0.21.x), so that's noted straight away: its STATUS can go missing when the player leaves
+     * during the exchange, and that's no reason to call it old.
      */
     public void hello(String server, String version) {
         Entry entry = entry(server);
@@ -208,7 +241,16 @@ public final class BackendServers {
         entry.helloAt = now;
         entry.helloVersion = version;
         entry.lastSeen = now;
-        save(() -> plugin.database().setBackendPlugin(entry.name, null, null, null, Instant.ofEpochMilli(now)));
+        boolean backend = atLeast(version, FIRST_BACKEND_VERSION);
+        if (backend) {
+            entry.pluginName = PLUGIN;
+            entry.pluginVersion = version;
+        }
+        save(() -> plugin.database().setBackendPlugin(entry.name, backend ? PLUGIN : null, backend ? version : null,
+                null, Instant.ofEpochMilli(now)));
+        if (backend) {
+            return;
+        }
         plugin.proxy().getScheduler().buildTask(plugin, () -> {
             if (entry.helloAt == now && entry.statusAt < now) {
                 entry.pluginName = OLD_PLUGIN;
@@ -218,9 +260,15 @@ public final class BackendServers {
         }).delay(STATUS_WAIT_SECONDS, TimeUnit.SECONDS).schedule();
     }
 
-    /** DiscordLinkedBackend's regular STATUS (after HELLO, then every 30 seconds while someone is on the server). */
+    /**
+     * DiscordLinkedBackend's regular STATUS (after HELLO, then every 30 seconds while someone is on the server). Its
+     * answer to a ping (every 30 seconds, also with nobody on) counts the same.
+     */
     public void status(String server, Status status) {
-        Entry entry = entry(server);
+        status(entry(server), status);
+    }
+
+    private void status(Entry entry, Status status) {
         long now = System.currentTimeMillis();
         entry.status = status;
         entry.statusAt = now;
@@ -242,19 +290,70 @@ public final class BackendServers {
         lastRefresh = System.currentTimeMillis();
         List<CompletableFuture<Void>> pings = new ArrayList<>();
         for (RegisteredServer server : plugin.proxy().getAllServers()) {
-            Entry entry = entry(server.getServerInfo().getName());
-            CompletableFuture<ServerPing> ping;
-            try {
-                ping = server.ping();
-            } catch (RuntimeException e) {
-                ping = CompletableFuture.failedFuture(e);
-            }
-            pings.add(ping.orTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS).handle((answer, error) -> {
-                pinged(entry, error == null ? answer : null);
-                return null;
-            }));
+            pings.add(ping(entry(server.getServerInfo().getName()), server));
         }
         return CompletableFuture.allOf(pings.toArray(CompletableFuture[]::new));
+    }
+
+    /**
+     * Pings one server with {@link #PROBE_HOST}, so DiscordLinkedBackend answers with its status. If that gets no
+     * answer, a plain ping says whether the server is up at all (a plugin there may turn away unknown host names).
+     */
+    private CompletableFuture<Void> ping(Entry entry, RegisteredServer server) {
+        CompletableFuture<ServerPing> probe = probe(server);
+        if (probe == null) {
+            return plainPing(entry, server);
+        }
+        return probe.orTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .handle((answer, error) -> error == null ? answer : null)
+                .thenCompose(answer -> {
+                    if (answer == null) {
+                        return plainPing(entry, server);
+                    }
+                    pinged(entry, answer, true);
+                    return CompletableFuture.<Void>completedFuture(null);
+                });
+    }
+
+    private CompletableFuture<Void> plainPing(Entry entry, RegisteredServer server) {
+        CompletableFuture<ServerPing> ping;
+        try {
+            ping = server.ping();
+        } catch (RuntimeException e) {
+            ping = CompletableFuture.failedFuture(e);
+        }
+        return ping.orTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS).handle((answer, error) -> {
+            pinged(entry, error == null ? answer : null, false);
+            return null;
+        });
+    }
+
+    /** The ping with {@link #PROBE_HOST}, or null where this Velocity can't send one. */
+    private CompletableFuture<ServerPing> probe(RegisteredServer server) {
+        if (!probeSupported.get()) {
+            return null;
+        }
+        try {
+            return Probe.ping(server);
+        } catch (LinkageError e) {
+            // Velocity before 3.4.0 has no PingOptions.Builder#virtualHost (before 3.2.0, no PingOptions at all).
+            if (probeSupported.compareAndSet(true, false)) {
+                plugin.logger().info("This Velocity is older than 3.4.0, so its pings can't ask DiscordLinkedBackend "
+                        + "how a server is doing: servers' plugins are only identified once a player joins them, until "
+                        + "Velocity is updated to 3.4.0 or newer.");
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    /** Kept apart, so a Velocity without the API fails only here (as a LinkageError) and not BackendServers itself. */
+    private static final class Probe {
+        static CompletableFuture<ServerPing> ping(RegisteredServer server) {
+            return server.ping(PingOptions.builder().virtualHost(PROBE_HOST)
+                    .timeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS).build());
+        }
     }
 
     /** For the website: fresh pings unless there were some a moment ago, waiting a little for the answers. */
@@ -271,13 +370,20 @@ public final class BackendServers {
         }
     }
 
-    private void pinged(Entry entry, ServerPing answer) {
+    /** A ping's answer (null = none). {@code probed}: it carried {@link #PROBE_HOST}. */
+    private void pinged(Entry entry, ServerPing answer, boolean probed) {
         long now = System.currentTimeMillis();
         if (answer == null) {
             entry.ping = new Ping(false, 0, now);
+            entry.answered = null;
             return;
         }
         entry.ping = new Ping(true, answer.getPlayers().map(ServerPing.Players::getMax).orElse(-1), now);
+        Status reported = probed ? reported(answer) : null;
+        entry.answered = probed ? Boolean.valueOf(reported != null) : null;
+        if (reported != null) {
+            status(entry, reported);
+        }
         // Without a recent STATUS, the version the server tells pinging clients ("Paper 1.21.4") is the best there is.
         Status status = entry.status;
         if (status == null || status.minecraftVersion().isEmpty()) {
@@ -287,6 +393,77 @@ public final class BackendServers {
                 save(() -> plugin.database().setBackendPlugin(entry.name, null, null, version, null));
             }
         }
+    }
+
+    /**
+     * DiscordLinkedBackend's status from its answer to {@link #PROBE_HOST}: a JSON object in the MOTD with
+     * {@code "discordlinked": 1} and the plugin's name, then the same values as STATUS. Fields it doesn't have are
+     * unknown, ones this proxy doesn't know are ignored. Null if the MOTD isn't that.
+     */
+    static Status reported(ServerPing answer) {
+        try {
+            Component description = answer.getDescriptionComponent();
+            if (description == null) {
+                return null;
+            }
+            String text = PlainTextComponentSerializer.plainText().serialize(description);
+            if (text.length() > MAX_ANSWER_CHARS || !text.strip().startsWith("{")) {
+                return null;
+            }
+            Map<String, Object> json = DataObject.fromJson(text.strip()).toMap();
+            if (!(json.get("discordlinked") instanceof Number marker) || marker.doubleValue() != 1
+                    || !(json.get("plugin") instanceof String name) || name.isBlank()) {
+                return null;
+            }
+            return new Status(clip(name.strip()), clip(text(json, "version")), clip(text(json, "minecraft")),
+                    Boolean.TRUE.equals(json.get("folia")), count(json, "online"), count(json, "max"),
+                    measure(json, "tps"), measure(json, "mspt"), json.get("spy") instanceof Boolean spy ? spy : null);
+        } catch (RuntimeException e) {
+            return null; // not JSON (ParsingException) or something else odd: just a MOTD
+        }
+    }
+
+    private static String text(Map<String, Object> json, String key) {
+        return json.get(key) instanceof String value ? value.strip() : "";
+    }
+
+    private static int count(Map<String, Object> json, String key) {
+        return json.get(key) instanceof Number value && value.doubleValue() >= 0
+                ? (int) Math.min(Integer.MAX_VALUE, value.longValue()) : -1;
+    }
+
+    private static double measure(Map<String, Object> json, String key) {
+        return json.get(key) instanceof Number value && Double.isFinite(value.doubleValue()) && value.doubleValue() >= 0
+                ? value.doubleValue() : -1;
+    }
+
+    /** Plugin names and versions are short; a broken one can't fill the database (like STATUS, see FadBridge). */
+    private static String clip(String text) {
+        return text.length() > 64 ? text.substring(0, 64) : text;
+    }
+
+    /** Whether a version like "0.22.1" or "0.22.1-SNAPSHOT" is at least {@code minimum}. Unreadable ones aren't. */
+    static boolean atLeast(String version, int[] minimum) {
+        if (version == null) {
+            return false;
+        }
+        Matcher matcher = VERSION_PARTS.matcher(version.strip());
+        if (!matcher.find()) {
+            return false;
+        }
+        for (int i = 0; i < minimum.length; i++) {
+            String part = matcher.group(i + 1);
+            int value;
+            try {
+                value = part == null ? 0 : Integer.parseInt(part);
+            } catch (NumberFormatException e) {
+                return false;
+            }
+            if (value != minimum[i]) {
+                return value > minimum[i];
+            }
+        }
+        return true;
     }
 
     /** "Paper 1.21.4" -> "1.21.4"; something else as it is. */
@@ -379,7 +556,8 @@ public final class BackendServers {
                 max == null || max < 0 ? null : max, entry.minecraftVersion, entry.pluginName, entry.pluginVersion,
                 current ? status.folia() : null, current ? status.spy() : null,
                 fresh && status.tps() >= 0 ? status.tps() : null, fresh && status.mspt() >= 0 ? status.mspt() : null,
-                entry.lastSeen == 0 ? null : Instant.ofEpochMilli(entry.lastSeen), entry.credits, entry.micro);
+                entry.lastSeen == 0 ? null : Instant.ofEpochMilli(entry.lastSeen), registered ? entry.answered : null,
+                entry.credits, entry.micro);
     }
 
     /** Keys of the servers in Velocity's config right now; each has an entry (new ones are remembered). */
