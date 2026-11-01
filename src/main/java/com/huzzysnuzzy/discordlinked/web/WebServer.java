@@ -2194,7 +2194,8 @@ public final class WebServer {
     /**
      * Every backend server with its status, plugin and earning switches, and the server pickers' default.
      * {@code answered}: whether the last ping got DiscordLinkedBackend's status back (null: no answer, or
-     * {@code probe} is false because Velocity is older than 3.4.0 and its pings can't ask).
+     * {@code probe} is false because Velocity is older than 3.4.0 and its pings can't ask). {@code version} is this
+     * plugin's, which DiscordLinkedBackend's jar has too (the website names that jar).
      */
     private DataObject serversJson() {
         String defaultServer = plugin.servers().defaultServer();
@@ -2223,7 +2224,7 @@ public final class WebServer {
                     .put("microEnabled", s.microEnabled()));
         }
         return DataObject.empty().put("servers", servers).put("defaultServer", defaultServer)
-                .put("probe", plugin.servers().probing());
+                .put("probe", plugin.servers().probing()).put("version", DiscordLinked.VERSION);
     }
 
     /**

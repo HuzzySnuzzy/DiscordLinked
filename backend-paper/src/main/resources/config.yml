@@ -6,8 +6,9 @@
 # hadn't reached the proxy yet. Permissions keep their names (discordlinkedfad.*).
 #
 # Needs DiscordLinked 0.10.0 or newer on the Velocity proxy (0.16.0 or newer for selling, 0.18.0 for cosmetics, 0.20.0
-# for auras and particle looks, 0.22.0 to show this server in the website's Backend servers settings). The proxy keeps
-# everyone's credits, shows interactions on every server and in Discord, and puts it all on the website.
+# for auras and particle looks, 0.22.0 to show this server in the website's Backend servers settings, 0.22.1 to show it
+# there while nobody is on it). The proxy keeps everyone's credits, shows interactions on every server and in Discord,
+# and puts it all on the website.
 #
 # Credits themselves (their name, how many players get for playing and for advancements) are set on the
 # proxy: plugins/discordlinked/config.properties, or the website's Settings page. The credit messages

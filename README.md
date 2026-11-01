@@ -66,7 +66,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.22.0.jar` there instead.
+   `DiscordLinkedBackend-0.22.1.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -92,6 +92,21 @@ Good to know:
   DiscordLinkedBackend works with an older proxy. Settings → **Backend servers** shows which servers still run
   DiscordLinkedFAD (an old DiscordLinkedSpy can't be detected).
 
+### Backend plugin not found?
+
+If Settings → **Backend servers** says **Plugin not found** for a server, check on that server:
+
+1. `DiscordLinkedBackend-x.y.z.jar` is in its `plugins/` folder (not in a subfolder), and the server was restarted
+   after you put it there. `/plugins` in its console lists DiscordLinkedBackend in green when it's running.
+2. It's **Paper or Folia 1.21.4 or newer**. Older Paper refuses the jar ("Unsupported API version"), and Spigot
+   and CraftBukkit can't run it.
+3. The old jars are gone: while `DiscordLinkedFAD-….jar` or `DiscordLinkedSpy-….jar` is in `plugins/`,
+   DiscordLinkedBackend says so in the console and switches itself off.
+4. The console from the server's start: an error from DiscordLinkedBackend there says why it didn't start.
+5. Both jars are up to date and the same version: `DiscordLinked-x.y.z.jar` on the proxy and
+   `DiscordLinkedBackend-x.y.z.jar` on every server. DiscordLinkedBackend 0.22.0 only shows up once a player
+   joins; 0.22.1 and newer shows up within 30 seconds, with nobody on (on Velocity 3.4.0 or newer).
+
 ### Several servers
 
 Everyone has one balance for the whole network: credits, microcredits, groups and unlocks are the same on every
@@ -99,12 +114,30 @@ server. Settings → **Backend servers** on the website (settings owner only) li
 config with:
 
 - whether it's online (checked every 30 seconds), how many players are on it out of how many slots, its Minecraft
-  version (and Folia), and its TPS while someone is on it (Folia has no TPS);
-- its backend plugin with the version, and when the proxy last heard from it. A server still on DiscordLinkedFAD
-  says "(old, replace with DiscordLinkedBackend)". One the proxy has never heard from, or one with only an old
-  DiscordLinkedSpy, says "No backend plugin heard from yet". The plugin can only talk to the proxy while someone
-  is on its server, so a new install shows up once a player joins, and an empty server shows when it was last
-  heard from.
+  version (and Folia), and its TPS (Folia has no TPS);
+- its backend plugin with the version, and when the proxy last heard from it.
+
+The proxy asks each server's DiscordLinkedBackend how it's doing in that same 30-second ping, so every server is
+identified even with nobody online. This needs **Velocity 3.4.0 or newer** and **DiscordLinkedBackend 0.22.1 or
+newer**. DiscordLinkedBackend 0.22.0 can only report while a player is on its server, so it shows up once someone
+joins, with a hint to update it. The proxy sends these pings to the host name `discordlinked-status.invalid` (a
+name that can't exist), and DiscordLinkedBackend answers only those with its status, so players' server lists never
+show it. On an older Velocity the proxy logs one line saying so and pings as before. If DiscordLinkedBackend can't
+answer a ping, it logs one warning in that server's console.
+
+What a server's entry can say about its plugin:
+
+- **DiscordLinkedBackend 0.22.1 · last seen just now**: all good.
+- **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
+  (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same). See
+  [Backend plugin not found?](#backend-plugin-not-found). On a server older than 1.21.4 it says
+  DiscordLinkedBackend needs Minecraft 1.21.4 or newer.
+- **Not answering**: DiscordLinkedBackend answered before but doesn't any more, so it was removed or it switched
+  itself off (the server's console says why). The version it last reported stays.
+- **Old plugin**: the server still runs DiscordLinkedFAD, "(old, replace with DiscordLinkedBackend)". A server
+  with only an old DiscordLinkedSpy says Plugin not found.
+- "No backend plugin heard from yet": the proxy couldn't ask, because Velocity is older than 3.4.0 or a plugin on
+  that server turns away pings for unknown host names. It shows up once a player joins.
 
 **Settings** next to a server opens its two switches (named after your currencies). They apply straight away,
 and every change is in the Logs (**Settings changes**, with the server's name):
@@ -545,8 +578,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.22.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.22.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.22.1.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.22.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

@@ -2527,6 +2527,70 @@ const savedSetting = (key) => state.settings?.groups.flatMap((g) => g.fields).fi
 /** Parts of a line with " · " between them. */
 const dotted = (parts) => parts.filter(Boolean).flatMap((part, i) => (i ? [' · ', part] : [part]));
 
+/**
+ * Whether a version like "1.21.4" or "0.22.1-SNAPSHOT" is at least `min` (missing parts count as 0); null if it
+ * doesn't start with a number, so nothing is claimed about it.
+ */
+function versionAtLeast(version, min) {
+  const parts = (v) => String(v ?? '').trim().match(/^\d+(?:\.\d+)*/)?.[0].split('.').map(Number);
+  const a = parts(version), b = parts(min);
+  if (!a) return null;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return true;
+}
+
+/** DiscordLinkedBackend from this version on answers the proxy's ping, so it's seen with nobody on its server. */
+const ANSWERS_PINGS_FROM = '0.22.1';
+/** It reports every 30 seconds, so a server heard from within this of its last ping counts as working. */
+const HEARD_RECENTLY_MS = 90 * 1000;
+
+/**
+ * What a server's entry says about its backend plugin: the line, an optional help line under it and an optional
+ * warning badge by its name. The proxy asks DiscordLinkedBackend for its status in every 30-second ping (Velocity
+ * 3.4.0 or newer, `probe`); `answered` is false when the server answered that ping without it.
+ */
+function serverPlugin(s, data) {
+  const p = s.plugin;
+  const seen = s.lastSeen && el('span', { title: formatTime(s.lastSeen) }, `last seen ${timeAgo(s.lastSeen)}`);
+  const unanswered = s.registered && s.online && data.probe && s.answered === false;
+  if (!p) {
+    // Said hello; whether it's DiscordLinkedBackend or the old DiscordLinkedFAD is decided within 10 seconds.
+    if (s.lastSeen) return { line: dotted(['Reporting in…', seen]) };
+    if (unanswered) {
+      const tooOld = versionAtLeast(s.minecraftVersion, '1.21.4') === false;
+      if (tooOld) {
+        return { badge: 'Plugin not found',
+          line: `DiscordLinkedBackend needs Minecraft 1.21.4 or newer (this server runs ${s.minecraftVersion})` };
+      }
+      return { badge: 'Plugin not found', line: 'DiscordLinkedBackend not found',
+        help: `Put DiscordLinkedBackend-${data.version}.jar in this server's plugins folder and restart it`
+          + (s.players ? '. ' : ' (0.22.0 only reports in once a player joins). ')
+          + 'If it\'s there, the server\'s console says why it\'s off, for example an old DiscordLinkedFAD or DiscordLinkedSpy jar.' };
+    }
+    // Up, but the ping couldn't ask: Velocity is older than 3.4.0, or the server turned that ping away.
+    return { line: 'No backend plugin heard from yet', help: s.registered && s.online && (data.probe
+      ? 'The server didn\'t answer the proxy\'s status ping (a plugin there may turn away unknown host names), so '
+        + 'DiscordLinkedBackend reports in once a player joins it.'
+      : 'DiscordLinkedBackend reports in once a player joins this server. With Velocity 3.4.0 or newer, servers are '
+        + 'identified with nobody on them.') };
+  }
+  const name = p.version ? `${p.name} ${p.version}` : p.name;
+  if (p.old) return { badge: 'Old plugin', line: dotted([`${name} (old, replace with DiscordLinkedBackend)`, seen]) };
+  const line = dotted([name, seen]);
+  if (unanswered && p.name === 'DiscordLinkedBackend' && versionAtLeast(p.version, ANSWERS_PINGS_FROM) === false) {
+    return { line, help: `Update it to ${ANSWERS_PINGS_FROM} or newer, so it's seen while nobody is on this server.` };
+  }
+  // Still reporting through a player (STATUS) counts as working. Both times are the proxy's, so the viewer's clock
+  // doesn't matter.
+  if (unanswered && !(s.lastSeen && s.checkedAt - s.lastSeen < HEARD_RECENTLY_MS)) {
+    return { badge: 'Not answering', line,
+      help: 'It no longer answers the proxy\'s pings: it was removed, or it\'s off (the server\'s console says why).' };
+  }
+  return { line };
+}
+
 function serversCard() {
   const card = el('div', { class: 'card panel settings-group', id: 'servers-card' }, el('h2', {}, 'Backend servers'));
   const data = state.servers;
@@ -2547,12 +2611,12 @@ function serversCard() {
         el('div', { class: 'setting-help' }, 'Where the server menus on Players and Moderate start, for anyone who hasn\'t picked one there.'),
         el('div', { class: 'setting-key mono' }, 'default-server')),
       el('div', { class: 'setting-input' }, picker)),
-    ...(data.servers.length ? data.servers.map(serverEntry)
+    ...(data.servers.length ? data.servers.map((s) => serverEntry(s, data))
       : [el('p', { class: 'muted' }, 'No servers yet. They\'re listed here from Velocity\'s config.')]));
   return card;
 }
 
-function serverEntry(s) {
+function serverEntry(s, data) {
   const creditsName = savedSetting('credits-name-plural') || 'credits';
   const microName = savedSetting('microcredits-name-plural') || 'microcredits';
   const key = s.name.toLowerCase();
@@ -2567,11 +2631,7 @@ function serverEntry(s) {
     up && (s.maxPlayers === null ? `${s.players} player${s.players === 1 ? '' : 's'}` : `${s.players}/${s.maxPlayers} players`),
     s.minecraftVersion && `Minecraft ${s.minecraftVersion}${p?.folia ? ' (Folia)' : ''}`,
     up && s.tps !== null && el('span', { title: s.mspt !== null ? `${s.mspt} ms per tick` : null }, `TPS ${s.tps}`)]);
-  const plugin = dotted([
-    !p ? el('span', { title: 'DiscordLinkedBackend reports in once a player joins this server.' },
-      'No backend plugin heard from yet')
-      : p.old ? `${p.name} ${p.version} (old, replace with DiscordLinkedBackend)` : `${p.name} ${p.version}`,
-    s.lastSeen && el('span', { title: formatTime(s.lastSeen) }, `last seen ${timeAgo(s.lastSeen)}`)]);
+  const plugin = serverPlugin(s, data);
 
   const toggle = (label, help, field) => {
     const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `${label} on ${s.name}` });
@@ -2619,9 +2679,10 @@ function serverEntry(s) {
           s.isDefault && el('span', { class: 'badge info' }, 'Default'),
           !s.creditsEnabled && el('span', { class: 'badge warn', title: `Players here don't earn ${creditsName}` }, `${creditsName} off`),
           !s.microEnabled && el('span', { class: 'badge warn', title: `Players here can't sell for ${microName}` }, `${microName} off`),
-          p?.old && el('span', { class: 'badge warn' }, 'Old plugin')),
+          plugin.badge && el('span', { class: 'badge warn' }, plugin.badge)),
         facts.length > 0 && el('div', { class: 'setting-help' }, facts),
-        el('div', { class: 'setting-help' }, plugin)),
+        el('div', { class: 'setting-help' }, plugin.line),
+        plugin.help && el('div', { class: 'setting-help' }, plugin.help)),
       el('div', { class: 'setting-input' }, open)),
     panel);
 }
