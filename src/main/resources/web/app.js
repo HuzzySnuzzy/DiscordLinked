@@ -4552,15 +4552,251 @@ async function connectLive() {
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/** Cards and rows rise in one after another when a page opens (not on live refreshes). */
+// ---- Themes: System, Light, Dark and 2049 (per viewer, in this browser only) ----
+// theme.js (in <head>) already put the stored choice on <html> before the first paint; this is the top-bar menu
+// that changes it, and the 2049 theme's few JS effects. Light and Dark are today's looks, made choosable.
+
+const rootEl = document.documentElement;
+const THEME_NAMES = { system: 'System', light: 'Light', dark: 'Dark', 2049: '2049' };
+const themeNow = () => rootEl.dataset.theme || 'system';
+const hudOn = () => rootEl.dataset.theme === '2049';
+/** 2049 with full effects, and the device doesn't ask for less motion. */
+const hudFull = () => hudOn() && rootEl.dataset.fx !== 'calm' && !reducedMotion();
+const currentSection = () => document.querySelector('main.content > section:not([hidden])');
+
+function applyTheme(theme) {
+  if (theme === 'light' || theme === 'dark' || theme === '2049') rootEl.dataset.theme = theme;
+  else delete rootEl.dataset.theme;
+  syncRails();
+  syncThemeMenu();
+  // Tab widths change with the theme's fonts, so the pill under the current tab is measured again.
+  requestAnimationFrame(updateTabPills);
+}
+
+function setTheme(theme) {
+  if (!THEME_NAMES[theme]) return;
+  const changed = theme !== themeNow();
+  remember('dl-theme', theme);
+  applyTheme(theme);
+  if (!changed) return;
+  // 2049 boots (full effects); otherwise the page plays its entrance, so the switch is still felt. While the
+  // boot curtain is closed, playEnter waits for it to open.
+  if (theme === '2049') window.hudBoot?.();
+  playEnter(currentSection());
+  toast(`Theme: ${THEME_NAMES[theme]}`);
+}
+
+function setFx(fx) {
+  fx = fx === 'calm' ? 'calm' : 'full';
+  remember('dl-fx', fx);
+  rootEl.dataset.fx = fx;
+  syncThemeMenu();
+}
+
+const themeBtn = $('theme-btn');
+const themeMenu = $('theme-menu');
+const themeItems = () => [...themeMenu.querySelectorAll('[role=menuitemradio]')]
+  .filter((item) => !item.closest('[hidden]') && item.getAttribute('aria-disabled') !== 'true');
+
+function syncThemeMenu() {
+  const theme = themeNow();
+  const calm = rootEl.dataset.fx === 'calm';
+  const still = reducedMotion();
+  themeMenu.querySelectorAll('[data-theme-value]').forEach((item) => {
+    item.setAttribute('aria-checked', String(item.dataset.themeValue === theme));
+  });
+  themeMenu.querySelectorAll('[data-fx-value]').forEach((item) => {
+    item.setAttribute('aria-checked', String((item.dataset.fxValue === 'calm') === calm));
+    // The device asks for less motion: nothing moves either way, so the choice waits until it doesn't.
+    if (still) item.setAttribute('aria-disabled', 'true');
+    else item.removeAttribute('aria-disabled');
+    if (still) item.setAttribute('aria-describedby', 'theme-fx-note');
+    else item.removeAttribute('aria-describedby');
+  });
+  $('theme-fx-note').hidden = !still;
+  themeMenu.querySelector('.theme-sep').hidden = theme !== '2049';
+  themeMenu.querySelector('.theme-fx').hidden = theme !== '2049';
+}
+
+function openThemeMenu() {
+  syncThemeMenu();
+  themeMenu.hidden = false;
+  themeBtn.setAttribute('aria-expanded', 'true');
+  const items = themeItems();
+  (items.find((item) => item.dataset.themeValue && item.getAttribute('aria-checked') === 'true') || items[0]).focus();
+}
+
+function closeThemeMenu(focusButton) {
+  if (themeMenu.hidden) return;
+  themeMenu.hidden = true;
+  themeBtn.setAttribute('aria-expanded', 'false');
+  if (focusButton) themeBtn.focus();
+}
+
+themeBtn.addEventListener('click', () => (themeMenu.hidden ? openThemeMenu() : closeThemeMenu(false)));
+themeBtn.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' && themeMenu.hidden) {
+    e.preventDefault();
+    openThemeMenu();
+  }
+});
+themeMenu.addEventListener('click', (e) => {
+  const item = e.target.closest('[role=menuitemradio]');
+  if (!item || item.getAttribute('aria-disabled') === 'true') return;
+  // The menu stays open, so people can try the themes and set the effects.
+  if (item.dataset.themeValue) setTheme(item.dataset.themeValue);
+  else setFx(item.dataset.fxValue);
+  item.focus();
+});
+themeMenu.addEventListener('keydown', (e) => {
+  const items = themeItems();
+  const at = items.indexOf(document.activeElement);
+  let next = null;
+  if (e.key === 'ArrowDown') next = items[(at + 1) % items.length];
+  else if (e.key === 'ArrowUp') next = items[(at - 1 + items.length) % items.length];
+  else if (e.key === 'Home') next = items[0];
+  else if (e.key === 'End') next = items[items.length - 1];
+  else if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeThemeMenu(true);
+  } else if (e.key === 'Tab') closeThemeMenu(false);
+  if (next) {
+    e.preventDefault();
+    next.focus();
+  }
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!themeMenu.hidden && !themeMenu.contains(e.target) && !themeBtn.contains(e.target)) closeThemeMenu(false);
+});
+// Another tab changed the theme: follow it (without the boot).
+window.addEventListener('storage', (e) => {
+  if (e.key === 'dl-theme') applyTheme(e.newValue);
+  else if (e.key === 'dl-fx') {
+    rootEl.dataset.fx = e.newValue === 'calm' ? 'calm' : 'full';
+    syncThemeMenu();
+  }
+});
+// With font-display: swap the 2049 fonts arrive after the tabs were measured; measure the pill again.
+document.fonts?.addEventListener('loadingdone', () => updateTabPills());
+// Effects stop while the tab is hidden (browsers mostly do this already; this makes sure for the fixed layers).
+document.addEventListener('visibilitychange', () => rootEl.toggleAttribute('data-hidden', document.hidden));
+window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener?.('change', syncThemeMenu);
+
+// ---- 2049: side rails (wide screens), decoding titles and numbers ----
+
+let rails = null;
+/** Two decorative rails on screens 1400px and wider: a UTC clock on the left, the scroll depth on the right. */
+function syncRails() {
+  if (!hudOn()) {
+    if (rails) {
+      clearInterval(rails.timer);
+      window.removeEventListener('scroll', rails.onScroll);
+      rails.left.remove();
+      rails.right.remove();
+      rails = null;
+    }
+    return;
+  }
+  if (rails) return;
+  const clock = el('span', {}, '');
+  const depth = el('span', {}, 'DEPTH 000');
+  const mark = el('i', { class: 'hud-rail-mark' });
+  const left = el('div', { class: 'hud-rail hud-rail-l', 'aria-hidden': 'true' },
+    el('b', {}, 'DL//2049'), el('span', {}, 'GRID 07-K'), el('span', {}, 'SECTOR 34.05N'), clock);
+  const right = el('div', { class: 'hud-rail hud-rail-r', 'aria-hidden': 'true' }, mark, depth, el('span', {}, 'SIG NOMINAL'));
+  document.body.append(left, right);
+  const wide = window.matchMedia('(min-width: 1400px)');
+  const tick = () => {
+    if (document.visibilityState === 'visible' && wide.matches) clock.textContent = `T ${new Date().toISOString().slice(11, 19)}Z`;
+  };
+  let frame = 0;
+  const onScroll = () => {
+    if (frame || !wide.matches) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      const p = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+      depth.textContent = `DEPTH ${String(Math.round(p * 100)).padStart(3, '0')}`;
+      mark.style.transform = `translateY(${Math.round(p * Math.max(0, right.clientHeight - 2))}px)`;
+    });
+  };
+  tick();
+  window.addEventListener('scroll', onScroll, { passive: true });
+  rails = { left, right, onScroll, timer: setInterval(tick, 1000) };
+  onScroll();
+}
+
+const DECODE_GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&/<>_=+';
+/** Scrambles a node's own text and resolves it left to right (page titles, numbers). Only touches its first text
+    node, and stops the moment the app changes that text itself (a refresh), leaving the app's text alone. */
+function hudDecode(node, { ms = 420, digitsOnly = false } = {}) {
+  const text = node.firstChild;
+  if (!text || text.nodeType !== 3 || !text.data.trim()) return;
+  if (node.hudDecode) node.hudDecode.stop(false);
+  const orig = text.data;
+  if (digitsOnly && !/\d/.test(orig)) return;
+  let written = orig;
+  let frame = 0;
+  let last = 0;
+  const start = performance.now();
+  node.setAttribute('aria-label', orig.trim());
+  node.classList.add('hud-decoding');
+  node.style.minWidth = `${node.getBoundingClientRect().width}px`;
+  const stop = (restore) => {
+    cancelAnimationFrame(frame);
+    if (restore && text.parentNode === node && text.data === written) text.data = orig;
+    node.removeAttribute('aria-label');
+    node.classList.remove('hud-decoding');
+    node.style.minWidth = '';
+    node.hudDecode = null;
+  };
+  const step = (now) => {
+    if (text.data !== written || text.parentNode !== node) return stop(false); // the app re-rendered it
+    const elapsed = now - start;
+    if (elapsed >= ms) return stop(true);
+    if (now - last >= 33) { // about 30 frames a second is plenty for flicker
+      last = now;
+      let out = '';
+      for (let i = 0; i < orig.length; i++) {
+        const c = orig[i];
+        const settled = elapsed / ms > i / orig.length;
+        if (settled || c === ' ' || (digitsOnly ? !/\d/.test(c) : /\s/.test(c))) out += c;
+        else if (digitsOnly) out += String((Math.random() * 10) | 0);
+        else out += DECODE_GLYPHS[(Math.random() * DECODE_GLYPHS.length) | 0];
+      }
+      text.data = written = out;
+    }
+    frame = requestAnimationFrame(step);
+  };
+  node.hudDecode = { stop };
+  frame = requestAnimationFrame(step);
+}
+
+/** Cards and rows rise in one after another when a page opens (not on live refreshes). In 2049 the title and the
+    numbers decode as well. */
 function playEnter(section) {
   if (!section || reducedMotion()) return;
+  if (rootEl.dataset.boot === '1') { // the 2049 boot curtain is still closed: play when it opens
+    document.addEventListener('hud:reveal', () => playEnter(section), { once: true });
+    return;
+  }
   section.classList.remove('entering');
   void section.offsetWidth; // restart the animation
   section.classList.add('entering');
   clearTimeout(section.enterTimer);
   section.enterTimer = setTimeout(() => section.classList.remove('entering'), 1200);
+  if (hudFull()) {
+    const h1 = section.querySelector('.toolbar h1');
+    if (h1) hudDecode(h1, { ms: 420 });
+    clearTimeout(section.decodeTimer);
+    section.decodeTimer = setTimeout(() => section.querySelectorAll('.stat-value, .podium-value')
+      .forEach((n, i) => i < 8 && hudDecode(n, { ms: 360, digitsOnly: true })), 250);
+  }
 }
+
+syncThemeMenu();
+syncRails();
 
 /** A glass pill that glides (with a little liquid squash) to the active tab of every .tabs group. */
 function updateTabPills() {

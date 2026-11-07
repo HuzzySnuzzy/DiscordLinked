@@ -158,7 +158,12 @@ public final class WebServer {
             "html", "text/html; charset=utf-8",
             "js", "text/javascript; charset=utf-8",
             "css", "text/css; charset=utf-8",
-            "svg", "image/svg+xml");
+            "svg", "image/svg+xml",
+            "woff2", "font/woff2");
+    /** The 2049 theme's fonts and effect images. Their names carry a version, so they can be cached for good. */
+    private static final List<String> THEME_ASSETS = List.of("fonts/orbitron-latin-wght-v1.woff2",
+            "fonts/oxanium-latin-wght-v1.woff2", "fonts/share-tech-mono-latin-400-v1.woff2", "fx/grain-2049-v1.svg",
+            "fx/rain-2049-v1.svg");
 
     private final DiscordLinked plugin;
     private final Sessions sessions = new Sessions();
@@ -183,7 +188,10 @@ public final class WebServer {
                     + "config.properties.");
             return false;
         }
-        for (String name : List.of("index.html", "login.html", "message.html", "app.js", "style.css", "favicon.svg")) {
+        List<String> names = new ArrayList<>(List.of("index.html", "login.html", "message.html", "app.js", "style.css",
+                "theme.js", "favicon.svg"));
+        names.addAll(THEME_ASSETS);
+        for (String name : names) {
             try (InputStream in = WebServer.class.getResourceAsStream("/web/" + name)) {
                 if (in == null) {
                     throw new IOException("web/" + name + " missing from plugin jar");
@@ -499,8 +507,14 @@ public final class WebServer {
                 case "/login" -> startLogin(ex);
                 case "/callback" -> finishLogin(ex);
                 case "/logout" -> logout(ex);
-                case "/app.js", "/style.css", "/favicon.svg" -> serveFile(ex, path.substring(1));
-                default -> sendMessagePage(ex, 404, "Not found", "That page doesn't exist.");
+                case "/app.js", "/style.css", "/theme.js", "/favicon.svg" -> serveFile(ex, path.substring(1));
+                default -> {
+                    if (THEME_ASSETS.contains(path.substring(1))) {
+                        serveFile(ex, path.substring(1));
+                    } else {
+                        sendMessagePage(ex, 404, "Not found", "That page doesn't exist.");
+                    }
+                }
             }
         } catch (Exception e) {
             plugin.logger().error("Website error on {}", ex.getRequestURI().getPath(), e);
@@ -2995,6 +3009,9 @@ public final class WebServer {
 
     private void serveFile(HttpExchange ex, String name) throws IOException {
         String extension = name.substring(name.lastIndexOf('.') + 1);
+        if (THEME_ASSETS.contains(name)) {
+            ex.getResponseHeaders().set("Cache-Control", "private, max-age=31536000, immutable");
+        }
         send(ex, 200, CONTENT_TYPES.get(extension), files.get(name));
     }
 

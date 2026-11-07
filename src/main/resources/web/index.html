@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DiscordLinked</title>
   <link rel="icon" href="/favicon.svg">
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -30,6 +31,31 @@
         <span class="duty-text">On duty</span>
         <span class="switch"><input type="checkbox" id="duty-switch" checked aria-label="On duty (admin view)"><span class="switch-track"></span></span>
       </label>
+      <button type="button" id="theme-btn" class="icon-btn theme-btn" title="Theme" aria-label="Theme" aria-haspopup="menu"
+              aria-expanded="false" aria-controls="theme-menu"><span class="theme-icon" aria-hidden="true"></span></button>
+      <div id="theme-menu" class="theme-menu" role="menu" aria-label="Theme" hidden>
+        <button type="button" role="menuitemradio" class="theme-item" data-theme-value="system" aria-checked="false" tabindex="-1">
+          <span class="theme-swatch sw-system" aria-hidden="true"></span><span class="theme-name">System</span>
+          <span class="theme-sub">Follows your device</span></button>
+        <button type="button" role="menuitemradio" class="theme-item" data-theme-value="light" aria-checked="false" tabindex="-1">
+          <span class="theme-swatch sw-light" aria-hidden="true"></span><span class="theme-name">Light</span>
+          <span class="theme-sub">Bright glass</span></button>
+        <button type="button" role="menuitemradio" class="theme-item" data-theme-value="dark" aria-checked="false" tabindex="-1">
+          <span class="theme-swatch sw-dark" aria-hidden="true"></span><span class="theme-name">Dark</span>
+          <span class="theme-sub">Dim glass</span></button>
+        <button type="button" role="menuitemradio" class="theme-item" data-theme-value="2049" aria-checked="false" tabindex="-1">
+          <span class="theme-swatch sw-2049" aria-hidden="true"></span><span class="theme-name theme-name-2049">2049</span>
+          <span class="theme-sub">Amber haze, holograms, rain. Inspired by Blade Runner 2049.</span></button>
+        <div class="theme-sep" role="separator"></div>
+        <div class="theme-fx" role="group" aria-labelledby="theme-fx-label">
+          <span class="theme-fx-label" id="theme-fx-label">Effects</span>
+          <button type="button" role="menuitemradio" class="theme-fx-item" data-fx-value="full" aria-checked="false" tabindex="-1">
+            <span class="theme-name">Full</span><span class="theme-sub">Boot, rain, glitches</span></button>
+          <button type="button" role="menuitemradio" class="theme-fx-item" data-fx-value="calm" aria-checked="false" tabindex="-1">
+            <span class="theme-name">Calm</span><span class="theme-sub">Fewer effects, easier on older devices</span></button>
+          <p class="theme-fx-note" id="theme-fx-note" hidden>Your device asks for less motion</p>
+        </div>
+      </div>
       <a href="#/settings" id="settings-link" class="icon-btn" title="Settings" aria-label="Settings" hidden>
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.4 7.4 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
       </a>
