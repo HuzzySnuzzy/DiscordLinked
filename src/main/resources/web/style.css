@@ -1178,9 +1178,9 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .topbar:has(#duty:not([hidden])) #me-name { display: none; }
   .topbar:has(#duty:not([hidden])) .me-link { padding: 2px; }
 }
-/* Just above that an admin's inline search would be under 200px wide (the theme button takes some of the row), so it
-   gets its own row a little sooner. */
-@media (max-width: 1310px) {
+/* Just above that an admin's inline search would be under 200px wide, so it gets its own row a little sooner. (The
+   top bar stops growing at 1232px, so above 1260px the search stays inline at about 166px, with the theme button.) */
+@media (max-width: 1260px) {
   .topbar:has(#duty:not([hidden])) .global-search { order: 5; flex-basis: 100%; max-width: none; }
 }
 /* Below 1060px an admin's first row (five tabs, the duty switch, settings) only fits without the words. */
@@ -1219,7 +1219,7 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 /* Whatever the keyboard moves to scrolls into view below the sticky top bar (one, two or three rows), not under it.
    Not while focus is in the bar itself: it's always in view, and the padding would scroll the page up. */
 html { scroll-padding-top: 84px; }
-@media (max-width: 1310px) { html { scroll-padding-top: 130px; } }
+@media (max-width: 1260px) { html { scroll-padding-top: 130px; } }
 @media (max-width: 820px) { html { scroll-padding-top: 170px; } }
 html:has(.topbar :focus) { scroll-padding-top: 0; }
 
@@ -1606,14 +1606,18 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 .theme-btn { padding: 0; font: inherit; cursor: pointer; }
 /* Only the gear turns on hover. */
 .theme-btn:hover, .theme-btn:active { transform: none; }
+/* Lit while its menu is open, like the gear on the Settings page. */
+.theme-btn[aria-expanded="true"] { background: var(--glass-strong); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 .theme-icon {
   width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor;
   background: linear-gradient(90deg, currentColor 50%, transparent 50%);
 }
 .theme-menu {
-  position: absolute; right: 0; top: calc(100% + 14px); z-index: 30; width: min(280px, calc(100vw - 32px));
+  position: absolute; right: 0; top: calc(100% + 14px); z-index: 30; width: min(300px, calc(100vw - 32px));
   display: grid; gap: 2px; padding: 6px; text-align: left;
   background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
+  /* app.js caps its height to the space below the bar on open (a phone held sideways). */
+  overflow-y: auto; overscroll-behavior: contain;
 }
 .theme-item, .theme-fx-item {
   display: grid; grid-template-columns: 36px minmax(0, 1fr) 16px; align-items: center; column-gap: 10px; width: 100%;
@@ -1622,7 +1626,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 .theme-menu button:focus-visible { outline-offset: -2px; }
 .theme-swatch { grid-row: 1 / 3; width: 36px; height: 24px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(128, 128, 128, .5); }
 .theme-name { grid-column: 2; font-weight: 600; line-height: 1.3; }
-.theme-sub { grid-column: 2; font-size: 12px; line-height: 1.35; color: var(--muted); }
+.theme-sub { grid-column: 2; font-size: 12px; line-height: 1.35; color: var(--muted); text-wrap: pretty; }
 .theme-item:hover, .theme-fx-item:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .theme-menu [aria-checked="true"] { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .theme-menu > [aria-checked="true"]::after { content: "\2713"; grid-column: 3; grid-row: 1 / 3; color: var(--accent); font-weight: 700; }
@@ -1741,7 +1745,8 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   font-family: var(--f-body); font-size: 14px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
 }
 :root[data-theme="2049"] :where(.section-title, .panel h2, .settings-group h2) { color: var(--hud-h1); }
-:root[data-theme="2049"] dialog h2 { font: 600 15px/1.35 var(--f-display); letter-spacing: .08em; text-transform: uppercase; }
+/* Dialog titles often carry a player or item name (case-sensitive), so they keep their case. */
+:root[data-theme="2049"] dialog h2 { font: 600 15px/1.35 var(--f-display); letter-spacing: .04em; text-transform: none; }
 :root[data-theme="2049"] .section-title .btn, :root[data-theme="2049"] .panel h2 .btn { font-family: var(--f-body); }
 :root[data-theme="2049"] :where(.mono, td.nowrap.muted, td.credit-plus, td.credit-minus, code) { font-family: var(--f-mono); }
 :root[data-theme="2049"] .mono { font-size: 13px; color: var(--hud-mono); }
@@ -1762,10 +1767,11 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 :root[data-theme="2049"] .hud-decoding { white-space: nowrap; }
 
 /* ---------- Background: searchlight, haze, rain, scanlines, grain, interference ---------- */
-/* Two thin beams from a pivot below the screen, sweeping slowly under the haze. */
+/* Two thin beams from a pivot below the screen, sweeping slowly under the haze. The layer is only as wide and tall as
+   the beams need (they sit 7deg and 5deg either side of the pivot, and reach the top corners at full swing). */
 :root[data-theme="2049"]::before {
   content: ""; position: fixed; z-index: -2; pointer-events: none;
-  width: 80vmax; height: 170vmax; left: calc(50% - 40vmax); bottom: -25vh; transform-origin: 50% 100%;
+  width: 44vmax; height: 140vmax; left: calc(50% - 22vmax); bottom: -25vh; transform-origin: 50% 100%;
   background: conic-gradient(from -8deg at 50% 100%, transparent 0 1deg, rgba(255, 166, 48, .05) 1deg 4deg, transparent 4deg 11deg,
     rgba(79, 227, 214, .045) 11deg 13deg, transparent 13deg);
   transform: rotate(-12deg); animation: hud-sweep 46s linear infinite; will-change: transform;
@@ -1807,9 +1813,8 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   transform: translateY(-30vh); animation: hud-roll 9s linear infinite; will-change: transform;
 }
 @keyframes hud-roll { 0% { transform: translateY(-30vh); } 70%, 100% { transform: translateY(130vh); } }
-/* A hidden tab moves nothing. */
-:root[data-theme="2049"][data-hidden]::before, :root[data-theme="2049"][data-hidden] body::before, :root[data-theme="2049"][data-hidden] body::after, :root[data-theme="2049"][data-hidden] .liquid::before,
-:root[data-theme="2049"][data-hidden] .liquid::after, :root[data-theme="2049"][data-hidden] .liquid i, :root[data-theme="2049"][data-hidden] .topbar::after { animation-play-state: paused; }
+/* A hidden tab moves nothing (theme.js sets data-hidden on every page). */
+:root[data-theme="2049"][data-hidden]::before, :root[data-theme="2049"][data-hidden]::after, :root[data-theme="2049"][data-hidden] *, :root[data-theme="2049"][data-hidden] *::before, :root[data-theme="2049"][data-hidden] *::after { animation-play-state: paused !important; }
 
 /* ---------- Surfaces: smoked panels with corner brackets ---------- */
 /* No blur anywhere (fields, ghost buttons, badges, backdrops, the spy veil included). */
@@ -1854,7 +1859,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 :root[data-theme="2049"] .group-card.is-me { box-shadow: inset 0 0 0 1px var(--holo), var(--glass-shadow); }
 :root[data-theme="2049"] .settings-group, :root[data-theme="2049"] .shop-window, :root[data-theme="2049"] .profile { border-radius: var(--radius); }
 :root[data-theme="2049"] :is(.login-card, .spy-card) { --hud-l: 22px; border-radius: var(--radius); }
-:root[data-theme="2049"] dialog { --hud-l: 18px; border-radius: var(--radius); background-color: rgba(16, 10, 7, .96); }
+:root[data-theme="2049"] dialog { --hud-l: 18px; border-radius: var(--radius); background-color: #100a07; }
 /* Interactive cards: the brackets reach out and the border lights up. They don't lift. */
 :root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card, .podium-place) { position: relative; transition: --hud-l .35s var(--hud-out), border-color .25s, box-shadow .25s; }
 :root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card):hover {
@@ -1870,10 +1875,12 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   opacity: 0; transition: opacity .2s;
 }
-:root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card, .podium-place):hover::after, :root[data-theme="2049"] :is(dialog[open], .login-card)::after {
-  opacity: 1; animation: hud-trace 2.2s linear infinite;
-}
+:root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card, .podium-place):hover::after { opacity: 1; animation: hud-trace 2.2s linear infinite; }
+/* Dialogs and the login card are often left open: their trace (a custom property, so it repaints on the main thread)
+   runs two and a half laps and then stays lit where Calm keeps it. */
+:root[data-theme="2049"] :is(dialog[open], .login-card)::after { opacity: 1; animation: hud-trace-settle 5.5s linear 1 forwards; }
 @keyframes hud-trace { to { --hud-a: 360deg; } }
+@keyframes hud-trace-settle { from { --hud-a: 0deg; } to { --hud-a: 920deg; } }
 /* Leaderboard medals colour the brackets. */
 :root[data-theme="2049"] .place-1 { --hud-c: #ffcc66; border-color: rgba(255, 204, 102, .55); box-shadow: 0 0 22px rgba(255, 204, 102, .3); }
 :root[data-theme="2049"] .place-2 { --hud-c: #cfd6dc; border-color: rgba(207, 214, 220, .5); }
@@ -1887,7 +1894,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
     linear-gradient(90deg, rgba(255, 166, 48, .45) 1px, transparent 1px) 0 100% / 12px 3px repeat-x,
     linear-gradient(90deg, rgba(255, 166, 48, .75) 1px, transparent 1px) 0 100% / 96px 6px repeat-x,
     linear-gradient(90deg, rgba(255, 166, 48, .06), transparent 40%, rgba(79, 227, 214, .05)),
-    rgba(12, 7, 4, .92);
+    #0c0704; /* opaque: with no blur, the page scrolling under it would show through as ghost text */
   border: 1px solid var(--glass-border); border-bottom-color: rgba(255, 166, 48, .5);
   box-shadow: var(--glass-shadow);
 }
@@ -1926,6 +1933,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 :root[data-theme="2049"] .icon-btn:hover { background: rgba(255, 166, 48, .1); border-color: var(--hud-line-strong); }
 :root[data-theme="2049"] .icon-btn.active { background: rgba(255, 166, 48, .12); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 :root[data-theme="2049"] .icon-btn.has-edits { box-shadow: inset 0 0 0 2px var(--warning); }
+:root[data-theme="2049"] .theme-btn[aria-expanded="true"] { background: rgba(255, 166, 48, .12); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 10px rgba(255, 166, 48, .35); }
 :root[data-theme="2049"] .me-link { border-radius: 2px; }
 :root[data-theme="2049"] .me-link[href]:hover { background: rgba(255, 166, 48, .08); }
 :root[data-theme="2049"] .search-results { border-radius: 2px; background: var(--surface); border-color: rgba(255, 166, 48, .45); }
@@ -1954,6 +1962,11 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   box-shadow: 0 0 0 1px var(--bg), 0 0 0 2px var(--hud-fill), 0 0 18px color-mix(in srgb, var(--hud-fill) 55%, transparent);
 }
 :root[data-theme="2049"] .btn:active:not(:disabled) { transform: translateY(1px); filter: brightness(1.12); }
+/* Disabled: a dashed outline with a muted label (a faded fill would fade its dark label with it). */
+:root[data-theme="2049"] .btn:disabled {
+  opacity: 1; background-color: transparent; color: var(--muted); box-shadow: none;
+  border: 1px dashed color-mix(in srgb, var(--hud-fill) 60%, transparent);
+}
 :root[data-theme="2049"] .btn-ghost {
   --hud-fill: rgba(255, 166, 48, .55);
   background-color: rgba(255, 166, 48, .06); color: var(--text); border-color: rgba(255, 166, 48, .55); box-shadow: none;
@@ -1973,6 +1986,8 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 /* Teal focus rings, outside amber fills. */
 :root[data-theme="2049"] :focus-visible, :root[data-theme="2049"] :is(input, select, textarea):focus { outline-color: var(--holo) !important; }
 :root[data-theme="2049"] .btn:focus-visible { outline-offset: 2px; }
+/* Teal on the amber active tab is too faint (1.2:1): there the ring is dark ink, edged in teal. */
+:root[data-theme="2049"] .tabs:not(.subtabs) a.active:focus-visible { outline-color: var(--accent-text) !important; outline-offset: -3px; box-shadow: inset 0 0 0 1px var(--holo); }
 :root[data-theme="2049"] .switch input:focus-visible + .switch-track { outline-color: var(--holo); }
 
 /* ---------- Fields and switches ---------- */
@@ -2024,6 +2039,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 :root[data-theme="2049"] :is(.board-chip, .shop-tab) { border-radius: 1px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; background: rgba(0, 0, 0, .3); }
 :root[data-theme="2049"] :is(.board-chip, .shop-tab):hover { color: var(--text); border-color: var(--hud-line-strong); }
 :root[data-theme="2049"] :is(.board-chip, .shop-tab).active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+:root[data-theme="2049"] .shop-tab.active .slot-text { color: var(--accent-text); }
 :root[data-theme="2049"] .self-status.warn { color: var(--warning); }
 :root[data-theme="2049"] .msglog-msg.deleted { background: rgba(255, 138, 115, .1); box-shadow: inset 2px 0 0 var(--danger); }
 :root[data-theme="2049"] .msglog-msg.deleted .msglog-text { text-decoration-color: rgba(255, 138, 115, .7); }
@@ -2032,16 +2048,18 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 
 /* ---------- Dialogs, toast, settings bar, spy lock ---------- */
 :root[data-theme="2049"] dialog::backdrop { background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .35) 0 1px, transparent 1px 3px), rgba(6, 3, 1, .72); }
+/* Floating surfaces are opaque: without blur the page under them would read through as ghost text. */
 :root[data-theme="2049"] .toast {
-  border-radius: 2px; background: rgba(12, 7, 4, .94); color: var(--text);
+  border-radius: 2px; background: #0c0704; color: var(--text);
   border: 1px solid rgba(79, 227, 214, .5); border-left: 3px solid var(--holo); box-shadow: 0 0 18px rgba(79, 227, 214, .22);
 }
 :root[data-theme="2049"] .toast a { color: var(--link); }
 :root[data-theme="2049"] .settings-bar {
-  border-radius: 2px; background: rgba(12, 7, 4, .94);
+  border-radius: 2px; background: #0c0704;
   border: 1px solid rgba(255, 166, 48, .5); border-left: 3px solid var(--accent); box-shadow: 0 0 18px rgba(255, 166, 48, .18);
 }
-:root[data-theme="2049"] .spy-lock { background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .35) 0 1px, transparent 1px 3px), rgba(6, 3, 1, .8); }
+:root[data-theme="2049"] .spy-lock { background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .35) 0 1px, transparent 1px 3px), rgba(6, 3, 1, .9); }
+:root[data-theme="2049"] .spy-lock .spy-card { background-color: #100a06; }
 :root[data-theme="2049"] .spy-head { border-radius: 3px; }
 :root[data-theme="2049"] .meter { height: 8px; border-radius: 0; background: repeating-linear-gradient(90deg, rgba(255, 166, 48, .18) 0 6px, transparent 6px 8px); }
 :root[data-theme="2049"] .meter-fill { border-radius: 0; background: repeating-linear-gradient(90deg, var(--success) 0 6px, transparent 6px 8px); transition-duration: .8s; transition-timing-function: var(--hud-out); }
@@ -2076,6 +2094,11 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 :root[data-theme="2049"] .streak.mini, :root[data-theme="2049"] .streak.mini *, :root[data-theme="2049"] .streak.mini::after { animation: none !important; }
 :root[data-theme="2049"] .streak.mini { border-radius: 1px; }
 
+/* Cosmetic previews: the in-game look stays, only the frame and backdrop take the palette. */
+:root[data-theme="2049"] .cos-preview { border-radius: 2px; box-shadow: inset 0 0 0 1px rgba(255, 166, 48, .25); }
+:root[data-theme="2049"] .cos-preview.chat { background: linear-gradient(180deg, #1d150d, #0d0805); }
+:root[data-theme="2049"] .cos-preview.particles { background: radial-gradient(circle at 50% 120%, #3b2913, #110b06 70%); }
+
 /* ---------- Empty, loading, error ---------- */
 :root[data-theme="2049"] .shimmer { background-image: linear-gradient(100deg, var(--muted) 40%, #ffe2bd 47%, var(--holo) 53%, var(--muted) 60%); }
 :root[data-theme="2049"] .error { color: var(--danger); }
@@ -2099,7 +2122,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 }
 :root[data-theme="2049"] .login-card .logo { filter: sepia(1) saturate(4) hue-rotate(-12deg) drop-shadow(0 0 14px rgba(255, 166, 48, .5)); }
 :root[data-theme="2049"] .login-card h1 {
-  font: 600 22px/1.3 var(--f-display); letter-spacing: .14em; text-transform: uppercase; color: var(--hud-h1);
+  font: 600 clamp(17px, 6.2vw, 22px)/1.3 var(--f-display); letter-spacing: .14em; text-transform: uppercase; color: var(--hud-h1);
   --hud-glow: var(--hud-h1-glow); text-shadow: var(--hud-glow); animation: hud-glitch 8s steps(1) infinite;
 }
 
@@ -2196,7 +2219,9 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   font: 12px/1.7 "DL Mono", ui-monospace, monospace; color: #ffa630; text-transform: uppercase; letter-spacing: .12em;
   animation: hud-fade-out .25s linear .95s both;
 }
-.hud-boot-log p { margin: 0; width: 0; overflow: hidden; white-space: nowrap; animation: hud-typeline .26s steps(var(--n, 20)) calc(.08s + var(--i, 0) * .16s) both; }
+.hud-boot-log p { margin: 0; width: 0; overflow: hidden; white-space: nowrap; animation: hud-typeline .2s steps(var(--n, 20)) calc(.06s + var(--i, 0) * .1s) both; }
+/* The log is done by the time the curtain opens, and fades with it, so it never prints over the page. */
+:root[data-boot="2"] .hud-boot-log { animation: hud-fade-out .15s linear both; }
 .hud-boot-log p:last-child { color: #4fe3d6; }
 /* Each letter is 1ch plus its letter-spacing. */
 @keyframes hud-typeline { to { width: calc(var(--n, 20) * (1ch + .12em)); } }
@@ -2250,6 +2275,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 :root[data-theme="2049"] .theme-sep { background: var(--glass-border); }
 
 /* ---------- Phones ---------- */
+@media (max-width: 360px) { :root[data-theme="2049"] .login-card h1 { letter-spacing: .08em; } }
 @media (max-width: 720px) {
   :root[data-theme="2049"] .toolbar h1 { font-size: 16px; letter-spacing: .08em; }
   :root[data-theme="2049"] .tabs a { letter-spacing: .06em; }
@@ -2303,7 +2329,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   :root[data-theme="2049"] .topbar { background-color: #120b05; }
 }
 @media (forced-colors: active) {
-  :root[data-theme="2049"]::before, :root[data-theme="2049"]::after, :root[data-theme="2049"] body::before, :root[data-theme="2049"] body::after, :root[data-theme="2049"] .topbar::after, .hud-boot, .hud-rail,
+  :root[data-theme="2049"]::before, :root[data-theme="2049"]::after, :root[data-theme="2049"] body::before, :root[data-theme="2049"] body::after, :root[data-theme="2049"] .topbar::after, :root[data-theme="2049"] .liquid::before, :root[data-theme="2049"] .liquid::after, .hud-boot, .hud-rail,
   :root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card, .podium-place, dialog, .login-card)::after { display: none; }
   :root[data-theme="2049"] :is(.card, .table-wrap, dialog, .stat, .podium-place, .snap-item, .note, .spy-stats > div, .theme-menu) { background-image: none; }
 }

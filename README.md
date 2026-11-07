@@ -420,7 +420,8 @@ while they're logged in.
   browser tab, glitching titles, scan beams on page changes and projected dialogs. Its **Effects** switch has **Full**
   and **Calm** (much less movement, easier on older devices); when the device asks for reduced motion nothing moves.
   The 2049 theme uses the fonts Orbitron, Oxanium and Share Tech Mono (SIL Open Font License 1.1, licences in
-  `src/main/resources/web/fonts/`), served by the plugin itself; the other themes don't download them.
+  `src/main/resources/web/fonts/`), served by the plugin itself; the other themes don't download them (only Orbitron, for the menu's "2049" label,
+  when the theme button is pointed at or focused).
 
 - **Players**: everyone who has played, linked or not, also from before DiscordLinked was installed
   (the backend plugin sends each server's player data, names and first and last time played, to the proxy when

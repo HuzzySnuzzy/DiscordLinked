@@ -7,6 +7,27 @@
   try { theme = localStorage.getItem('dl-theme'); fx = localStorage.getItem('dl-fx'); } catch (e) { /* storage blocked */ }
   if (theme === 'light' || theme === 'dark' || theme === '2049') root.setAttribute('data-theme', theme);
   root.setAttribute('data-fx', fx === 'calm' ? 'calm' : 'full');
+  /* Effects stop while the tab is hidden (on every page, so the login and message pages too). */
+  document.addEventListener('visibilitychange', function () { root.toggleAttribute('data-hidden', document.hidden); });
+  var FONTS = ['orbitron-latin-wght-v1', 'oxanium-latin-wght-v1', 'share-tech-mono-latin-400-v1'];
+  /* The 2049 fonts are only found once style.css is matched; asking for them now (before the stylesheet) means the
+     first paint usually has them, instead of reflowing the bar when they swap in. */
+  function preload(names) {
+    names.forEach(function (name) {
+      var href = '/fonts/' + name + '.woff2';
+      if (document.querySelector('link[rel=preload][href="' + href + '"]')) return;
+      var link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'font';
+      link.type = 'font/woff2';
+      link.crossOrigin = 'anonymous';
+      link.href = href;
+      document.head.append(link);
+    });
+  }
+  if (theme === '2049') preload(FONTS);
+  /* The theme menu shows "2049" in its display face: fetch it as soon as the menu might open. */
+  window.hudPreloadMenuFont = function () { preload([FONTS[0]]); };
   var LINES = ['DL/OS 2.049 cold start', 'uplink ........ locked', 'roster sync ... nominal', 'optics ........ online'];
 
   function still() {
@@ -47,6 +68,8 @@
     });
     box.append(line, log);
     document.body.append(box);
+    /* Timed from when the curtain is actually on screen. */
+    timers.push(setTimeout(reveal, 560), setTimeout(end, 1400));
   }
   /* Plays the boot (2049, full effects, motion allowed). Never blocks input: any key or press ends it at once. */
   function boot() {
@@ -54,8 +77,16 @@
     end();
     try { sessionStorage.setItem('dl-2049-boot', '1'); } catch (e) { /* storage blocked */ }
     root.setAttribute('data-boot', '1');
-    if (document.body) overlay(); else document.addEventListener('DOMContentLoaded', overlay, { once: true });
-    timers.push(setTimeout(reveal, 560), setTimeout(end, 1400));
+    /* The curtain goes up the moment <body> exists (not at DOMContentLoaded, which on the panel waits for app.js), so
+       nothing else is painted first. Mutation observers run before the next paint. */
+    if (document.body) overlay();
+    else {
+      new MutationObserver(function (records, observer) {
+        if (!document.body) return;
+        observer.disconnect();
+        overlay();
+      }).observe(root, { childList: true });
+    }
     addEventListener('keydown', end, true);
     addEventListener('pointerdown', end, true);
     return true;

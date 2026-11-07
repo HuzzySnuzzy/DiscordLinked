@@ -4581,9 +4581,12 @@ function setTheme(theme) {
   if (!changed) return;
   // 2049 boots (full effects); otherwise the page plays its entrance, so the switch is still felt. While the
   // boot curtain is closed, playEnter waits for it to open.
-  if (theme === '2049') window.hudBoot?.();
+  const booting = theme === '2049' && window.hudBoot?.();
   playEnter(currentSection());
-  toast(`Theme: ${THEME_NAMES[theme]}`);
+  // During the boot the toast waits until the curtain has opened and its log has faded.
+  const say = () => toast(`Theme: ${THEME_NAMES[theme]}`);
+  if (booting) document.addEventListener('hud:reveal', () => setTimeout(say, 160), { once: true });
+  else say();
 }
 
 function setFx(fx) {
@@ -4620,8 +4623,12 @@ function syncThemeMenu() {
 
 function openThemeMenu() {
   syncThemeMenu();
+  themeMenu.style.maxHeight = '';
   themeMenu.hidden = false;
   themeBtn.setAttribute('aria-expanded', 'true');
+  // A short screen (a phone held sideways): the menu scrolls inside the room below the sticky bar.
+  const room = Math.floor(window.innerHeight - themeMenu.getBoundingClientRect().top - 8);
+  if (themeMenu.scrollHeight > room) themeMenu.style.maxHeight = `${Math.max(120, room)}px`;
   const items = themeItems();
   (items.find((item) => item.dataset.themeValue && item.getAttribute('aria-checked') === 'true') || items[0]).focus();
 }
@@ -4634,6 +4641,8 @@ function closeThemeMenu(focusButton) {
 }
 
 themeBtn.addEventListener('click', () => (themeMenu.hidden ? openThemeMenu() : closeThemeMenu(false)));
+// The menu names 2049 in that theme's display face: fetch it before the menu opens, so it doesn't swap in.
+['pointerenter', 'focus'].forEach((type) => themeBtn.addEventListener(type, () => window.hudPreloadMenuFont?.(), { once: true }));
 themeBtn.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' && themeMenu.hidden) {
     e.preventDefault();
@@ -4670,17 +4679,16 @@ document.addEventListener('pointerdown', (e) => {
   if (!themeMenu.hidden && !themeMenu.contains(e.target) && !themeBtn.contains(e.target)) closeThemeMenu(false);
 });
 // Another tab changed the theme: follow it (without the boot).
+// localStorage.clear() or cleared site data elsewhere arrives with no key: back to System and full effects.
 window.addEventListener('storage', (e) => {
-  if (e.key === 'dl-theme') applyTheme(e.newValue);
-  else if (e.key === 'dl-fx') {
-    rootEl.dataset.fx = e.newValue === 'calm' ? 'calm' : 'full';
+  if (e.key === 'dl-theme' || e.key === null) applyTheme(e.key ? e.newValue : stored('dl-theme'));
+  if (e.key === 'dl-fx' || e.key === null) {
+    rootEl.dataset.fx = (e.key ? e.newValue : stored('dl-fx')) === 'calm' ? 'calm' : 'full';
     syncThemeMenu();
   }
 });
 // With font-display: swap the 2049 fonts arrive after the tabs were measured; measure the pill again.
 document.fonts?.addEventListener('loadingdone', () => updateTabPills());
-// Effects stop while the tab is hidden (browsers mostly do this already; this makes sure for the fixed layers).
-document.addEventListener('visibilitychange', () => rootEl.toggleAttribute('data-hidden', document.hidden));
 window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener?.('change', syncThemeMenu);
 
 // ---- 2049: side rails (wide screens), decoding titles and numbers ----
@@ -4733,7 +4741,9 @@ const DECODE_GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&/<>_=+';
 function hudDecode(node, { ms = 420, digitsOnly = false } = {}) {
   const text = node.firstChild;
   if (!text || text.nodeType !== 3 || !text.data.trim()) return;
-  if (node.hudDecode) node.hudDecode.stop(false);
+  // Still decoding (the page was left and opened again quickly): put its real text back first, so the scrambled
+  // letters never become the "original".
+  if (node.hudDecode) node.hudDecode.stop(true);
   const orig = text.data;
   if (digitsOnly && !/\d/.test(orig)) return;
   let written = orig;
@@ -4896,6 +4906,7 @@ function showView() {
   // Player pages say "Player" until the player has loaded (renderPlayer names them); the rest use their heading, without its count.
   if (route.view !== 'player') {
     const h1 = $(`view-${route.view}`).querySelector('h1');
+    h1?.hudDecode?.stop(true); // 2049: a title still decoding from a moment ago gets its real text back first
     document.title = `${h1 ? h1.firstChild.textContent.trim() : 'DiscordLinked'} · DiscordLinked`;
   } else {
     document.title = 'Player · DiscordLinked';
