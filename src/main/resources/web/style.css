@@ -1875,7 +1875,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   opacity: 0; transition: opacity .2s;
 }
-:root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card, .podium-place):hover::after { opacity: 1; animation: hud-trace 2.2s linear infinite; }
+:root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card, .podium-place):hover::after { opacity: 1; animation: hud-trace 1.6s linear 1 forwards; }
 /* Dialogs and the login card are often left open: their trace (a custom property, so it repaints on the main thread)
    runs two and a half laps and then stays lit where Calm keeps it. */
 :root[data-theme="2049"] :is(dialog[open], .login-card)::after { opacity: 1; animation: hud-trace-settle 5.5s linear 1 forwards; }
