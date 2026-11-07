@@ -75,9 +75,11 @@ public final class SettingsEditor {
             number("log-retention-days", "Logging & data", "Keep other logs for",
                     "Days. Joins, IPs, admin actions and everything else. 0 = forever.", 0, 3650),
             bool("geoip-enabled", "Logging & data", "Look up players' regions",
-                    "Shows admins roughly where each player connects from (e.g. \"California, United States\"). Each "
-                            + "player's IP address is sent to ipinfo.io for that when they join. Local-network "
-                            + "addresses never are.", false),
+                    "Shows admins roughly where each player connects from (e.g. \"California, United States\"). For "
+                            + "that, players' IP addresses are sent to ipinfo.io: when they join, when an admin opens "
+                            + "their profile (up to 5 recent IPs) and for everyone online when this is switched on. "
+                            + "Local-network addresses never are. Off: nothing is sent and no regions are shown (ones "
+                            + "already looked up are kept as long as their IPs are).", false),
 
             number("inventory-snapshots-per-player", "Inventory snapshots", "Snapshots to keep per player",
                     "Older snapshots beyond this number are deleted.", 1, 1000),

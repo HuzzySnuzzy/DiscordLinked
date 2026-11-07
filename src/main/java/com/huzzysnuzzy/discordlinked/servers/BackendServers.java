@@ -235,15 +235,22 @@ public final class BackendServers {
         return entry != null && entry.maintenance;
     }
 
+    /** Whether the server's last ping (it's in Velocity's config) got no answer, so connecting there would fail. */
+    public boolean unreachable(String server) {
+        Entry entry = server == null ? null : entries.get(key(server));
+        Ping ping = entry == null ? null : entry.ping;
+        return ping != null && !ping.reachable();
+    }
+
     /** What players turned away from this server are told; "" = the default message. */
     public String maintenanceMessage(String server) {
         Entry entry = server == null ? null : entries.get(key(server));
         return entry == null ? "" : entry.maintenanceMessage;
     }
 
-    /** The servers in maintenance (A-Z), as spelt. */
+    /** The servers in Velocity's config that are in maintenance (A-Z), as spelt. */
     public List<String> inMaintenance() {
-        return list().stream().filter(Server::maintenance).map(Server::name).toList();
+        return list().stream().filter(s -> s.maintenance() && s.registered()).map(Server::name).toList();
     }
 
     /** Whether the pings ask DiscordLinkedBackend for its status; false on Velocity older than 3.4.0. */

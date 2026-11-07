@@ -39,7 +39,9 @@ public final class AdminCommand implements SimpleCommand {
             return;
         }
         if (args.length != 2 || !List.of("lookup", "unlink").contains(args[0].toLowerCase())) {
+            // Two lines, so installs whose messages.properties predates maintenance mode get the new one too.
             source.sendMessage(plugin.messages().minecraft("minecraft.command.usage"));
+            source.sendMessage(plugin.messages().minecraft("minecraft.command.maintenance-usage"));
             return;
         }
         plugin.proxy().getScheduler().buildTask(plugin, () -> run(source, args[0].toLowerCase(), args[1])).schedule();

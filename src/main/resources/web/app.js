@@ -2189,7 +2189,9 @@ function breakdown(values) {
   const counts = new Map();
   for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
   return el('div', { class: 'others' }, [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([v, n]) => el('span', { class: 'badge', title: `${v}: ${n.toLocaleString()} player${n === 1 ? '' : 's'}` }, `${v} · ${n.toLocaleString()}`)));
+    // The name in a span of its own, so a long one is cut short and the count stays.
+    .map(([v, n]) => el('span', { class: 'badge', title: `${v}: ${n.toLocaleString()} player${n === 1 ? '' : 's'}` },
+      el('span', { class: 'badge-name' }, v), `\u00a0· ${n.toLocaleString()}`)));
 }
 
 /**

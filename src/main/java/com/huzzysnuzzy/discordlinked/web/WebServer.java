@@ -2727,7 +2727,7 @@ public final class WebServer {
                     .put("ping", player.getPing())
                     .put("version", client == null ? null : client.version())
                     .put("brand", client == null ? null : client.brand())
-                    .put("region", regionJson(player.getRemoteAddress().getAddress().getHostAddress(), false))
+                    .put("region", regionJson(player.getRemoteAddress().getAddress().getHostAddress(), true))
                     .put("self", self.isPresent() && self.get().uuid().equals(player.getUniqueId())));
         }
         String selfStatus = self.isEmpty() ? "unlinked"

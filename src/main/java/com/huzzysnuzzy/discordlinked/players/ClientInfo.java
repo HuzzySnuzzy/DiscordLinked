@@ -56,6 +56,8 @@ public final class ClientInfo {
 
     private final DiscordLinked plugin;
     private final Map<UUID, Online> online = new ConcurrentHashMap<>();
+    /** Players who left with samples not written yet; {@link #flush} writes them too, so none are lost at shutdown. */
+    private final Map<UUID, Online> leaving = new ConcurrentHashMap<>();
 
     public ClientInfo(DiscordLinked plugin) {
         this.plugin = plugin;
@@ -83,11 +85,10 @@ public final class ClientInfo {
     public void onClientBrand(PlayerClientBrandEvent event) {
         Player player = event.getPlayer();
         String brand = brand(event.getBrand());
-        if (brand == null || plugin.proxy().getPlayer(player.getUniqueId()).isEmpty()) {
-            return;
-        }
-        Online client = online.computeIfAbsent(player.getUniqueId(), uuid -> newOnline(player));
-        if (brand.equals(client.brand)) {
+        // Only for someone who's on: clients are tracked from PostLoginEvent (which reads the brand too, if it came
+        // first) until they leave.
+        Online client = brand == null ? null : online.get(player.getUniqueId());
+        if (client == null || brand.equals(client.brand)) {
             return;
         }
         client.brand = brand;
@@ -96,11 +97,24 @@ public final class ClientInfo {
 
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
-        Online client = online.remove(event.getPlayer().getUniqueId());
-        if (client != null) {
-            UUID uuid = event.getPlayer().getUniqueId();
-            plugin.proxy().getScheduler().buildTask(plugin, () -> write(Map.of(uuid, client))).schedule();
+        UUID uuid = event.getPlayer().getUniqueId();
+        Online client = online.remove(uuid);
+        if (client == null) {
+            return;
         }
+        leaving.merge(uuid, client, (earlier, now) -> {
+            synchronized (earlier) {
+                synchronized (now) {
+                    earlier.pendingSum += now.pendingSum;
+                    earlier.pendingCount += now.pendingCount;
+                    earlier.lastSampleAt = Math.max(earlier.lastSampleAt, now.lastSampleAt);
+                    now.pendingSum = 0;
+                    now.pendingCount = 0;
+                }
+            }
+            return earlier;
+        });
+        plugin.proxy().getScheduler().buildTask(plugin, this::writeLeaving).schedule();
     }
 
     // ---- Pings ----
@@ -113,7 +127,10 @@ public final class ClientInfo {
             if (ping <= 0) {
                 continue;
             }
-            Online client = online.computeIfAbsent(player.getUniqueId(), uuid -> newOnline(player));
+            Online client = online.get(player.getUniqueId());
+            if (client == null) {
+                continue; // not logged in yet, or leaving
+            }
             synchronized (client) {
                 client.pendingSum += ping;
                 client.pendingCount++;
@@ -122,13 +139,36 @@ public final class ClientInfo {
         }
     }
 
-    /** Writes every online player's samples not written yet, in one go. Also called when the proxy stops. */
+    /**
+     * Writes every sample not written yet (of players online and of players who left), in one go. Also called when
+     * the proxy stops, before the database closes: it waits for a write that's under way.
+     */
     public void flush() {
-        write(online);
+        Map<UUID, Online> all = new HashMap<>(online);
+        all.putAll(leaving);
+        write(all);
+        forgetWritten();
     }
 
-    /** Takes the clients' pending samples and writes them; if that fails, they're put back for the next try. */
-    private void write(Map<UUID, Online> clients) {
+    private void writeLeaving() {
+        write(leaving);
+        forgetWritten();
+    }
+
+    /** Players who left drop out once everything of theirs is written. */
+    private void forgetWritten() {
+        leaving.entrySet().removeIf(entry -> {
+            synchronized (entry.getValue()) {
+                return entry.getValue().pendingCount == 0;
+            }
+        });
+    }
+
+    /**
+     * Takes the clients' pending samples and writes them; if that fails, they're put back for the next try. One
+     * write at a time, so {@link #flush} at shutdown finishes after any write already under way.
+     */
+    private synchronized void write(Map<UUID, Online> clients) {
         Map<UUID, Database.PingSamples> samples = new HashMap<>();
         Map<Online, Database.PingSamples> taken = new HashMap<>();
         for (Map.Entry<UUID, Online> entry : clients.entrySet()) {
@@ -169,6 +209,16 @@ public final class ClientInfo {
         long sum = stored.map(Database.ClientRecord::pingSum).orElse(0L);
         long count = stored.map(Database.ClientRecord::pingCount).orElse(0L);
         Instant last = stored.map(Database.ClientRecord::pingAt).orElse(null);
+        Online gone = leaving.get(uuid);
+        if (gone != null) {
+            synchronized (gone) {
+                sum += gone.pendingSum;
+                count += gone.pendingCount;
+                if (gone.pendingCount > 0 && (last == null || last.toEpochMilli() < gone.lastSampleAt)) {
+                    last = Instant.ofEpochMilli(gone.lastSampleAt);
+                }
+            }
+        }
         if (now != null) {
             synchronized (now) {
                 sum += now.pendingSum;

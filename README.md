@@ -24,14 +24,17 @@ Each player's Minecraft client is recorded too: the version it plays (from its p
 Anyone who can see a player's profile on the website sees these.
 
 **Regions** (e.g. "California, United States") are for admins only, next to the player's IPs: they're never in
-what the community view gets from the website. For this, each player's IP address is sent to
-[ipinfo.io](https://ipinfo.io) when they join (`https://ipinfo.io/<ip>/json`), at most one a second, in the
-background. Answers are kept per IP for 30 days, and go with the IP when the log retention deletes it. Private,
+what the community view gets from the website. For this, players' IP addresses are sent to
+[ipinfo.io](https://ipinfo.io) (`https://ipinfo.io/<ip>/json`), at most one a second, in the background: when they
+join, when an admin opens their profile (up to 5 of their most recent IPs not looked up yet), and for everyone
+online when the switch below is turned on. Each answer is kept per IP and looked up again after 30 days; it's kept
+as long as that IP is in the player's IP history (`log-retention-days`), and deleted with it. Private,
 loopback, link-local and carrier-grade NAT addresses are never sent ("Local network"), nor reserved ones like
 documentation ranges. Without a token ipinfo.io allows a limited number of lookups a month; a free token from
 ipinfo.io in `geoip-token` (in `config.properties` only) raises that. Lookup failures are logged at most once
 every 10 minutes. Turn it off with Settings → Logging & data → **Look up players' regions**
-(`geoip-enabled=false`): nothing is looked up and no regions are shown.
+(`geoip-enabled=false`): nothing is sent and no regions are shown anywhere. Regions already looked up stay in the
+database (until their IPs are cleaned up) and show again if it's turned back on. It's on by default.
 
 ## Chat bridge
 
@@ -183,23 +186,29 @@ The **Maintenance** switch under a server's Settings (or `/dlink maintenance <se
 
 - the settings owner (`web-owner-id`, or else the Discord server's owner) on their linked Minecraft account;
 - players whose linked Discord account has the admin role (`admin-role-id`). The role is looked up on Discord if
-  it isn't known yet; if Discord doesn't answer within 4 seconds, they're turned away that time;
+  it isn't known yet. Right after the proxy starts that waits for the bot to connect, up to 4 seconds in all
+  (also for the settings owner, when `web-owner-id` is empty and the owner is the Discord server's). If Discord
+  can't say in time, someone joining is turned away that time, while someone already on the server stays;
 - anyone with the permission `discordlinked.maintenance.bypass` (linked or not).
 
 Everyone else:
 
 - trying to switch to it from another server (`/server`, a lobby plugin...) stays where they are and is told in
   chat;
-- joining the network with it as their first server, or being sent to it after a kick from another server, goes
-  to the next server Velocity would try (the forced hosts for the address they joined with, if any, else
-  `try` in `velocity.toml`) that isn't in maintenance. If there's none they're disconnected with the maintenance
-  message (after a kick, with the kick's reason);
-- already on it when it's switched on: moved to the next such server and told why, or disconnected with the
-  message if there's none.
+- joining the network with it as their first server, or being sent to it after a kick from another server (or a
+  failed connection), goes to the next server Velocity would try (the forced hosts for the address they joined
+  with, if any, else `try` in `velocity.toml`) that isn't in maintenance, isn't known to be offline and hasn't
+  been tried already. If there's none they're disconnected with the maintenance message (after a kick, the kick's
+  reason comes first);
+- already on it when it's switched on, or arriving just after (a connection already under way): moved to the next
+  such server and told why, or disconnected with the message if there's none. A server that can't be reached is
+  skipped for the one after it. Players are checked one at a time; Discord is only asked about ones whose role
+  isn't known yet.
 
 **Maintenance message** sets what they're told for that server (one line of plain text, up to 200 characters).
-Empty = `minecraft.maintenance.default` in `messages.properties` ("<server> is under maintenance. Only staff can
-join it right now."); `minecraft.maintenance.custom` wraps your own message. A server in maintenance has a
+Empty = `minecraft.maintenance.default` in `messages.properties`, which by default reads "**&lt;server&gt; is under
+maintenance**" and, on the next line, "Only staff can join it right now. Please try again later.";
+`minecraft.maintenance.custom` wraps your own message. A server in maintenance has a
 **Maintenance** badge in Settings, "(maintenance)" in the website's server menus, and a line on Home.
 
 **Default server**, above the list, is where the server menus on Players and Moderate start (`default-server`

@@ -503,8 +503,10 @@ html:has(#view-settings:not([hidden]) #settings-bar:not([hidden])) { scroll-padd
 .mod-overview { margin-bottom: 14px; padding: 14px; }
 .mod-overview .stats-grid { margin: 0; }
 .mod-overview .others { margin-top: 4px; }
-/* A client brand can be long (up to 64 characters): cut short inside its tile, in full in its tooltip. */
-.mod-overview .badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* A client brand can be long (up to 64 characters): its name is cut short inside the tile (in full in the
+   tooltip), and the count after it stays. */
+.mod-overview .badge { display: inline-flex; max-width: 100%; }
+.mod-overview .badge-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mod-card > .pill { justify-self: start; }
 .mod-actions { justify-content: flex-start; }
 .btn-spy { background-color: #6d5dfc; }
