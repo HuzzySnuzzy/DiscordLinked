@@ -18,6 +18,21 @@ Stored in `plugins/discordlinked/data.db` (SQLite): links/unlinks, joins (with I
 chat and commands (both can be turned off). Links, unlinks, joins and leaves are also posted to the
 optional log channel (IPs are not posted).
 
+Each player's Minecraft client is recorded too: the version it plays (from its protocol, e.g. "1.21.4", or
+"1.21.2–1.21.3" where releases share one), its brand ("vanilla", "fabric", "lunarclient"...) and its average ping
+(Velocity's estimate, sampled every 30 seconds while they play; written every 5 minutes and when they leave).
+Anyone who can see a player's profile on the website sees these.
+
+**Regions** (e.g. "California, United States") are for admins only, next to the player's IPs: they're never in
+what the community view gets from the website. For this, each player's IP address is sent to
+[ipinfo.io](https://ipinfo.io) when they join (`https://ipinfo.io/<ip>/json`), at most one a second, in the
+background. Answers are kept per IP for 30 days, and go with the IP when the log retention deletes it. Private,
+loopback, link-local and carrier-grade NAT addresses are never sent ("Local network"), nor reserved ones like
+documentation ranges. Without a token ipinfo.io allows a limited number of lookups a month; a free token from
+ipinfo.io in `geoip-token` (in `config.properties` only) raises that. Lookup failures are logged at most once
+every 10 minutes. Turn it off with Settings → Logging & data → **Look up players' regions**
+(`geoip-enabled=false`): nothing is looked up and no regions are shown.
+
 ## Chat bridge
 
 Set `chat-channel-id` in `config.properties`, then turn on either direction independently:
@@ -66,7 +81,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.22.1.jar` there instead.
+   `DiscordLinkedBackend-0.23.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -131,7 +146,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.22.1 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.23.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -159,6 +174,33 @@ and every change is in the Logs (**Settings changes**, with the server's name):
   on the website (it's spending, not earning). In game this needs DiscordLinkedBackend: on a server still running
   DiscordLinkedFAD, `/exchange` says selling is closed, so use the website there.
 - The Shop, gifts, cosmetics, interactions and admins giving or taking credits work the same on every server.
+
+#### Maintenance mode
+
+The **Maintenance** switch under a server's Settings (or `/dlink maintenance <server> on|off` in game, see
+[Commands](#commands)) closes that server to everyone but admins. It applies straight away and is in the Logs
+(**Settings changes**: who turned it on or off, and when). Who can still join:
+
+- the settings owner (`web-owner-id`, or else the Discord server's owner) on their linked Minecraft account;
+- players whose linked Discord account has the admin role (`admin-role-id`). The role is looked up on Discord if
+  it isn't known yet; if Discord doesn't answer within 4 seconds, they're turned away that time;
+- anyone with the permission `discordlinked.maintenance.bypass` (linked or not).
+
+Everyone else:
+
+- trying to switch to it from another server (`/server`, a lobby plugin...) stays where they are and is told in
+  chat;
+- joining the network with it as their first server, or being sent to it after a kick from another server, goes
+  to the next server Velocity would try (the forced hosts for the address they joined with, if any, else
+  `try` in `velocity.toml`) that isn't in maintenance. If there's none they're disconnected with the maintenance
+  message (after a kick, with the kick's reason);
+- already on it when it's switched on: moved to the next such server and told why, or disconnected with the
+  message if there's none.
+
+**Maintenance message** sets what they're told for that server (one line of plain text, up to 200 characters).
+Empty = `minecraft.maintenance.default` in `messages.properties` ("<server> is under maintenance. Only staff can
+join it right now."); `minecraft.maintenance.custom` wraps your own message. A server in maintenance has a
+**Maintenance** badge in Settings, "(maintenance)" in the website's server menus, and a line on Home.
 
 **Default server**, above the list, is where the server menus on Players and Moderate start (`default-server`
 in `config.properties`, empty = All servers). If it names a server that's gone from Velocity's config, they start
@@ -376,9 +418,10 @@ while they're logged in.
   [Several servers](#several-servers)).
 - **Find any player**: the search box in the top bar finds everyone who has ever connected, linked or not,
   by Minecraft name, UUID, Discord name or Discord ID.
-- **Player page** (click any name): profile with a NameMC link, Discord details, current suspension,
-  staff notes, full suspension history, IP addresses with other accounts seen on the same IP, and the
-  player's complete activity log.
+- **Player page** (click any name): profile with a NameMC link, Discord details, their Minecraft version, client,
+  average ping and region, current suspension, staff notes, full suspension history, IP addresses with their
+  region and other accounts seen on the same IP, and the player's complete activity log. (The community view's
+  profile shows the version, client and average ping, never the region.)
 - **Actions**: kick (online players), suspend (days + hours), edit a suspension (new length and reason),
   unsuspend, add a staff note, remove a link. All need a reason or note text.
 - **Inventory** (player page, and the Inventory button on Moderate cards):
@@ -401,7 +444,7 @@ while they're logged in.
   is logged. The bot token and client secret only show as set / not set and can't be changed here. A Data
   section shows the database size and has **Clean up now** and **Compact database** buttons.
   **Backend servers** near the top lists every Minecraft server and has their switches for earning credits
-  and microcredits, and the default server (see [Several servers](#several-servers)).
+  and microcredits and for maintenance mode, and the default server (see [Several servers](#several-servers)).
   Only the Discord server's owner can see Settings, unless `web-owner-id` names someone else.
 - **Retention**: `chat-log-retention-days` (default 90) and `log-retention-days` (default forever) delete
   old logs, and `inventory-snapshot-retention-days` old snapshots. Cleanup runs hourly.
@@ -443,8 +486,10 @@ Notes are never sent to players.
 
 ### Moderate page & Spy
 
-**Moderate** shows everyone online right now as a grid of cards (head, name, server, ping, Discord name),
-filterable by server, with **Spy**, **Kick** and **Suspend** buttons.
+**Moderate** shows everyone online right now as a grid of cards (head, name, server, ping, Minecraft version,
+Discord name), filterable by server, with **Spy**, **Kick** and **Suspend** buttons. Above them, an overview of who's
+on (on the server picked): their average ping right now, and how many play each Minecraft version, each client and
+from each country (with region lookups on, see [What gets tracked](#what-gets-tracked)).
 
 **Spy** puts *your own* Minecraft character in spectator mode next to the player:
 
@@ -560,7 +605,9 @@ commands anywhere. Elsewhere the bot answers, only to that person, which channel
 
 Admin command visibility can be changed in Server Settings → Integrations → your bot.
 
-In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`.
+In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`, and
+`/dlink maintenance [server] [on|off]` (which servers are in maintenance, one server's state, or switch it; see
+[Maintenance mode](#maintenance-mode)).
 
 In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, and
@@ -585,8 +632,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.22.1.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.22.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.23.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.23.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section.
 
 ## Setup

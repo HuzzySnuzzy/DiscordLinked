@@ -15,6 +15,8 @@ import com.huzzysnuzzy.discordlinked.fad.Groups;
 import com.huzzysnuzzy.discordlinked.fad.Market;
 import com.huzzysnuzzy.discordlinked.fad.ParticleStyle;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
+import com.huzzysnuzzy.discordlinked.players.ClientInfo;
+import com.huzzysnuzzy.discordlinked.players.Regions;
 import com.huzzysnuzzy.discordlinked.servers.BackendServers;
 import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
 import com.huzzysnuzzy.discordlinked.spy.SpyManager;
@@ -111,6 +113,8 @@ public final class WebServer {
     private static final long MAX_CREDIT_ADJUSTMENT = 1_000_000_000L;
     private static final int MAX_EXPORT_ROWS = 50_000;
     private static final int LEADERBOARD_SIZE = 100;
+    /** A profile looks up the regions of this many of the player's latest IPs that aren't known yet. */
+    private static final int MAX_REGION_LOOKUPS = 5;
     private static final DateTimeFormatter EXPORT_TIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(ZoneId.systemDefault());
     private static final DateTimeFormatter FILE_TIME =
@@ -639,6 +643,7 @@ public final class WebServer {
                 .put("marketOpen", plugin.community().market().open())
                 .put("cosmeticsOpen", plugin.community().cosmetics().open())
                 .put("servers", DataArray.fromCollection(plugin.servers().names()))
+                .put("maintenance", DataArray.fromCollection(plugin.servers().inMaintenance()))
                 .put("defaultServer", plugin.servers().defaultServer());
     }
 
@@ -1029,7 +1034,7 @@ public final class WebServer {
         community.remove("optedOut");
         sendJson(ex, 200, DataObject.empty()
                 .put("player", publicPlayerJson(uuid, ref.get().name(), linked).put("firstPlayed", firstPlayed(uuid))
-                        .put("streak", streakJson(uuid)))
+                        .put("streak", streakJson(uuid)).put("client", clientJson(uuid)))
                 .put("community", community)
                 .put("cosmetics", playerCosmetics(uuid, session)));
     }
@@ -1076,6 +1081,7 @@ public final class WebServer {
                 .put("onlineCount", players.size())
                 .put("staffOnline", staffOnline)
                 .put("servers", serverCounts)
+                .put("maintenance", DataArray.fromCollection(plugin.servers().inMaintenance()))
                 .put("online", online)
                 .put("newest", newest)
                 .put("recent", recent);
@@ -1092,7 +1098,7 @@ public final class WebServer {
         LinkedAccount linked = plugin.database().findByUuid(uuid).orElse(null);
         DataObject player = playerJson(uuid, ref.get().name(), linked,
                 plugin.database().activeSuspension(uuid).orElse(null)).put("firstPlayed", firstPlayed(uuid))
-                .put("streak", streakJson(uuid));
+                .put("streak", streakJson(uuid)).put("client", clientJson(uuid));
 
         DataArray suspensions = DataArray.empty();
         for (Suspension s : plugin.database().suspensions(uuid)) {
@@ -1104,18 +1110,67 @@ public final class WebServer {
                     .put("createdAt", note.createdAt().toEpochMilli()));
         }
         DataArray ips = DataArray.empty();
-        for (PlayerIp ip : plugin.database().ips(uuid)) {
+        Regions regions = plugin.regions();
+        List<PlayerIp> playerIps = plugin.database().ips(uuid);
+        // Where they connect from: their latest IP's region. Ones not looked up yet are, in the background.
+        player.put("regions", regions.enabled())
+                .put("region", playerIps.isEmpty() ? null : regionJson(playerIps.get(0).ip(), true));
+        for (int i = 0; i < playerIps.size(); i++) {
+            PlayerIp ip = playerIps.get(i);
             DataArray others = DataArray.empty();
             for (UUID other : plugin.database().playersOnIp(ip.ip(), uuid)) {
                 plugin.database().findPlayer(other).ifPresent(o -> others.add(DataObject.empty()
                         .put("uuid", o.uuid().toString()).put("name", o.name()).put("linked", o.discordId() != null)));
             }
             ips.add(DataObject.empty().put("ip", ip.ip()).put("firstSeen", ip.firstSeen().toEpochMilli())
-                    .put("lastSeen", ip.lastSeen().toEpochMilli()).put("times", ip.times()).put("others", others));
+                    .put("lastSeen", ip.lastSeen().toEpochMilli()).put("times", ip.times()).put("others", others)
+                    .put("region", regionJson(ip.ip(), i < MAX_REGION_LOOKUPS)));
         }
         sendJson(ex, 200, DataObject.empty().put("player", player).put("suspensions", suspensions)
                 .put("notes", notes).put("ips", ips).put("community", playerCommunity(uuid, linked))
                 .put("cosmetics", playerCosmetics(uuid, session)));
+    }
+
+    /**
+     * A player's Minecraft client for their profile (anyone who can see the profile): version, brand and average
+     * ping. Null if they never joined since this was recorded.
+     */
+    private DataObject clientJson(UUID uuid) throws SQLException {
+        return plugin.clients().client(uuid).map(c -> DataObject.empty()
+                .put("version", c.version())
+                .put("protocol", c.protocol())
+                .put("brand", c.brand())
+                .put("averagePing", c.averagePing())
+                .put("pingSamples", c.pingSamples())
+                .put("lastPingAt", c.lastPingAt() == null ? null : c.lastPingAt().toEpochMilli())
+                .put("seenAt", c.seenAt() == null ? null : c.seenAt().toEpochMilli())).orElse(null);
+    }
+
+    /**
+     * Where an IP is, for staff only (it's derived from the IP, so it never goes into what members see). Null when
+     * lookups are off or it isn't known; {@code pending} while it's being looked up. With {@code lookUp}, an IP not
+     * known yet is looked up in the background.
+     */
+    private DataObject regionJson(String ip, boolean lookUp) {
+        Regions regions = plugin.regions();
+        if (ip == null || !regions.enabled()) {
+            return null;
+        }
+        Optional<Regions.Region> region = regions.region(ip);
+        if (region.isEmpty()) {
+            if (lookUp) {
+                regions.lookUp(ip);
+            }
+            return regions.pending(ip) ? DataObject.empty().put("pending", true) : null;
+        }
+        Regions.Region r = region.get();
+        return DataObject.empty()
+                .put("label", r.label())
+                .put("country", r.country())
+                .put("countryName", r.countryName())
+                .put("region", r.region())
+                .put("city", r.city())
+                .put("local", r.local());
     }
 
     // ---- Community: credits and interactions ----
@@ -2223,15 +2278,19 @@ public final class WebServer {
                     .put("lastSeen", s.lastSeen() == null ? null : s.lastSeen().toEpochMilli())
                     .put("answered", s.answered())
                     .put("creditsEnabled", s.creditsEnabled())
-                    .put("microEnabled", s.microEnabled()));
+                    .put("microEnabled", s.microEnabled())
+                    .put("maintenance", s.maintenance())
+                    .put("maintenanceMessage", s.maintenanceMessage()));
         }
         return DataObject.empty().put("servers", servers).put("defaultServer", defaultServer)
-                .put("probe", plugin.servers().probing()).put("version", DiscordLinked.VERSION);
+                .put("probe", plugin.servers().probing()).put("version", DiscordLinked.VERSION)
+                .put("maxMaintenanceMessage", BackendServers.MAX_MAINTENANCE_MESSAGE);
     }
 
     /**
-     * Settings -> Backend servers: {@code {name, creditsEnabled?, microEnabled?}}, {@code {name, forget: true}} for
-     * a server that's no longer in Velocity's config, or {@code {defaultServer}}. Answers with the new list.
+     * Settings -> Backend servers: {@code {name, creditsEnabled?, microEnabled?}}, {@code {name, maintenance?,
+     * maintenanceMessage?}} (a blank message = the default one), {@code {name, forget: true}} for a server that's no
+     * longer in Velocity's config, or {@code {defaultServer}}. Answers with the new list.
      */
     private void serverSettings(HttpExchange ex, String actor) throws IOException, SQLException {
         DataObject body = readJson(ex);
@@ -2249,6 +2308,26 @@ public final class WebServer {
                 String name = servers.name(requested);
                 servers.forget(requested, actor);
                 message = name + " is off the list.";
+            } else if (body.hasKey("maintenance") || body.hasKey("maintenanceMessage")) {
+                if (!body.isNull("maintenance") && !(body.get("maintenance") instanceof Boolean)
+                        || !body.isNull("maintenanceMessage") && !(body.get("maintenanceMessage") instanceof String)) {
+                    sendJson(ex, 400, error("maintenance is true or false, maintenanceMessage is text."));
+                    return;
+                }
+                Boolean on = body.isNull("maintenance") ? null : body.getBoolean("maintenance");
+                String text = body.isNull("maintenanceMessage") ? null : body.getString("maintenanceMessage");
+                List<String> changed = servers.setMaintenance(requested, on, text, actor);
+                String name = servers.name(requested);
+                List<String> sentences = new ArrayList<>();
+                if (on != null) {
+                    sentences.add(on ? "Maintenance on " + name + " is on: only admins can join it. Players there who "
+                            + "can't stay are moved to another server." : "Maintenance on " + name + " is off.");
+                }
+                if (text != null) {
+                    sentences.add(servers.maintenanceMessage(name).isEmpty()
+                            ? name + " uses the default maintenance message." : name + "'s maintenance message is saved.");
+                }
+                message = changed.isEmpty() ? "Nothing changed." : String.join(" ", sentences);
             } else {
                 Boolean credits = body.isNull("creditsEnabled") ? null : body.getBoolean("creditsEnabled");
                 Boolean micro = body.isNull("microEnabled") ? null : body.getBoolean("microEnabled");
@@ -2272,7 +2351,8 @@ public final class WebServer {
             sendJson(ex, 400, error(e.getMessage()));
             return;
         } catch (ParsingException e) {
-            sendJson(ex, 400, error("creditsEnabled, microEnabled and forget are true or false."));
+            sendJson(ex, 400, error("creditsEnabled, microEnabled, maintenance and forget are true or false, "
+                    + "maintenanceMessage is text."));
             return;
         }
         sendJson(ex, 200, serversJson().put("ok", true).put("message", message));
@@ -2642,13 +2722,19 @@ public final class WebServer {
         DataArray players = DataArray.empty();
         for (Player player : plugin.proxy().getAllPlayers()) {
             LinkedAccount linked = plugin.database().findByUuid(player.getUniqueId()).orElse(null);
+            ClientInfo.Client client = plugin.clients().onlineClient(player.getUniqueId());
             players.add(playerJson(player.getUniqueId(), player.getUsername(), linked, suspensions.get(player.getUniqueId()))
                     .put("ping", player.getPing())
+                    .put("version", client == null ? null : client.version())
+                    .put("brand", client == null ? null : client.brand())
+                    .put("region", regionJson(player.getRemoteAddress().getAddress().getHostAddress(), false))
                     .put("self", self.isPresent() && self.get().uuid().equals(player.getUniqueId())));
         }
         String selfStatus = self.isEmpty() ? "unlinked"
                 : plugin.proxy().getPlayer(self.get().uuid()).isPresent() ? "online" : "offline";
-        return DataObject.empty().put("players", players).put("selfStatus", selfStatus)
+        return DataObject.empty().put("players", players).put("regions", plugin.regions().enabled())
+                .put("maintenance", DataArray.fromCollection(plugin.servers().inMaintenance()))
+                .put("selfStatus", selfStatus)
                 .put("selfName", self.map(LinkedAccount::minecraftName).orElse(null))
                 .put("maxDistance", plugin.config().spyMaxDistance());
     }

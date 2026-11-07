@@ -389,6 +389,31 @@ public final class Database implements AutoCloseable {
         try (Statement st = connection.createStatement()) {
             st.execute("CREATE INDEX IF NOT EXISTS idx_audit_server ON audit_log (server COLLATE NOCASE, id)");
         }
+        // Added in 0.23.0: maintenance mode per server, each player's Minecraft client and average ping, and the
+        // regions of IP addresses (looked up at ipinfo.io, kept for 30 days).
+        addColumnIfMissing("backend_servers", "maintenance", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("backend_servers", "maintenance_message", "TEXT");
+        try (Statement st = connection.createStatement()) {
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS player_clients (
+                        minecraft_uuid TEXT PRIMARY KEY,
+                        protocol       INTEGER,
+                        version        TEXT,
+                        brand          TEXT,
+                        seen_at        INTEGER,
+                        ping_sum       INTEGER NOT NULL DEFAULT 0,
+                        ping_count     INTEGER NOT NULL DEFAULT 0,
+                        ping_at        INTEGER
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS ip_regions (
+                        ip         TEXT PRIMARY KEY,
+                        country    TEXT,
+                        region     TEXT,
+                        city       TEXT,
+                        fetched_at INTEGER NOT NULL
+                    )""");
+        }
     }
 
     /** A first set so the shop isn't empty; the settings owner can change or delete all of them. */
@@ -1291,6 +1316,127 @@ public final class Database implements AutoCloseable {
             ps.setLong(1, before.toEpochMilli());
             return ps.executeUpdate();
         }
+    }
+
+    /** The most recent IP a player connected from, if any. */
+    public synchronized Optional<String> latestIp(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT ip FROM player_ips WHERE minecraft_uuid = ? ORDER BY last_seen DESC LIMIT 1")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+            }
+        }
+    }
+
+    // ---- Regions of IP addresses ----
+
+    /** Where an IP address is, as ipinfo.io said: all null for an address it has no place for. */
+    public record IpRegion(String country, String region, String city, Instant fetchedAt) {
+    }
+
+    public synchronized Optional<IpRegion> ipRegion(String ip) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM ip_regions WHERE ip = ?")) {
+            ps.setString(1, ip);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(new IpRegion(rs.getString("country"), rs.getString("region"),
+                        rs.getString("city"), Instant.ofEpochMilli(rs.getLong("fetched_at")))) : Optional.empty();
+            }
+        }
+    }
+
+    public synchronized void saveIpRegion(String ip, String country, String region, String city, Instant fetchedAt)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO ip_regions (ip, country, region, city, fetched_at) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (ip) DO UPDATE SET country = excluded.country, region = excluded.region,
+                    city = excluded.city, fetched_at = excluded.fetched_at""")) {
+            ps.setString(1, ip);
+            ps.setString(2, country);
+            ps.setString(3, region);
+            ps.setString(4, city);
+            ps.setLong(5, fetchedAt.toEpochMilli());
+            ps.executeUpdate();
+        }
+    }
+
+    /** Regions of IPs no player has any more (their IP history was cleaned up). */
+    public synchronized int deleteUnusedIpRegions() throws SQLException {
+        try (Statement st = connection.createStatement()) {
+            return st.executeUpdate("DELETE FROM ip_regions WHERE ip NOT IN (SELECT ip FROM player_ips)");
+        }
+    }
+
+    // ---- Minecraft clients ----
+
+    /**
+     * A player's Minecraft client as last seen: its protocol number, the version name ("1.21.4", or a range like
+     * "1.21.2–1.21.3"), the client brand ("vanilla", "fabric"...), and every ping sample taken while they played.
+     */
+    public record ClientRecord(Integer protocol, String version, String brand, Instant seenAt, long pingSum,
+                               long pingCount, Instant pingAt) {
+    }
+
+    public synchronized Optional<ClientRecord> client(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM player_clients WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                int protocol = rs.getInt("protocol");
+                boolean noProtocol = rs.wasNull();
+                Long seen = nullableLong(rs, "seen_at");
+                Long pingAt = nullableLong(rs, "ping_at");
+                return Optional.of(new ClientRecord(noProtocol ? null : protocol, rs.getString("version"),
+                        rs.getString("brand"), seen == null ? null : Instant.ofEpochMilli(seen), rs.getLong("ping_sum"),
+                        rs.getLong("ping_count"), pingAt == null ? null : Instant.ofEpochMilli(pingAt)));
+            }
+        }
+    }
+
+    /** The client a player is on now. A null brand keeps the stored one (the brand comes a moment after joining). */
+    public synchronized void setClient(UUID uuid, Integer protocol, String version, String brand, Instant seenAt)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO player_clients (minecraft_uuid, protocol, version, brand, seen_at) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (minecraft_uuid) DO UPDATE SET protocol = COALESCE(excluded.protocol, protocol),
+                    version = COALESCE(excluded.version, version), brand = COALESCE(excluded.brand, brand),
+                    seen_at = excluded.seen_at""")) {
+            ps.setString(1, uuid.toString());
+            ps.setObject(2, protocol);
+            ps.setString(3, version);
+            ps.setString(4, brand);
+            ps.setLong(5, seenAt.toEpochMilli());
+            ps.executeUpdate();
+        }
+    }
+
+    /** Ping samples to add to a player's totals: their sum and count (milliseconds), and when the last was taken. */
+    public record PingSamples(long sum, long count, Instant lastAt) {
+    }
+
+    /** Adds ping samples for several players in one transaction. */
+    public synchronized void addPings(Map<UUID, PingSamples> samples) throws SQLException {
+        if (samples.isEmpty()) {
+            return;
+        }
+        transaction(() -> {
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    INSERT INTO player_clients (minecraft_uuid, ping_sum, ping_count, ping_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT (minecraft_uuid) DO UPDATE SET ping_sum = ping_sum + excluded.ping_sum,
+                        ping_count = ping_count + excluded.ping_count,
+                        ping_at = MAX(COALESCE(ping_at, 0), excluded.ping_at)""")) {
+                for (Map.Entry<UUID, PingSamples> entry : samples.entrySet()) {
+                    ps.setString(1, entry.getKey().toString());
+                    ps.setLong(2, entry.getValue().sum());
+                    ps.setLong(3, entry.getValue().count());
+                    ps.setLong(4, entry.getValue().lastAt().toEpochMilli());
+                    ps.addBatch();
+                }
+                return ps.executeBatch().length;
+            }
+        });
     }
 
     /** IP history rows not seen since {@code before} (kept in step with the log retention). */
@@ -2676,9 +2822,13 @@ public final class Database implements AutoCloseable {
 
     // ---- Backend servers ----
 
-    /** A backend server as stored: its earning switches and what its plugin last reported (null = never). */
+    /**
+     * A backend server as stored: its earning switches, what its plugin last reported (null = never), and whether
+     * it's in maintenance, with the message for players turned away (null = the default one).
+     */
     public record BackendServerRow(String name, boolean creditsEnabled, boolean microEnabled, String pluginName,
-                                   String pluginVersion, String minecraftVersion, Instant lastSeen) {
+                                   String pluginVersion, String minecraftVersion, Instant lastSeen,
+                                   boolean maintenance, String maintenanceMessage) {
     }
 
     public synchronized List<BackendServerRow> backendServers() throws SQLException {
@@ -2690,7 +2840,8 @@ public final class Database implements AutoCloseable {
                 Instant lastSeen = rs.wasNull() ? null : Instant.ofEpochMilli(seen);
                 servers.add(new BackendServerRow(rs.getString("name"), rs.getInt("credits_enabled") != 0,
                         rs.getInt("micro_enabled") != 0, rs.getString("plugin_name"), rs.getString("plugin_version"),
-                        rs.getString("mc_version"), lastSeen));
+                        rs.getString("mc_version"), lastSeen, rs.getInt("maintenance") != 0,
+                        rs.getString("maintenance_message")));
             }
         }
         return servers;
@@ -2712,6 +2863,19 @@ public final class Database implements AutoCloseable {
             ps.setString(1, name);
             ps.setInt(2, credits ? 1 : 0);
             ps.setInt(3, micro ? 1 : 0);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Maintenance mode for a server, and the message for players turned away (null = the default one). */
+    public synchronized void setBackendMaintenance(String name, boolean maintenance, String message) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO backend_servers (name, maintenance, maintenance_message) VALUES (?, ?, ?)
+                ON CONFLICT (name) DO UPDATE SET maintenance = excluded.maintenance,
+                    maintenance_message = excluded.maintenance_message""")) {
+            ps.setString(1, name);
+            ps.setInt(2, maintenance ? 1 : 0);
+            ps.setString(3, message);
             ps.executeUpdate();
         }
     }

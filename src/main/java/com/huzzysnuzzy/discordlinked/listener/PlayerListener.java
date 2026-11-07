@@ -88,6 +88,8 @@ public final class PlayerListener {
                 EventTypes.JOIN, "ip=" + ip(player));
         updateLastSeen(player);
         recordIp(player);
+        // Where they connect from, for admins (in the background, when region lookups are on).
+        plugin.regions().lookUp(ip(player));
         LoginStreak streak = plugin.community().dailyLogin(player);
         plugin.community().welcome(player, streak);
         int days = streak == null ? 0 : streak.current();

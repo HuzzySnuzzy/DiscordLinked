@@ -8,7 +8,10 @@ import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
 import com.huzzysnuzzy.discordlinked.fad.Community;
 import com.huzzysnuzzy.discordlinked.link.LinkCodeManager;
 import com.huzzysnuzzy.discordlinked.listener.PlayerListener;
+import com.huzzysnuzzy.discordlinked.players.ClientInfo;
+import com.huzzysnuzzy.discordlinked.players.Regions;
 import com.huzzysnuzzy.discordlinked.servers.BackendServers;
+import com.huzzysnuzzy.discordlinked.servers.Maintenance;
 import com.huzzysnuzzy.discordlinked.storage.Database;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.PlayerNote;
@@ -46,7 +49,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.22.1";
+    public static final String VERSION = "0.23.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -63,6 +66,9 @@ public final class DiscordLinked {
     private InventoryRequests inventories;
     private Community community;
     private BackendServers servers;
+    private Maintenance maintenance;
+    private ClientInfo clients;
+    private Regions regions;
 
     @Inject
     public DiscordLinked(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -82,6 +88,9 @@ public final class DiscordLinked {
         audit.setServerLookup(uuid -> proxy.getPlayer(uuid).flatMap(Player::getCurrentServer)
                 .map(connection -> connection.getServerInfo().getName()).orElse(null));
         servers = new BackendServers(this);
+        maintenance = new Maintenance(this);
+        clients = new ClientInfo(this);
+        regions = new Regions(this);
         // Before the bot connects: its slash commands include the community ones.
         community = new Community(this);
         bot = new DiscordBot(this);
@@ -97,6 +106,9 @@ public final class DiscordLinked {
         proxy.getEventManager().register(this, inventories);
         servers.start();
         proxy.getEventManager().register(this, servers);
+        proxy.getEventManager().register(this, maintenance);
+        clients.start();
+        proxy.getEventManager().register(this, clients);
         community.start();
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),
@@ -123,6 +135,12 @@ public final class DiscordLinked {
     public void onProxyShutdown(ProxyShutdownEvent event) {
         if (spy != null) {
             spy.shutdown();
+        }
+        if (clients != null) {
+            clients.flush();
+        }
+        if (regions != null) {
+            regions.shutdown();
         }
         if (web != null) {
             web.stop();
@@ -264,12 +282,17 @@ public final class DiscordLinked {
 
     /** Re-reads config.properties, e.g. after the website's Settings page saved changes. */
     public void reloadConfig() throws IOException {
+        PluginConfig old = config;
         config = PluginConfig.load(dataDirectory, logger);
         // Community settings (credit name, slash commands on/off) show in Discord's command list.
         bot.refreshCommands();
         if (community != null) {
             // E.g. the KeepInventory delay changed, or community features were switched off.
             community.cosmetics().settingsChanged();
+        }
+        if (regions != null && !old.geoipEnabled()) {
+            // Region lookups were just switched on: the players online now are looked up.
+            regions.settingsChanged();
         }
     }
 
@@ -295,6 +318,7 @@ public final class DiscordLinked {
                 Instant before = now.minus(Duration.ofDays(c.logRetentionDays()));
                 logs = database.deleteOldEvents(before, chatTypes, false);
                 ips = database.deleteIpsBefore(before);
+                database.deleteUnusedIpRegions();
                 logs += database.deleteCreditTransactionsBefore(before);
             }
             if (c.messageLogRetentionDays() > 0) {
@@ -332,6 +356,21 @@ public final class DiscordLinked {
     /** Every backend server, with its status and per-server settings. */
     public BackendServers servers() {
         return servers;
+    }
+
+    /** Maintenance mode: who may join a server in maintenance, and turning everyone else away. */
+    public Maintenance maintenance() {
+        return maintenance;
+    }
+
+    /** Players' Minecraft versions, clients and average pings. */
+    public ClientInfo clients() {
+        return clients;
+    }
+
+    /** Where players connect from (admins only), looked up at ipinfo.io. */
+    public Regions regions() {
+        return regions;
     }
 
     public SpyManager spy() {

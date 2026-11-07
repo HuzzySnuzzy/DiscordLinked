@@ -39,7 +39,8 @@ import java.util.regex.Pattern;
  * Every backend server behind the proxy: the ones registered in Velocity, plus any the database remembers (so a
  * server's switches survive it being out of Velocity's config for a while). For each it knows whether it's up
  * (pinged every 30 seconds), what its plugin reported (HELLO, and STATUS from DiscordLinkedBackend) and the settings
- * owner's switches for earning credits and microcredits there. Names are matched ignoring case, like Velocity does.
+ * owner's switches for earning credits and microcredits there, and for maintenance mode (only admins can join; see
+ * {@link Maintenance}). Names are matched ignoring case, like Velocity does.
  *
  * <p>Plugin messages only travel through a player, so a server nobody is on can't send STATUS. The pings therefore
  * carry {@link #PROBE_HOST} as their host name, and DiscordLinkedBackend 0.22.1 and newer answers those with its
@@ -77,6 +78,8 @@ public final class BackendServers {
     private static final long SEEN_SAVE_MILLIS = 5 * 60_000;
     private static final Pattern MINECRAFT_VERSION = Pattern.compile("\\d+\\.\\d+(\\.\\d+)?");
     private static final Pattern VERSION_PARTS = Pattern.compile("^(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?");
+    /** The longest message for players turned away from a server in maintenance. */
+    public static final int MAX_MAINTENANCE_MESSAGE = 200;
 
     /** DiscordLinkedBackend's STATUS: its name and version, and how the server is doing. -1 = not known. */
     public record Status(String plugin, String version, String minecraftVersion, boolean folia, int online, int max,
@@ -93,11 +96,13 @@ public final class BackendServers {
      * @param lastSeen   when its plugin last said something
      * @param answered   whether the last ping got DiscordLinkedBackend's status back: false if the server answered
      *                   without it, null if it didn't answer, hasn't been pinged yet or pings can't ask (old Velocity)
+     * @param maintenanceMessage what players turned away during maintenance are told ("" = the default message)
      */
     public record Server(String name, boolean registered, Boolean reachable, Instant checkedAt, int players,
                          Integer maxPlayers, String minecraftVersion, String pluginName, String pluginVersion,
                          Boolean folia, Boolean spy, Double tps, Double mspt, Instant lastSeen, Boolean answered,
-                         boolean creditsEnabled, boolean microEnabled) {
+                         boolean creditsEnabled, boolean microEnabled, boolean maintenance,
+                         String maintenanceMessage) {
 
         /** It runs DiscordLinkedFAD from before the merge, which should be replaced with DiscordLinkedBackend. */
         public boolean oldPlugin() {
@@ -113,6 +118,9 @@ public final class BackendServers {
         volatile String name;
         volatile boolean credits = true;
         volatile boolean micro = true;
+        volatile boolean maintenance;
+        /** For players turned away during maintenance; "" = the default from messages.properties. */
+        volatile String maintenanceMessage = "";
         volatile String pluginName;
         volatile String pluginVersion;
         volatile String minecraftVersion;
@@ -154,6 +162,8 @@ public final class BackendServers {
                 Entry entry = new Entry(row.name());
                 entry.credits = row.creditsEnabled();
                 entry.micro = row.microEnabled();
+                entry.maintenance = row.maintenance();
+                entry.maintenanceMessage = row.maintenanceMessage() == null ? "" : row.maintenanceMessage();
                 entry.pluginName = row.pluginName();
                 entry.pluginVersion = row.pluginVersion();
                 entry.minecraftVersion = row.minecraftVersion();
@@ -217,6 +227,23 @@ public final class BackendServers {
     public boolean microEnabled(String server) {
         Entry entry = entries.get(key(server));
         return entry == null || entry.micro;
+    }
+
+    /** Whether only admins can join this server right now (see {@link Maintenance}). Unknown servers aren't. */
+    public boolean inMaintenance(String server) {
+        Entry entry = server == null ? null : entries.get(key(server));
+        return entry != null && entry.maintenance;
+    }
+
+    /** What players turned away from this server are told; "" = the default message. */
+    public String maintenanceMessage(String server) {
+        Entry entry = server == null ? null : entries.get(key(server));
+        return entry == null ? "" : entry.maintenanceMessage;
+    }
+
+    /** The servers in maintenance (A-Z), as spelt. */
+    public List<String> inMaintenance() {
+        return list().stream().filter(Server::maintenance).map(Server::name).toList();
     }
 
     /** Whether the pings ask DiscordLinkedBackend for its status; false on Velocity older than 3.4.0. */
@@ -573,6 +600,56 @@ public final class BackendServers {
         return changes;
     }
 
+    /**
+     * Turns maintenance mode on or off on one server and/or changes the message for players turned away
+     * ({@code null} leaves each; a blank message means the default one). Written to the audit log. Turning it on
+     * moves everyone on the server who may not stay to another server (see {@link Maintenance#moveOff}). Returns what
+     * changed, e.g. "maintenance off -> on".
+     */
+    public synchronized List<String> setMaintenance(String server, Boolean on, String message, String actor)
+            throws SQLException {
+        Entry entry = known(server);
+        boolean newOn = on == null ? entry.maintenance : on;
+        String newMessage = message == null ? entry.maintenanceMessage : maintenanceText(message);
+        List<String> changes = new ArrayList<>();
+        if (newOn != entry.maintenance) {
+            changes.add("maintenance " + onOff(entry.maintenance) + " -> " + onOff(newOn));
+        }
+        if (!newMessage.equals(entry.maintenanceMessage)) {
+            changes.add("maintenance message " + quoted(entry.maintenanceMessage) + " -> " + quoted(newMessage));
+        }
+        if (changes.isEmpty()) {
+            return changes;
+        }
+        plugin.database().setBackendMaintenance(entry.name, newOn, newMessage.isEmpty() ? null : newMessage);
+        boolean turnedOn = newOn && !entry.maintenance;
+        entry.maintenance = newOn;
+        entry.maintenanceMessage = newMessage;
+        plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "server " + entry.name + ": "
+                + String.join(", ", changes), actor, entry.name);
+        if (turnedOn) {
+            plugin.maintenance().moveOff(entry.name);
+        }
+        return changes;
+    }
+
+    /** A maintenance message as typed: one line of plain text, at most {@link #MAX_MAINTENANCE_MESSAGE} characters. */
+    private static String maintenanceText(String message) {
+        String text = message.strip();
+        if (text.length() > MAX_MAINTENANCE_MESSAGE) {
+            throw new IllegalArgumentException("The maintenance message can be at most " + MAX_MAINTENANCE_MESSAGE
+                    + " characters.");
+        }
+        if (text.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException("The maintenance message must be one line.");
+        }
+        return text;
+    }
+
+    private static String quoted(String message) {
+        return message.isEmpty() ? "(default)" : "\"" + message + "\"";
+    }
+
     /** Sets the server the website's server pickers start on; "" = all servers. Returns its name as spelt. */
     public synchronized String setDefaultServer(String server, String actor) throws IOException {
         String name = server.isBlank() ? "" : known(server).name;
@@ -620,7 +697,7 @@ public final class BackendServers {
                 current ? status.folia() : null, current ? status.spy() : null,
                 fresh && status.tps() >= 0 ? status.tps() : null, fresh && status.mspt() >= 0 ? status.mspt() : null,
                 entry.lastSeen == 0 ? null : Instant.ofEpochMilli(entry.lastSeen), registered ? entry.answered : null,
-                entry.credits, entry.micro);
+                entry.credits, entry.micro, entry.maintenance, entry.maintenanceMessage);
     }
 
     /** Keys of the servers in Velocity's config right now; each has an entry (new ones are remembered). */

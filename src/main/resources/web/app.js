@@ -554,7 +554,8 @@ function fillServerMenu(select, key, { useDefault = true, extra = [] } = {}) {
   names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const find = (name) => names.find((n) => sameServer(n, name)) || '';
   const picked = serverChoices[key] ?? stored(key);
-  select.replaceChildren(el('option', { value: '' }, 'All servers'), ...names.map((name) => el('option', { value: name }, name)));
+  select.replaceChildren(el('option', { value: '' }, 'All servers'),
+    ...names.map((name) => el('option', { value: name }, inMaintenance(name) ? `${name} (maintenance)` : name)));
   // "" is a choice too (All servers); a server that's gone falls back to the default.
   select.value = names.length < 2 || picked === '' ? '' : find(picked) || (useDefault ? find(state.me.defaultServer) : '');
   select.hidden = names.length < 2;
@@ -564,6 +565,9 @@ function rememberServer(select, key) {
   serverChoices[key] = select.value;
   remember(key, select.value);
 }
+
+/** Whether only admins can join this server right now (Settings → Backend servers). */
+const inMaintenance = (name) => (state.me?.maintenance || []).some((n) => sameServer(n, name));
 
 /** The server a player is on, or else the one they were last on ('' if there's none). */
 const playerServer = (p) => (p.online && p.server) || p.lastServer || '';
@@ -934,6 +938,32 @@ function profileHeader(p, staff) {
     staff && actionButtons(p));
 }
 
+/** "42 ms", with how many samples it's from in the tooltip. */
+function averagePing(c) {
+  if (!c || c.averagePing == null) return el('span', { class: 'muted' }, 'Not measured yet');
+  return el('span', { title: `Average of ${c.pingSamples.toLocaleString()} sample${c.pingSamples === 1 ? '' : 's'}, one every 30 seconds while `
+    + `they play${c.lastPingAt ? `. Last ${formatTime(c.lastPingAt)}` : ''}` }, `${c.averagePing.toLocaleString()} ms`);
+}
+
+/** Their Minecraft version, client and average ping (anyone who sees the profile), and staff get their region too. */
+function clientRows(p, staff) {
+  const c = p.client;
+  const rows = [
+    el('dt', {}, 'Version'), el('dd', {}, c?.version ? `Minecraft ${c.version}` : el('span', { class: 'muted' }, 'Not known yet')),
+    el('dt', {}, 'Client'), el('dd', {}, c?.brand || el('span', { class: 'muted' }, 'Not known yet')),
+    el('dt', {}, 'Average ping'), el('dd', {}, averagePing(c)),
+  ];
+  if (staff && p.regions) rows.push(el('dt', {}, 'Region'), el('dd', {}, regionText(p.region)));
+  return rows;
+}
+
+/** Where an IP is (staff only): "California, United States", "Local network", or why it isn't known. */
+function regionText(r) {
+  if (!r) return el('span', { class: 'muted' }, 'Unknown');
+  if (r.pending) return el('span', { class: 'muted shimmer' }, 'Looking up…');
+  return el('span', { title: r.city && r.label !== 'Unknown' ? `Near ${r.city}` : null, class: r.local || !r.country ? 'muted' : null }, r.label);
+}
+
 function renderPlayer() {
   const { player: p, suspensions, notes, ips } = state.player;
   document.title = `${p.minecraftName} · DiscordLinked`;
@@ -951,6 +981,10 @@ function renderPlayer() {
       p.firstPlayed && [el('dt', {}, 'First joined'), el('dd', {}, formatTime(p.firstPlayed))],
       el('dt', {}, 'Last seen'),
       el('dd', {}, p.online ? 'Online now' : (p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never'))));
+
+  const minecraft = el('div', { class: 'card panel' },
+    el('h2', {}, 'Minecraft'),
+    el('dl', { class: 'kv' }, clientRows(p, true)));
 
   const s = p.suspension;
   const suspension = el('div', { class: 'card panel' },
@@ -993,9 +1027,11 @@ function renderPlayer() {
   const ipSection = [
     el('h2', { class: 'section-title' }, withCount('IP addresses', ips.length)),
     ips.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
-      el('thead', {}, el('tr', {}, ['IP', 'First seen', 'Last seen', 'Times', 'Other accounts on this IP'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ['IP', p.regions && 'Region', 'First seen', 'Last seen', 'Times', 'Other accounts on this IP']
+        .filter(Boolean).map((h) => el('th', {}, h)))),
       el('tbody', {}, ips.map((ip) => el('tr', {},
         el('td', { class: 'mono' }, sensitive(ip.ip)),
+        p.regions && el('td', { class: 'nowrap' }, regionText(ip.region)),
         el('td', { class: 'nowrap muted' }, formatTime(ip.firstSeen)),
         el('td', { class: 'nowrap muted' }, formatTime(ip.lastSeen)),
         el('td', {}, ip.times),
@@ -1024,7 +1060,7 @@ function renderPlayer() {
   $('view-player').replaceChildren(
     el('a', { class: 'back', href: '#/players' }, '← All players'),
     profile,
-    el('div', { class: 'grid' }, discord, suspension),
+    el('div', { class: 'grid' }, discord, minecraft, suspension),
     ...inventorySection(p),
     ...unlocksSection(p, state.player.cosmetics),
     ...communitySection(p, state.player.community),
@@ -2138,11 +2174,39 @@ function renderModerate() {
   $('moderate-count').textContent = select.value || query
     ? `(${players.length.toLocaleString()} of ${data.players.length.toLocaleString()} online)`
     : `(${data.players.length.toLocaleString()} online)`;
+  // The overview follows the server menu, not the search.
+  const overview = $('moderate-overview');
+  keepFocus(overview, () => overview.replaceChildren(...moderateOverview(data.players.filter((p) => !select.value || sameServer(p.server, select.value)), data)));
   keepFocus($('moderate-grid'), () => $('moderate-grid').replaceChildren(...players.map((p) => moderateCard(p, data.selfStatus === 'online'))));
   const empty = $('moderate-empty');
   empty.textContent = !data.players.length ? 'Nobody is online right now.'
     : select.value && !query ? `Nobody is on ${select.value} right now.` : 'No players match your filter.';
   empty.hidden = players.length > 0;
+}
+
+/** "1.21.4 · 3" badges, most first. */
+function breakdown(values) {
+  const counts = new Map();
+  for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
+  return el('div', { class: 'others' }, [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([v, n]) => el('span', { class: 'badge', title: `${v}: ${n.toLocaleString()} player${n === 1 ? '' : 's'}` }, `${v} · ${n.toLocaleString()}`)));
+}
+
+/**
+ * Who's online at a glance: their average ping right now, Minecraft versions and clients, and where they connect
+ * from (by country; the API only has regions for admins).
+ */
+function moderateOverview(players, data) {
+  if (!players.length) return [];
+  const pings = players.map((p) => p.ping).filter((ms) => ms > 0);
+  const average = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
+  const where = (p) => (!p.region ? 'Unknown' : p.region.pending ? 'Looking up…' : p.region.countryName || p.region.label);
+  return [el('div', { class: 'card panel mod-overview' }, el('div', { class: 'stats-grid' },
+    stat('Average ping', average === null ? el('span', { class: 'muted' }, 'Not measured yet')
+      : [`${average.toLocaleString()} ms`, el('span', { class: 'stat-sub' }, `now, of ${pings.length.toLocaleString()} player${pings.length === 1 ? '' : 's'}`)]),
+    stat('Versions', breakdown(players.map((p) => p.version || 'Unknown'))),
+    stat('Clients', breakdown(players.map((p) => p.brand || 'Unknown'))),
+    data.regions && stat('Countries', breakdown(players.map(where)))))];
 }
 
 function moderateCard(p, canSpy) {
@@ -2159,7 +2223,8 @@ function moderateCard(p, canSpy) {
         el('div', { class: 'sub' }, p.linked ? discordLink(p, p.discordName) : 'Not linked'),
         el('div', { class: 'mod-meta' },
           el('span', { class: 'pill online' }, p.server || 'Connecting'),
-          el('span', { class: 'muted mono' }, `${p.ping} ms`)))),
+          el('span', { class: 'muted mono' }, `${p.ping} ms`),
+          p.version && el('span', { class: 'muted', title: p.brand ? `Client: ${p.brand}` : null }, p.version)))),
     p.suspension && el('span', { class: 'pill suspended' }, `Suspended · ${formatRemaining(p.suspension.expiresAt)} left`),
     el('div', { class: 'actions mod-actions' },
       small('btn-spy', 'Spy', () => startSpy(p), { disabled: p.self || !canSpy, title: spyTitle }),
@@ -2471,6 +2536,8 @@ function domainCard() {
 
 /** Servers whose settings are open (they stay open through refreshes), by lower-case name. */
 const serversOpen = new Set();
+/** Maintenance messages typed but not saved yet, by lower-case server name. */
+const maintenanceDrafts = new Map();
 
 /** Fetches the server list; a later failure keeps showing the last one. */
 async function loadServers() {
@@ -2498,18 +2565,21 @@ function applyServers(result) {
   state.servers = result;
   state.serversError = null;
   state.me.servers = result.servers.map((s) => s.name);
+  state.me.maintenance = result.servers.filter((s) => s.maintenance).map((s) => s.name);
   state.me.defaultServer = result.defaultServer;
   applyMode();
   renderServersCard();
 }
 
-/** Switches and the default server are saved as soon as they change; a refused change flips back. */
+/** Switches and the default server are saved as soon as they change; a refused change flips back. True if saved. */
 async function saveServer(body, control) {
   // Disabling the control drops keyboard focus, so it goes back to the redrawn one (found by its label).
   const label = document.activeElement === control ? control.getAttribute('aria-label') : null;
   control.disabled = true;
+  let saved = false;
   try {
     const result = await api('/api/settings/servers', body);
+    saved = true;
     applyServers(result);
     toast(result.message);
   } catch (e) {
@@ -2519,6 +2589,7 @@ async function saveServer(body, control) {
   if (label && (!document.activeElement || document.activeElement === document.body)) {
     $('servers-card')?.querySelector(`[aria-label="${CSS.escape(label)}"]`)?.focus({ preventScroll: true });
   }
+  return saved;
 }
 
 /** A saved setting's value (not an unsaved edit), e.g. what credits are called. */
@@ -2640,15 +2711,55 @@ function serverEntry(s, data) {
     up && s.tps !== null && el('span', { title: s.mspt !== null ? `${s.mspt} ms per tick` : null }, `TPS ${s.tps}`)]);
   const plugin = serverPlugin(s, data);
 
-  const toggle = (label, help, field) => {
+  // confirm: asked before switching it on (the switch stays off unless it's confirmed).
+  const toggle = (label, help, field, confirm) => {
     const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `${label} on ${s.name}` });
     box.checked = s[field];
-    box.addEventListener('change', () => saveServer({ name: s.name, [field]: box.checked }, box));
+    box.addEventListener('change', () => {
+      if (!box.checked || !confirm) {
+        saveServer({ name: s.name, [field]: box.checked }, box);
+        return;
+      }
+      box.checked = false;
+      confirmDialog({ ...confirm, onConfirm: async () => {
+        const result = await api('/api/settings/servers', { name: s.name, [field]: true });
+        applyServers(result);
+        toast(result.message);
+      } });
+    });
     return el('div', { class: 'setting' },
       el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, label), el('div', { class: 'setting-help' }, help)),
       el('div', { class: 'setting-input' }, el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }))));
   };
+  // Saved with its button (or Enter); a blank one means the default from messages.properties.
+  // What's typed survives the card's 30-second refresh until it's saved.
+  const message = el('input', { type: 'text', value: maintenanceDrafts.get(key) ?? s.maintenanceMessage,
+    maxlength: data.maxMaintenanceMessage, placeholder: 'Default message', 'aria-label': `Maintenance message for ${s.name}` });
+  message.addEventListener('input', () => maintenanceDrafts.set(key, message.value));
+  const saveMessage = el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': `Save the maintenance message for ${s.name}`,
+    onclick: async () => {
+      const typed = message.value;
+      maintenanceDrafts.delete(key);
+      if (!await saveServer({ name: s.name, maintenanceMessage: typed }, saveMessage)) {
+        maintenanceDrafts.set(key, typed);
+        renderServersCard();
+      }
+    } }, 'Save');
+  message.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveMessage.click(); } });
   const panel = el('div', { class: 'server-settings', hidden: !serversOpen.has(key) },
+    toggle('Maintenance', 'Only admins can join: you, members with the admin role and anyone with the permission '
+      + 'discordlinked.maintenance.bypass. Everyone else is sent to another server, or can\'t join when there\'s none.', 'maintenance',
+    up && s.players > 0 && {
+      title: `Put ${s.name} into maintenance?`,
+      text: `${s.players === 1 ? 'One player is' : `${s.players} players are`} on it now. Those who aren't admins are moved to another `
+        + 'server, or disconnected if there\'s none to go to.',
+      confirmLabel: 'Turn on maintenance', confirmClass: 'btn-warning',
+    }),
+    el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' },
+        el('div', { class: 'setting-label' }, 'Maintenance message'),
+        el('div', { class: 'setting-help' }, 'What players who are turned away are told. Empty = the default one.')),
+      el('div', { class: 'setting-input setting-input-row' }, message, saveMessage)),
     toggle(`Earn ${creditsName}`, `Off: playtime here still counts but pays nothing, and advancements made here are ignored, so `
       + 'they can still pay on another server.', 'creditsEnabled'),
     toggle(`Earn ${microName}`, `Off: players here can't sell items (/sell, /sellhand). Exchanging ${microName} for ${creditsName} `
@@ -2684,6 +2795,7 @@ function serverEntry(s, data) {
       el('div', { class: 'setting-text' },
         el('div', { class: 'setting-label' }, s.name, status,
           s.isDefault && el('span', { class: 'badge info' }, 'Default'),
+          s.maintenance && el('span', { class: 'badge warn', title: 'Only admins can join it' }, 'Maintenance'),
           !s.creditsEnabled && el('span', { class: 'badge warn', title: `Players here don't earn ${creditsName}` }, `${creditsName} off`),
           !s.microEnabled && el('span', { class: 'badge warn', title: `Players here can't sell for ${microName}` }, `${microName} off`),
           plugin.badge && el('span', { class: 'badge warn' }, plugin.badge)),
@@ -2760,7 +2872,8 @@ function renderSettings() {
     el('p', { class: 'muted' }, 'For safety these can only be changed in plugins/discordlinked/config.properties.'),
     secret('Bot token', data.secrets.botToken, 'bot-token'),
     secret('Discord client secret', data.secrets.clientSecret, 'discord-client-secret', 'Optional, for the Log in with Discord button.', true),
-    secret('Cloudflare tunnel token', data.secrets.tunnelToken, 'web-tunnel-token', 'Optional, for a tunnel made in the Cloudflare dashboard.', true));
+    secret('Cloudflare tunnel token', data.secrets.tunnelToken, 'web-tunnel-token', 'Optional, for a tunnel made in the Cloudflare dashboard.', true),
+    secret('ipinfo.io token', data.secrets.geoipToken, 'geoip-token', 'Optional, for more region lookups a month.', true));
 
   const d = data.data;
   const dataCard = el('div', { class: 'card panel settings-group' },
@@ -4226,6 +4339,10 @@ async function loadHome() {
     homeStat('Linked members', data.linkedCount),
     homeStat('Staff online', data.staffOnline),
     homeStat('Servers online', data.servers.length, data.servers.map((s) => `${s.name}: ${s.players}`).join(' · ') || null));
+  const maintenance = data.maintenance || [];
+  $('home-maintenance').hidden = !maintenance.length;
+  $('home-maintenance').replaceChildren(el('span', { class: 'badge warn' }, 'Maintenance'), ' ',
+    `${maintenance.join(', ')} ${maintenance.length === 1 ? 'is' : 'are'} under maintenance: only staff can join right now.`);
   $('home-online-count').textContent = `(${data.onlineCount})`;
   $('home-online').replaceChildren(...data.online.map(onlineCard));
   $('home-online-empty').hidden = data.online.length > 0;
@@ -4255,7 +4372,8 @@ function renderPublicPlayer() {
     el('dl', { class: 'kv' },
       p.firstPlayed && [el('dt', {}, 'First joined'), el('dd', {}, formatTime(p.firstPlayed))],
       !p.online && [el('dt', {}, 'Last seen'),
-        el('dd', {}, p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never')]));
+        el('dd', {}, p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never')],
+      p.client && clientRows(p, false)));
   $('view-player').replaceChildren(
     el('a', { class: 'back', href: '#/players' }, '← All players'),
     profileHeader(p, false),

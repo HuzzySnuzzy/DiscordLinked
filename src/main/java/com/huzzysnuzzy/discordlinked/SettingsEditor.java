@@ -74,6 +74,10 @@ public final class SettingsEditor {
                     "Days. Older logged Discord messages are deleted. 0 = forever.", 0, 100_000),
             number("log-retention-days", "Logging & data", "Keep other logs for",
                     "Days. Joins, IPs, admin actions and everything else. 0 = forever.", 0, 3650),
+            bool("geoip-enabled", "Logging & data", "Look up players' regions",
+                    "Shows admins roughly where each player connects from (e.g. \"California, United States\"). Each "
+                            + "player's IP address is sent to ipinfo.io for that when they join. Local-network "
+                            + "addresses never are.", false),
 
             number("inventory-snapshots-per-player", "Inventory snapshots", "Snapshots to keep per player",
                     "Older snapshots beyond this number are deleted.", 1, 1000),
@@ -206,6 +210,7 @@ public final class SettingsEditor {
         String keyFile = props.getProperty("google-service-account-file", "").trim();
         secrets.put("googleKey", !keyFile.isEmpty() && Files.exists(plugin.dataDirectory().resolve(keyFile)));
         secrets.put("tunnelToken", !props.getProperty("web-tunnel-token", "").isBlank());
+        secrets.put("geoipToken", !props.getProperty("geoip-token", "").isBlank());
         return secrets;
     }
 
