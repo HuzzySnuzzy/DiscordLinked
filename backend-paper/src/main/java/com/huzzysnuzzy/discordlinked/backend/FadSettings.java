@@ -2,6 +2,7 @@ package com.huzzysnuzzy.discordlinked.backend;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.huzzysnuzzy.discordlinked.update.Updater;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
@@ -55,6 +56,8 @@ final class FadSettings {
     final boolean prefixSpace;
     final int trailIntervalTicks;
     final int trailParticles;
+    /** auto-update in config.yml: used until the proxy sends its settings for the backend servers. */
+    final Updater.Policy updatePolicy;
     /** By command name, in config order. */
     final Map<String, Action> actions;
     private final YamlConfiguration user;
@@ -80,6 +83,8 @@ final class FadSettings {
         prefixSpace = bool("cosmetics.prefix-space");
         trailIntervalTicks = Math.max(1, integer("cosmetics.trail-interval-ticks"));
         trailParticles = Math.max(1, Math.min(10, integer("cosmetics.trail-particles")));
+        updatePolicy = Updater.Policy.of(string("auto-update.mode"), string("auto-update.restart"),
+                restartTime(logger), string("auto-update.repository"), string("auto-update.check-hours"));
         ConfigurationSection section = user.isConfigurationSection("actions")
                 ? user.getConfigurationSection("actions") : bundled.getConfigurationSection("actions");
         actions = Collections.unmodifiableMap(readActions(section, logger));
@@ -229,6 +234,22 @@ final class FadSettings {
             }
         }
         return new CommandName(name, List.copyOf(aliases));
+    }
+
+    /**
+     * auto-update.restart-time as "HH:MM". Written without quotes (restart-time: 05:30), YAML reads it as a number
+     * of minutes (330), which is turned back into a time.
+     */
+    private String restartTime(Logger logger) {
+        String value = string("auto-update.restart-time").strip();
+        if (value.matches("\\d{1,4}") && Integer.parseInt(value) < 24 * 60) {
+            int minutes = Integer.parseInt(value);
+            value = String.format(Locale.ROOT, "%02d:%02d", minutes / 60, minutes % 60);
+        }
+        if (Updater.Policy.time(value) == null) {
+            logger.warning("auto-update.restart-time \"" + value + "\" isn't a time like \"04:00\"; using 04:00");
+        }
+        return value;
     }
 
     private String string(String path) {

@@ -239,6 +239,59 @@ public final class SettingsEditor {
         plugin.reloadConfig();
     }
 
+    /**
+     * Saves the update settings from Settings -> Updates ({@code auto-update}, {@code auto-update-restart},
+     * {@code auto-update-backend-restart}, {@code auto-update-restart-time}) and applies them. Returns what changed.
+     */
+    public List<String> setUpdates(Map<String, String> requested, String actor) throws IOException {
+        Properties props = ConfigFiles.load(plugin.dataDirectory(), "config.properties", plugin.logger());
+        Map<String, String> changes = new LinkedHashMap<>();
+        List<String> changed = new ArrayList<>();
+        List<String> audit = new ArrayList<>();
+        for (Map.Entry<String, String> entry : requested.entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue() == null ? "" : entry.getValue().strip();
+            String label;
+            switch (key) {
+                case "auto-update" -> {
+                    label = "Updates";
+                    if (!List.of("off", "notify", "install").contains(value)) {
+                        throw new IllegalArgumentException("Updates: must be off, notify or install");
+                    }
+                }
+                case "auto-update-restart", "auto-update-backend-restart" -> {
+                    label = key.equals("auto-update-restart") ? "Proxy restarts" : "Backend servers restart";
+                    if (!List.of("never", "when-empty", "daily").contains(value)) {
+                        throw new IllegalArgumentException(label + ": must be never, when-empty or daily");
+                    }
+                }
+                case "auto-update-restart-time" -> {
+                    label = "Restart time";
+                    java.time.LocalTime time = com.huzzysnuzzy.discordlinked.update.Updater.Policy.time(value);
+                    if (time == null) {
+                        throw new IllegalArgumentException("Restart time: must be a time like 04:00 (24-hour)");
+                    }
+                    value = String.format(java.util.Locale.ROOT, "%02d:%02d", time.getHour(), time.getMinute());
+                }
+                default -> throw new IllegalArgumentException("Unknown setting: " + key);
+            }
+            String current = props.getProperty(key, "").strip();
+            if (!value.equals(current)) {
+                changes.put(key, value);
+                changed.add(label);
+                audit.add(key + ": " + show(current) + " -> " + show(value));
+            }
+        }
+        if (!changes.isEmpty()) {
+            ConfigFiles.update(plugin.dataDirectory(), "config.properties", changes);
+            plugin.reloadConfig();
+            for (String line : audit) {
+                plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, line, actor);
+            }
+        }
+        return changed;
+    }
+
     /** What was saved. */
     public record Result(List<String> changed, List<String> needRestart) {
     }

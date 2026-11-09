@@ -2333,3 +2333,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   :root[data-theme="2049"] :is(.mod-card, .person-card, .cos-tile, .group-card, .podium-place, dialog, .login-card)::after { display: none; }
   :root[data-theme="2049"] :is(.card, .table-wrap, dialog, .stat, .podium-place, .snap-item, .note, .spy-stats > div, .theme-menu) { background-image: none; }
 }
+
+.warn-text { color: var(--warning); }
+.update-servers { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
+.update-servers li { line-height: 1.45; overflow-wrap: anywhere; }

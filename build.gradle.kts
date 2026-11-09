@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.huzzysnuzzy"
-version = "0.24.0"
+version = "0.25.0"
 
 repositories {
     mavenCentral()
@@ -25,6 +25,13 @@ dependencies {
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+}
+
+// The updater (shared/), the same code in both plugins.
+sourceSets {
+    main {
+        java.srcDir("shared/src/main/java")
+    }
 }
 
 tasks.withType<JavaCompile>().configureEach {

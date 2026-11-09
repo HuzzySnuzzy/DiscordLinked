@@ -2396,6 +2396,7 @@ async function loadSettings() {
   if (!state.settings) $('settings-body').replaceChildren(loadingNote());
   // Alongside the rest: the servers are pinged first if they haven't been lately, which can take a moment.
   const servers = loadServers();
+  const updates = loadUpdates();
   try {
     state.settings = await api('/api/settings');
   } catch (e) {
@@ -2414,6 +2415,7 @@ async function loadSettings() {
     state.domain = null;
   }
   await servers;
+  await updates;
   renderSettings();
   watchDomain();
 }
@@ -2808,6 +2810,183 @@ function serverEntry(s, data) {
     panel);
 }
 
+// ---- Updates: DiscordLinked and DiscordLinkedBackend update themselves from GitHub releases ----
+
+/** Fetches the updater's state; a later failure keeps showing the last one. */
+async function loadUpdates() {
+  try {
+    state.updates = await api('/api/settings/updates');
+    state.updatesError = null;
+  } catch (e) {
+    state.updatesError = e.message;
+  }
+}
+
+function renderUpdatesCard() {
+  const card = $('updates-card');
+  if (card) keepFocus($('settings-body'), () => card.replaceWith(updatesCard()));
+}
+
+async function refreshUpdates() {
+  await loadUpdates();
+  renderUpdatesCard();
+}
+
+/** "in 5 minutes", "in 3 hours". */
+function timeUntil(ms) {
+  const seconds = Math.max(0, Math.round((ms - Date.now()) / 1000));
+  if (seconds < 60) return seconds <= 1 ? 'in a moment' : `in ${seconds} seconds`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `in ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.round(seconds / 3600);
+  if (hours < 36) return `in ${hours} hours`;
+  return `in ${Math.round(seconds / 86400)} days`;
+}
+
+const clockTime = (ms) => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(ms));
+
+const RESTART_CHOICES = [
+  ['never', 'Never (I restart it myself)'],
+  ['when-empty', 'As soon as nobody is online'],
+  ['daily', 'Every day at the restart time'],
+];
+
+/**
+ * What an updater is doing, for a line on the card: { text, badge, cls }. `u` is the proxy's state or a backend's
+ * `update` (the same fields).
+ */
+function updateLine(u) {
+  const plan = () => {
+    if (u.restartBlocked) return ' A restart didn\'t install it, so it won\'t restart for it again by itself: check the console.';
+    if (u.restartAt) return ` Restarts at ${clockTime(u.restartAt)} (${timeUntil(u.restartAt)}).`;
+    if (u.restart === 'when-empty') return ' Restarts as soon as nobody is online.';
+    return ' Installed at the next restart.';
+  };
+  switch (u.state) {
+    case 'disabled': return { text: 'Updates are off.' };
+    case 'waiting': return { text: u.nextCheck ? `First check ${timeUntil(u.nextCheck)}.` : 'Not checked yet.' };
+    case 'checking': return { text: 'Checking for updates…' };
+    case 'downloading': return { text: `Downloading ${u.latest}…` };
+    case 'up_to_date': return { text: 'Up to date.', badge: 'Up to date', cls: 'good' };
+    case 'no_release': return { text: 'No release has been published yet.' };
+    case 'available': return { text: `${u.latest} is out (updates are set to only tell you).`, badge: `${u.latest} out`, cls: 'warn' };
+    case 'ready': return { text: `${u.staged} is downloaded.${plan()}`, badge: `${u.staged} ready`, cls: 'warn' };
+    case 'restarting': return { text: `Restarting to install ${u.staged}…`, badge: 'Restarting', cls: 'warn' };
+    case 'failed': return { text: `The last check failed: ${u.error || 'unknown error'}.`, badge: 'Check failed', cls: 'warn' };
+    default: return { text: u.state };
+  }
+}
+
+/** Settings are saved as soon as they change; a refused change goes back. */
+async function saveUpdates(body, control) {
+  control.disabled = true;
+  try {
+    state.updates = await api('/api/settings/updates', body);
+    state.updatesError = null;
+    toast(state.updates.message);
+  } catch (e) {
+    toast(e.message);
+  }
+  renderUpdatesCard();
+}
+
+async function updatesAction(button, action) {
+  button.disabled = true;
+  try {
+    const result = await api(`/api/settings/updates/${action}`, {});
+    state.updates = result;
+    toast(result.message);
+    renderUpdatesCard();
+    // A check takes a moment: show its outcome when it's there.
+    if (action === 'check') for (const wait of [2500, 8000]) setTimeout(() => { if (!$('view-settings').hidden) refreshUpdates(); }, wait);
+  } catch (e) {
+    toast(e.message);
+    button.disabled = false;
+  }
+}
+
+function updatesCard() {
+  const card = el('div', { class: 'card panel settings-group', id: 'updates-card' }, el('h2', {}, 'Updates'));
+  const u = state.updates;
+  if (!u) {
+    card.append(el('p', { class: 'muted', role: 'alert' }, state.updatesError || 'Loading…', ' ', retryButton(refreshUpdates)));
+    return card;
+  }
+  const line = updateLine(u);
+  const notes = u.notes && u.latest && el('a', { href: u.notes, target: '_blank', rel: 'noopener' }, `What's new in ${u.latest}`);
+  const checked = u.lastCheck && el('span', { title: formatTime(u.lastCheck) }, `checked ${timeAgo(u.lastCheck)}`);
+  const proxy = el('div', { class: 'setting' },
+    el('div', { class: 'setting-text' },
+      el('div', { class: 'setting-label' }, `This proxy: DiscordLinked ${u.current}`,
+        line.badge && el('span', { class: `badge ${line.cls || ''}` }, line.badge)),
+      el('div', { class: 'setting-help', role: 'status' }, line.text),
+      (checked || notes) && el('div', { class: 'setting-help' }, dotted([checked, notes])),
+      u.installProblem && el('div', { class: 'setting-help warn-text' }, u.installProblem)),
+    el('div', { class: 'setting-input actions' },
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', disabled: u.mode === 'off' || null,
+        onclick: (e) => updatesAction(e.currentTarget, 'check') }, 'Check now'),
+      u.state === 'ready' && el('button', { class: 'btn btn-small', type: 'button', onclick: (e) => {
+        const button = e.currentTarget;
+        confirmDialog({
+          title: `Restart the proxy to install ${u.staged}?`,
+          text: ['Everyone on the network is told in chat and disconnected 15 seconds from now.',
+            'Velocity can\'t start itself again: your host or start script has to (most hosting panels have an option to '
+              + 'start a server again when it stops).'],
+          confirmLabel: 'Restart in 15 seconds',
+          confirmClass: 'btn-danger',
+          onConfirm: () => updatesAction(button, 'restart'),
+        });
+      } }, 'Restart now')));
+
+  const choice = (label, help, key, value, options) => {
+    const select = el('select', { 'aria-label': label }, options.map(([v, text]) => el('option', { value: v }, text)));
+    select.value = value;
+    select.addEventListener('change', () => saveUpdates({ [key]: select.value }, select));
+    return el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, label), el('div', { class: 'setting-help' }, help)),
+      el('div', { class: 'setting-input' }, select));
+  };
+  const time = el('input', { type: 'time', 'aria-label': 'Restart time', value: u.time, required: true });
+  time.addEventListener('change', () => { if (time.value) saveUpdates({ time: time.value }, time); });
+  const daily = u.restart === 'daily' || u.backendRestart === 'daily';
+
+  const backends = u.backends.map((b) => {
+    let text, badge = null, cls = '';
+    if (!b.plugin) text = b.online === false ? 'Offline.' : 'No DiscordLinkedBackend heard from.';
+    else if (b.old) text = `${b.plugin} ${b.version || ''} (old): replace it with DiscordLinkedBackend once by hand.`;
+    else if (!b.update) {
+      text = versionAtLeast(b.version, '0.25.0') === false
+        ? `${b.plugin} ${b.version} updates itself from 0.25.0 on: put DiscordLinkedBackend-${u.latest || u.current}.jar in its plugins folder once by hand.`
+        : `${b.plugin} ${b.version || ''}: hasn't reported its updates yet.`;
+    } else {
+      const l = updateLine(b.update);
+      text = `${b.plugin} ${b.version}: ${l.text}`;
+      badge = l.badge;
+      cls = l.cls;
+    }
+    return el('li', {}, el('strong', {}, b.name), ' ', badge && el('span', { class: `badge ${cls}` }, badge), ' ', el('span', { class: 'muted' }, text));
+  });
+
+  card.append(
+    el('p', { class: 'muted' }, `DiscordLinked and DiscordLinkedBackend update themselves from the releases of github.com/${u.repository}. `
+      + `Each server checks every ${u.checkHours} hour${u.checkHours === 1 ? '' : 's'} with one small download (not GitHub's API, `
+      + 'so its hourly limit doesn\'t apply). A downloaded update is installed when that server restarts.'),
+    proxy,
+    choice('Updates', 'For every server. Off: nothing is checked or downloaded, and an update already downloaded is removed.', 'mode', u.mode,
+      [['install', 'Download and install them'], ['notify', 'Only tell me here'], ['off', 'Off']]),
+    choice('Restart the proxy for an update', 'Velocity can\'t start itself again: this stops it, so your host or start script has to start it.',
+      'restart', u.restart, RESTART_CHOICES),
+    choice('Restart the backend servers for an update', 'Each one on its own. Paper restarts with spigot.yml\'s restart-script if '
+      + 'it has one; otherwise it stops and your host has to start it again.', 'backendRestart', u.backendRestart, RESTART_CHOICES),
+    el('div', { class: 'setting' },
+      el('div', { class: 'setting-text' }, el('div', { class: 'setting-label' }, 'Restart time'),
+        el('div', { class: 'setting-help' }, `For "every day": each machine's own time.${daily ? ' Players online are warned 5 minutes and 1 minute before.' : ''}`)),
+      el('div', { class: 'setting-input' }, time)),
+    el('div', { class: 'setting-label' }, 'Backend servers'),
+    backends.length ? el('ul', { class: 'update-servers' }, backends) : el('p', { class: 'muted' }, 'No servers in Velocity\'s config.'));
+  return card;
+}
+
 const formatBytes = (n) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB`
   : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
 
@@ -2892,7 +3071,7 @@ function renderSettings() {
       el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => settingsAction(e.currentTarget, 'compact') }, 'Compact database')));
 
   keepFocus($('settings-body'), () => $('settings-body')
-    .replaceChildren(el('div', { class: 'settings-grid' }, state.domain?.tunnel && domainCard(), serversCard(), ...groups, secrets, dataCard)));
+    .replaceChildren(el('div', { class: 'settings-grid' }, state.domain?.tunnel && domainCard(), serversCard(), updatesCard(), ...groups, secrets, dataCard)));
   updateSettingsBar();
 }
 
@@ -4936,7 +5115,10 @@ setInterval(() => {
   if (!$('view-home').hidden) loadHome();
   else if (!$('view-players').hidden) loadPlayers();
   // Not while a menu in the card is open: it would close under the pointer.
-  else if (!$('view-settings').hidden && !document.activeElement?.closest('#servers-card select')) refreshServers();
+  else if (!$('view-settings').hidden && !document.activeElement?.closest('#servers-card select, #updates-card select, #updates-card input')) {
+    refreshServers();
+    refreshUpdates();
+  }
 }, 30000);
 setInterval(() => {
   if (dialogOpen() || document.hidden || state.spy) return;

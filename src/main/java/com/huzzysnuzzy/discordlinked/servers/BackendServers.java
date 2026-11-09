@@ -83,7 +83,52 @@ public final class BackendServers {
 
     /** DiscordLinkedBackend's STATUS: its name and version, and how the server is doing. -1 = not known. */
     public record Status(String plugin, String version, String minecraftVersion, boolean folia, int online, int max,
-                         double tps, double mspt, Boolean spy) {
+                         double tps, double mspt, Boolean spy, Update update) {
+    }
+
+    /**
+     * How DiscordLinkedBackend's updater is doing (0.25.0 and newer; null before): its state (the names of
+     * Updater.State in lower case), the version downloaded and waiting for a restart (""), the newest release it has
+     * seen (""), the last problem (""), its restart setting, when a planned restart happens (0 = none), its mode and
+     * whether it won't restart for the download again because a restart didn't install it.
+     */
+    public record Update(String state, String staged, String latest, String error, String restart, long restartAt,
+                         String mode, boolean restartBlocked) {
+
+        /**
+         * Read from STATUS, after the fields before it; null when the backend doesn't send it (or sends something
+         * this can't read, which doesn't spoil the rest of its STATUS).
+         */
+        public static Update read(java.io.DataInputStream in) {
+            try {
+                if (in.available() <= 0) {
+                    return null;
+                }
+                return new Update(clip(in.readUTF()), clip(in.readUTF()), clip(in.readUTF()), clipLong(in.readUTF()),
+                        clip(in.readUTF()), Math.max(0, in.readLong()), clip(in.readUTF()), in.readBoolean());
+            } catch (java.io.IOException e) {
+                return null;
+            }
+        }
+
+        static Update fromJson(Object value) {
+            if (!(value instanceof Map<?, ?> json)) {
+                return null;
+            }
+            return new Update(clip(string(json.get("state"))), clip(string(json.get("staged"))),
+                    clip(string(json.get("latest"))), clipLong(string(json.get("error"))),
+                    clip(string(json.get("restart"))),
+                    json.get("restartAt") instanceof Number at ? Math.max(0, at.longValue()) : 0,
+                    clip(string(json.get("mode"))), Boolean.TRUE.equals(json.get("restartBlocked")));
+        }
+
+        private static String string(Object value) {
+            return value instanceof String text ? text.strip() : "";
+        }
+
+        private static String clipLong(String text) {
+            return text.length() > 300 ? text.substring(0, 300) : text;
+        }
     }
 
     /**
@@ -102,7 +147,7 @@ public final class BackendServers {
                          Integer maxPlayers, String minecraftVersion, String pluginName, String pluginVersion,
                          Boolean folia, Boolean spy, Double tps, Double mspt, Instant lastSeen, Boolean answered,
                          boolean creditsEnabled, boolean microEnabled, boolean maintenance,
-                         String maintenanceMessage) {
+                         String maintenanceMessage, Update update) {
 
         /** It runs DiscordLinkedFAD from before the merge, which should be replaced with DiscordLinkedBackend. */
         public boolean oldPlugin() {
@@ -514,7 +559,8 @@ public final class BackendServers {
             }
             return new Status(clip(name.strip()), clip(text(json, "version")), clip(text(json, "minecraft")),
                     Boolean.TRUE.equals(json.get("folia")), count(json, "online"), count(json, "max"),
-                    measure(json, "tps"), measure(json, "mspt"), json.get("spy") instanceof Boolean spy ? spy : null);
+                    measure(json, "tps"), measure(json, "mspt"), json.get("spy") instanceof Boolean spy ? spy : null,
+                    Update.fromJson(json.get("update")));
         } catch (RuntimeException e) {
             return null; // not JSON (ParsingException) or something else odd: just a MOTD
         }
@@ -704,7 +750,8 @@ public final class BackendServers {
                 current ? status.folia() : null, current ? status.spy() : null,
                 fresh && status.tps() >= 0 ? status.tps() : null, fresh && status.mspt() >= 0 ? status.mspt() : null,
                 entry.lastSeen == 0 ? null : Instant.ofEpochMilli(entry.lastSeen), registered ? entry.answered : null,
-                entry.credits, entry.micro, entry.maintenance, entry.maintenanceMessage);
+                entry.credits, entry.micro, entry.maintenance, entry.maintenanceMessage,
+                current ? status.update() : null);
     }
 
     /** Keys of the servers in Velocity's config right now; each has an entry (new ones are remembered). */

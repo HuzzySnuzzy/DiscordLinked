@@ -2,6 +2,8 @@ package com.huzzysnuzzy.discordlinked.fad;
 
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.servers.BackendServers;
+import com.huzzysnuzzy.discordlinked.update.ProxyUpdater;
+import com.huzzysnuzzy.discordlinked.update.Updater;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
@@ -63,6 +65,7 @@ final class FadBridge {
                         try {
                             community.hello(server, version, json);
                             helloOk(connection, server);
+                            updates(connection);
                             community.cosmetics().serverReady(server);
                         } catch (IllegalArgumentException e) {
                             plugin.logger().warn("The backend plugin on {} sent an unreadable interactions list: {}",
@@ -82,8 +85,9 @@ final class FadBridge {
                     double tps = in.available() > 0 ? in.readDouble() : -1;
                     double mspt = in.available() > 0 ? in.readDouble() : -1;
                     Boolean spy = in.available() > 0 ? in.readBoolean() : null;
+                    BackendServers.Update update = BackendServers.Update.read(in);
                     plugin.servers().status(server, new BackendServers.Status(name, version, minecraft, folia, online,
-                            max, tps, mspt, spy));
+                            max, tps, mspt, spy, update));
                 }
                 case "INTERACT" -> {
                     String id = in.readUTF();
@@ -199,6 +203,44 @@ final class FadBridge {
             send(connection, out -> out.writeUTF("HELLO_OK"));
         } catch (IllegalStateException e) {
             plugin.logger().debug("Couldn't answer {}'s HELLO, the player left: {}", server, e.getMessage());
+        }
+    }
+
+    /**
+     * The update settings for the backend servers and the newest release the proxy has seen (DiscordLinkedBackend
+     * 0.25.0 and newer keeps them; older ones ignore this). After HELLO, and to every server when they change.
+     */
+    void updates(ServerConnection connection) {
+        ProxyUpdater updater = plugin.updates();
+        if (updater == null) {
+            return;
+        }
+        Updater.Policy policy = plugin.config().updatePolicy();
+        String latest = updater.snapshot().latest();
+        try {
+            send(connection, out -> {
+                out.writeUTF("UPDATES");
+                out.writeUTF(policy.mode().key());
+                out.writeUTF(plugin.config().backendRestart().key());
+                out.writeUTF(policy.timeText());
+                out.writeUTF(policy.repository());
+                out.writeInt(policy.checkHours());
+                out.writeUTF(latest);
+            });
+        } catch (IllegalStateException e) {
+            plugin.logger().debug("Couldn't send the update settings, the player left: {}", e.getMessage());
+        }
+    }
+
+    /** {@link #updates} to every server someone is on (through one player each). Others get it with their HELLO. */
+    void updatesToAll() {
+        java.util.Set<String> done = new java.util.HashSet<>();
+        for (Player player : plugin.proxy().getAllPlayers()) {
+            player.getCurrentServer().ifPresent(connection -> {
+                if (done.add(connection.getServerInfo().getName())) {
+                    updates(connection);
+                }
+            });
         }
     }
 

@@ -1,5 +1,6 @@
 package com.huzzysnuzzy.discordlinked.backend;
 
+import com.huzzysnuzzy.discordlinked.update.Updater;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -105,14 +107,16 @@ final class ProxyLink implements PluginMessageListener {
      * can't be read. Sent as STATUS through a player, and as the answer to the proxy's ping ({@link StatusPing}).
      */
     record Status(String plugin, String version, String minecraft, boolean folia, int online, int max, double tps,
-                  double mspt, boolean spy) {
+                  double mspt, boolean spy, Updater.Snapshot update) {
     }
 
     /** This server's status right now. Safe from any thread (the proxy's ping is answered on a network thread). */
     Status currentStatus() {
         // Spy sessions, the inventory viewer and teleports are always part of this plugin.
+        BackendUpdater updater = plugin.updater();
         return new Status(plugin.getName(), plugin.getPluginMeta().getVersion(), Bukkit.getMinecraftVersion(),
-                plugin.folia(), Bukkit.getOnlinePlayers().size(), Bukkit.getMaxPlayers(), tps(), mspt(), true);
+                plugin.folia(), Bukkit.getOnlinePlayers().size(), Bukkit.getMaxPlayers(), tps(), mspt(), true,
+                updater == null ? null : updater.snapshot());
     }
 
     void status(Player carrier) {
@@ -128,6 +132,18 @@ final class ProxyLink implements PluginMessageListener {
             out.writeDouble(status.tps());
             out.writeDouble(status.mspt());
             out.writeBoolean(status.spy());
+            // 0.25.0: the updater (proxies before it don't read this far).
+            Updater.Snapshot update = status.update();
+            if (update != null) {
+                out.writeUTF(update.state().name().toLowerCase(Locale.ROOT));
+                out.writeUTF(update.staged());
+                out.writeUTF(update.latest());
+                out.writeUTF(clip(update.error(), 300));
+                out.writeUTF(update.policy().restart().key());
+                out.writeLong(update.restartAt());
+                out.writeUTF(update.policy().mode().key());
+                out.writeBoolean(update.restartBlocked());
+            }
         });
     }
 
@@ -371,6 +387,19 @@ final class ProxyLink implements PluginMessageListener {
                         player.getScheduler().run(plugin, task -> plugin.cosmetics().apply(player, state), null);
                     }
                 }
+                // The proxy's update settings for the backend servers, and the newest release it has seen.
+                case "UPDATES" -> {
+                    String mode = in.readUTF();
+                    String restart = in.readUTF();
+                    String time = in.readUTF();
+                    String repository = in.readUTF();
+                    int checkHours = in.readInt();
+                    String latest = in.readUTF();
+                    BackendUpdater updater = plugin.updater();
+                    if (updater != null) {
+                        updater.fromProxy(mode, restart, time, repository, checkHours, latest);
+                    }
+                }
                 // Someone on Discord picked this player: play the effects where they are.
                 case "FX" -> {
                     Action action = plugin.settings().actions.get(in.readUTF());
@@ -436,5 +465,9 @@ final class ProxyLink implements PluginMessageListener {
         } else {
             carrier.getScheduler().run(plugin, task -> carrier.sendPluginMessage(plugin, CHANNEL, bytes), null);
         }
+    }
+
+    private static String clip(String text, int max) {
+        return text.length() > max ? text.substring(0, max) : text;
     }
 }

@@ -43,6 +43,9 @@ import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
 import com.huzzysnuzzy.discordlinked.storage.WebUser;
+import com.huzzysnuzzy.discordlinked.update.ProxyUpdater;
+import com.huzzysnuzzy.discordlinked.update.ReleaseClient;
+import com.huzzysnuzzy.discordlinked.update.Updater;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.velocitypowered.api.proxy.Player;
@@ -580,7 +583,9 @@ public final class WebServer {
             case "GET /api/settings", "POST /api/settings", "POST /api/settings/cleanup", "POST /api/settings/compact",
                  "GET /api/settings/domain", "POST /api/settings/domain/connect", "POST /api/settings/domain/disconnect",
                  "POST /api/settings/domain/login-link", "GET /api/settings/messages",
-                 "GET /api/settings/messages/feed", "GET /api/settings/servers", "POST /api/settings/servers" ->
+                 "GET /api/settings/messages/feed", "GET /api/settings/servers", "POST /api/settings/servers",
+                 "GET /api/settings/updates", "POST /api/settings/updates", "POST /api/settings/updates/check",
+                 "POST /api/settings/updates/restart" ->
                     settings(ex, method, path, session);
             case "GET /api/servers" -> {
                 plugin.servers().refreshSoon();
@@ -2302,6 +2307,82 @@ public final class WebServer {
     }
 
     /**
+     * Settings -> Updates: the proxy's updater, its settings, and how each backend server's DiscordLinkedBackend is
+     * doing (from its STATUS; null before 0.25.0 or while it hasn't reported in).
+     */
+    private DataObject updatesJson() {
+        ProxyUpdater updater = plugin.updates();
+        Updater.Snapshot u = updater.snapshot();
+        Updater.Policy policy = plugin.config().updatePolicy();
+        DataArray backends = DataArray.empty();
+        for (BackendServers.Server s : plugin.servers().list()) {
+            if (!s.registered()) {
+                continue;
+            }
+            BackendServers.Update b = s.update();
+            backends.add(DataObject.empty()
+                    .put("name", s.name())
+                    .put("online", s.reachable())
+                    .put("players", s.players())
+                    .put("plugin", s.pluginName())
+                    .put("version", s.pluginVersion())
+                    .put("old", s.oldPlugin())
+                    .put("update", b == null ? null : DataObject.empty()
+                            .put("state", b.state())
+                            .put("staged", b.staged())
+                            .put("latest", b.latest())
+                            .put("error", b.error())
+                            .put("restart", b.restart())
+                            .put("restartAt", b.restartAt() > 0 ? b.restartAt() : null)
+                            .put("mode", b.mode())
+                            .put("restartBlocked", b.restartBlocked())));
+        }
+        return DataObject.empty()
+                .put("current", u.current())
+                .put("state", u.state().name().toLowerCase(java.util.Locale.ROOT))
+                .put("latest", u.latest())
+                .put("notes", u.latestTag().isEmpty() ? null : ReleaseClient.page(policy.repository(), u.latestTag()))
+                .put("staged", u.staged())
+                .put("error", u.error())
+                .put("lastCheck", u.lastCheck() > 0 ? u.lastCheck() : null)
+                .put("nextCheck", u.nextCheck() > 0 ? u.nextCheck() : null)
+                .put("restartAt", u.restartAt() > 0 ? u.restartAt() : null)
+                .put("restartBlocked", u.restartBlocked())
+                .put("installProblem", updater.installProblem())
+                .put("mode", policy.mode().key())
+                .put("restart", policy.restart().key())
+                .put("backendRestart", plugin.config().backendRestart().key())
+                .put("time", policy.timeText())
+                .put("repository", policy.repository())
+                .put("checkHours", policy.checkHours())
+                .put("backends", backends);
+    }
+
+    /** Settings -> Updates: {@code {mode?, restart?, backendRestart?, time?}}. Answers with the new state. */
+    private void updateSettings(HttpExchange ex, SettingsEditor editor, String actor) throws IOException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Map<String, String> changes = new java.util.LinkedHashMap<>();
+        for (String[] key : new String[][] {{"mode", "auto-update"}, {"restart", "auto-update-restart"},
+                {"backendRestart", "auto-update-backend-restart"}, {"time", "auto-update-restart-time"}}) {
+            if (body.hasKey(key[0]) && !body.isNull(key[0])) {
+                changes.put(key[1], String.valueOf(body.get(key[0])));
+            }
+        }
+        List<String> changed;
+        try {
+            changed = editor.setUpdates(changes, actor);
+        } catch (IllegalArgumentException e) {
+            sendJson(ex, 400, error(e.getMessage()));
+            return;
+        }
+        sendJson(ex, 200, updatesJson().put("message", changed.isEmpty() ? "Nothing changed."
+                : "Saved: " + String.join(", ", changed) + "."));
+    }
+
+    /**
      * Settings -> Backend servers: {@code {name, creditsEnabled?, microEnabled?}}, {@code {name, maintenance?,
      * maintenanceMessage?}} (a blank message = the default one), {@code {name, forget: true}} for a server that's no
      * longer in Velocity's config, or {@code {defaultServer}}. Answers with the new list.
@@ -2395,6 +2476,27 @@ public final class WebServer {
                     plugin.servers().refreshSoon();
                     sendJson(ex, 200, serversJson());
                 }
+            }
+            case "/api/settings/updates" -> {
+                if (method.equals("POST")) {
+                    updateSettings(ex, editor, actor);
+                } else {
+                    sendJson(ex, 200, updatesJson());
+                }
+            }
+            case "/api/settings/updates/check" -> {
+                String message = plugin.updates().checkNow();
+                sendJson(ex, 200, updatesJson().put("message", message));
+            }
+            case "/api/settings/updates/restart" -> {
+                String problem = plugin.updates().restartSoon();
+                if (problem != null) {
+                    sendJson(ex, 409, error(problem));
+                    return;
+                }
+                plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "restarted the proxy to install "
+                        + "DiscordLinked " + plugin.updates().snapshot().staged(), actor);
+                sendJson(ex, 200, updatesJson().put("message", "The proxy restarts in 15 seconds."));
             }
             case "/api/settings/messages" -> sendJson(ex, 200, messageLogJson());
             case "/api/settings/messages/feed" -> messageLogFeed(ex, query(ex));

@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.24.0.jar` there instead.
+   `DiscordLinkedBackend-0.25.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.24.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.25.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -625,7 +625,9 @@ Admin command visibility can be changed in Server Settings → Integrations → 
 
 In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unlink <player>`, and
 `/dlink maintenance [server] [on|off]` (which servers are in maintenance, one server's state, or switch it; see
-[Maintenance mode](#maintenance-mode)).
+[Maintenance mode](#maintenance-mode)), and `/dlink update [check|restart]` (what the proxy's updater is doing, check
+now, or restart in 15 seconds to install a downloaded update, which in game also needs
+`discordlinked.update.restart`; see [Updates](#updates)).
 
 In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, and
@@ -642,6 +644,55 @@ A few seconds after joining, players see their credits (and microcredits, when s
 credits, so the balance line is skipped unless there are microcredits to show. Change or turn off these lines
 (`minecraft.join.*`, empty = off) in `messages.properties`.
 
+## Updates
+
+From 0.25.0, DiscordLinked and DiscordLinkedBackend update themselves from this repository's
+[releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases), so new versions don't have to be copied onto
+every server by hand. **Install 0.25.0 by hand once** (the proxy and every backend server); from then on:
+
+- Every few hours (`auto-update-check-hours`, default 3) the proxy and each backend server look at the newest
+  release. That's one small download of the release's `update.properties` from github.com, not a call to GitHub's
+  API, so the API's limit of 60 requests an hour per address doesn't come into it. The checks are spread out (up
+  to 10% later, and 1-4 minutes after a start), never closer than 30 minutes across restarts, and after a failure
+  the wait doubles from 15 minutes up to a day. When GitHub says to wait (HTTP 429, or a rate limit), nothing is
+  asked until then. **Check now** on the website and `/dlink update check` work at most once a minute.
+- A newer version is downloaded and checked (its size and SHA-256 must match the release, it must be that plugin
+  at that version, and it must run on this server's Java and, for backends, its Minecraft version), then installed
+  when the server restarts:
+  - Velocity has no update folder, so the proxy keeps it in `plugins/discordlinked/update/` and swaps it for the
+    running jar when the proxy shuts down. The old jar goes to `plugins/discordlinked/update/previous/`, to put back
+    by hand if you ever need to. On Windows the running jar can't be moved; the website then says to swap them by
+    hand.
+  - Backend servers put it in Paper's update folder (`plugins/update/`, from bukkit.yml), and Paper installs it
+    before it loads plugins.
+- The proxy tells the backend servers when it sees a new release (through a player on each), so they don't wait for
+  their own next check.
+
+**Settings → Updates** on the website shows what each server's updater is doing, and has:
+
+| Setting | `config.properties` | |
+|---|---|---|
+| Updates | `auto-update` | `install` (default): download them. `notify`: only show that there's one. `off`: nothing is checked or downloaded, and a downloaded update is removed. For every server. |
+| Restart the proxy for an update | `auto-update-restart` | `never` (default): it's installed whenever you next restart. `when-empty`: as soon as nobody is online. `daily`: at the restart time, with a warning in chat 5 minutes and 1 minute before. |
+| Restart the backend servers for an update | `auto-update-backend-restart` | The same, for each backend server on its own. |
+| Restart time | `auto-update-restart-time` | For `daily`, e.g. `04:00`, in each machine's own time zone. |
+
+`auto-update-check-hours` and `auto-update-repository` (owner/name, for your own fork: whoever can publish releases
+there can run code on your servers) are only in `config.properties`. The backend servers use the proxy's settings
+once it has sent them (kept in `plugins/DiscordLinkedBackend/update/settings.properties`); until then the
+`auto-update` section of their config.yml. Where a backend server's updates come from is always its own
+`auto-update.repository` in config.yml, never the proxy's, so for a fork set it on each backend server too.
+
+Restarting: **Velocity can't start itself again**, so a restart for an update stops the proxy and your host or
+start script has to start it again (most hosting panels have an option to restart a server when it stops; with a
+start script, run Velocity in a loop). Paper restarts with spigot.yml's `restart-script` if you have one, and
+otherwise stops the same way. A server that was restarted for an update but still runs the old version (e.g. the
+swap failed) isn't restarted for it again by itself; the website says so.
+
+Releases are made by the Build workflow: a push to the default branch whose version (in `build.gradle.kts` and
+`DiscordLinked.VERSION`) has no release yet publishes one with both jars and `update.properties`. Pushes that don't
+change the version publish nothing.
+
 ## Building
 
 Requires Java 21.
@@ -650,9 +701,10 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.24.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.24.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
-download them from the run's **Artifacts** section.
+The jars are `build/libs/DiscordLinked-0.25.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.25.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
+for each new version (see [Updates](#updates)).
 
 ## Setup
 

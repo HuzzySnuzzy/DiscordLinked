@@ -91,6 +91,23 @@ cosmetics:
   trail-interval-ticks: 2
   trail-particles: 2
 
+# Updates: this plugin updates itself from the releases on GitHub (one small download from github.com every few
+# hours; not GitHub's API, so its limit of 60 requests an hour doesn't apply). The proxy (DiscordLinked 0.25.0 or
+# newer) sends its settings for the backend servers (website: Settings -> Updates) when someone joins, and from then
+# on those are used instead of these. A downloaded update goes in the plugins/update folder, which Paper installs
+# from when the server starts.
+auto-update:
+  # off, notify (only tell the proxy's website there's an update) or install (download it).
+  mode: install
+  # When to restart for a downloaded update: never (it's installed whenever you next restart), when-empty (as soon
+  # as nobody is on this server) or daily (at restart-time, this machine's time). Paper restarts with spigot.yml's
+  # restart-script if you have one; otherwise it stops and your host has to start it again.
+  restart: never
+  restart-time: "04:00"
+  check-hours: 3
+  # Only change this for your own fork: whoever can publish releases there can run code on your server.
+  repository: HuzzySnuzzy/DiscordLinked
+
 messages:
   # <command> = the command as typed
   usage-target: "<red>Usage: /<command> <player></red>"
@@ -140,6 +157,8 @@ messages:
   keepinv-no-pvp: "<red>You have KeepInventory on, so you can't hurt other players.</red> <gray>Switch it off on the website.</gray>"
   # When lots of it was sold lately and prices drop. <percent> of the normal price
   worth-dropped: "<yellow>Lots of this was sold lately, so it sells for <percent>% of its normal price.</yellow>"
+  # Before a restart for an update (see auto-update). <time> = e.g. "5 minutes"
+  update-restart-warning: "<gold>This server restarts in <time> to install an update.</gold>"
 
 # The interactions. Each one becomes a command named after it, e.g. "kiss" is /kiss.
 #   description:   shown in tab-completion help and on Discord, where these are also slash commands.

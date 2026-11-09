@@ -1,5 +1,6 @@
 package com.huzzysnuzzy.discordlinked;
 
+import com.huzzysnuzzy.discordlinked.update.Updater;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -78,7 +79,9 @@ public record PluginConfig(
         int groupMaxMembers,
         String defaultServer,
         boolean geoipEnabled,
-        String geoipToken
+        String geoipToken,
+        Updater.Policy updatePolicy,
+        Updater.Restart backendRestart
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -154,7 +157,11 @@ public record PluginConfig(
                 Math.max(0, Integer.parseInt(props.getProperty("group-max-members").trim())),
                 props.getProperty("default-server", "").trim(),
                 Boolean.parseBoolean(props.getProperty("geoip-enabled", "true").trim()),
-                props.getProperty("geoip-token", "").trim()
+                props.getProperty("geoip-token", "").trim(),
+                Updater.Policy.of(props.getProperty("auto-update", ""), props.getProperty("auto-update-restart", ""),
+                        props.getProperty("auto-update-restart-time", ""), props.getProperty("auto-update-repository", ""),
+                        props.getProperty("auto-update-check-hours", "")),
+                Updater.Policy.parseRestart(props.getProperty("auto-update-backend-restart", ""))
         );
     }
 

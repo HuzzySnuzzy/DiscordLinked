@@ -52,6 +52,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
 
     private volatile FadSettings settings;
     private ProxyLink link;
+    private BackendUpdater updater;
     private SpyService spy;
     private final SellPrices sellPrices = new SellPrices();
     private Cosmetics cosmetics;
@@ -75,6 +76,9 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         getServer().getMessenger().registerIncomingPluginChannel(this, ProxyLink.CHANNEL, link);
         getServer().getMessenger().registerOutgoingPluginChannel(this, ProxyLink.CHANNEL);
         link.start();
+        // Before anything that reports this server's status (which includes the updater's).
+        updater = new BackendUpdater(this);
+        updater.start();
         // The proxy's 30-second ping learns this server's status even while nobody is on it.
         getServer().getPluginManager().registerEvents(new StatusPing(this), this);
         registerCommands();
@@ -105,6 +109,9 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
     public void onDisable() {
         if (link == null) {
             return; // it never started, e.g. because the old plugins are still installed
+        }
+        if (updater != null) {
+            updater.shutdown();
         }
         SellMenu.closeAll();
         link.cancelAll();
@@ -216,6 +223,11 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
 
     ProxyLink link() {
         return link;
+    }
+
+    /** Null before onEnable got that far. */
+    BackendUpdater updater() {
+        return updater;
     }
 
     SellPrices sellPrices() {

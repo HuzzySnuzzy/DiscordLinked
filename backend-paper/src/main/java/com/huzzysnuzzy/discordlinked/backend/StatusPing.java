@@ -2,12 +2,14 @@ package com.huzzysnuzzy.discordlinked.backend;
 
 import com.destroystokyo.paper.event.server.PaperServerListPingEvent;
 import com.google.gson.JsonObject;
+import com.huzzysnuzzy.discordlinked.update.Updater;
 import net.kyori.adventure.text.Component;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 
 import java.net.InetSocketAddress;
+import java.util.Locale;
 
 /**
  * Answers the proxy's ping (every 30 seconds) with this server's status, so the website knows this plugin is here,
@@ -68,6 +70,20 @@ final class StatusPing implements Listener {
         json.addProperty("tps", known(status.tps()));
         json.addProperty("mspt", known(status.mspt()));
         json.addProperty("spy", status.spy());
+        Updater.Snapshot update = status.update();
+        if (update != null) {
+            JsonObject u = new JsonObject();
+            u.addProperty("state", update.state().name().toLowerCase(Locale.ROOT));
+            u.addProperty("staged", update.staged());
+            u.addProperty("latest", update.latest());
+            String error = update.error();
+            u.addProperty("error", error.length() > 300 ? error.substring(0, 300) : error);
+            u.addProperty("restart", update.policy().restart().key());
+            u.addProperty("restartAt", update.restartAt());
+            u.addProperty("mode", update.policy().mode().key());
+            u.addProperty("restartBlocked", update.restartBlocked());
+            json.add("update", u);
+        }
         return json.toString();
     }
 

@@ -19,6 +19,7 @@ import com.huzzysnuzzy.discordlinked.storage.PlayerRef;
 import com.huzzysnuzzy.discordlinked.storage.Suspension;
 import com.huzzysnuzzy.discordlinked.spy.InventoryRequests;
 import com.huzzysnuzzy.discordlinked.spy.SpyManager;
+import com.huzzysnuzzy.discordlinked.update.ProxyUpdater;
 import com.huzzysnuzzy.discordlinked.web.WebServer;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
@@ -49,7 +50,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.24.0";
+    public static final String VERSION = "0.25.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -69,6 +70,7 @@ public final class DiscordLinked {
     private Maintenance maintenance;
     private ClientInfo clients;
     private Regions regions;
+    private ProxyUpdater updates;
 
     @Inject
     public DiscordLinked(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -120,6 +122,9 @@ public final class DiscordLinked {
         proxy.getScheduler().buildTask(this, this::runMaintenance)
                 .delay(1, TimeUnit.MINUTES).repeat(1, TimeUnit.HOURS).schedule();
 
+        updates = new ProxyUpdater(this);
+        updates.start();
+
         if (config.webEnabled()) {
             web = new WebServer(this);
             if (!web.start()) {
@@ -133,6 +138,9 @@ public final class DiscordLinked {
 
     @Subscribe
     public void onProxyShutdown(ProxyShutdownEvent event) {
+        if (updates != null) {
+            updates.shutdown();
+        }
         if (spy != null) {
             spy.shutdown();
         }
@@ -157,6 +165,10 @@ public final class DiscordLinked {
             } catch (SQLException e) {
                 logger.warn("Error closing database", e);
             }
+        }
+        // Last: a downloaded update replaces this jar for the next start.
+        if (updates != null) {
+            updates.install();
         }
     }
 
@@ -290,6 +302,11 @@ public final class DiscordLinked {
             // E.g. the KeepInventory delay changed, or community features were switched off.
             community.cosmetics().settingsChanged();
         }
+        if (community != null && (!old.updatePolicy().equals(config.updatePolicy())
+                || old.backendRestart() != config.backendRestart())) {
+            // The backend servers follow the proxy's update settings.
+            community.sendUpdateSettings();
+        }
         if (regions != null && !old.geoipEnabled()) {
             // Region lookups were just switched on: the players online now are looked up.
             regions.settingsChanged();
@@ -366,6 +383,11 @@ public final class DiscordLinked {
     /** Players' Minecraft versions, clients and average pings. */
     public ClientInfo clients() {
         return clients;
+    }
+
+    /** Keeps DiscordLinked up to date from GitHub releases (Settings -> Updates). */
+    public ProxyUpdater updates() {
+        return updates;
     }
 
     /** Where players connect from (admins only), looked up at ipinfo.io. */

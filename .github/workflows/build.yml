@@ -22,3 +22,76 @@ jobs:
           path: |
             build/libs/*.jar
             backend-paper/build/libs/*.jar
+
+  # A push to the default branch with a version that has no release yet publishes one: both jars and the
+  # update.properties the plugins' updaters read (version, file names, sizes, SHA-256). Pushes that don't change the
+  # version publish nothing, so a fix only reaches servers with a new version number.
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: DiscordLinked
+          path: dist
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' build.gradle.kts)
+          if [ -z "$version" ]; then echo "No version in build.gradle.kts"; exit 1; fi
+          if ! grep -q "VERSION = \"$version\";" src/main/java/com/huzzysnuzzy/discordlinked/DiscordLinked.java; then
+            echo "DiscordLinked.VERSION doesn't match build.gradle.kts ($version)"; exit 1
+          fi
+          tag="v$version"
+          if draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2> /dev/null); then
+            if [ "$draft" != "true" ]; then
+              echo "$tag is already released; nothing to publish."
+              exit 0
+            fi
+            # A draft left by a run that failed halfway: start again.
+            gh release delete "$tag" --yes
+          fi
+          proxy="dist/build/libs/DiscordLinked-$version.jar"
+          backend="dist/backend-paper/build/libs/DiscordLinkedBackend-$version.jar"
+          ls -l "$proxy" "$backend"
+          {
+            echo "format=1"
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "proxy.file=$(basename "$proxy")"
+            echo "proxy.sha256=$(sha256sum "$proxy" | cut -d' ' -f1)"
+            echo "proxy.size=$(stat -c %s "$proxy")"
+            echo "backend.file=$(basename "$backend")"
+            echo "backend.sha256=$(sha256sum "$backend" | cut -d' ' -f1)"
+            echo "backend.size=$(stat -c %s "$backend")"
+          } > dist/update.properties
+          cat dist/update.properties
+          # The notes: the commits since the last release (or this commit's message for the first one).
+          previous=$(gh release list --limit 1 --exclude-drafts --json tagName --jq '.[0].tagName // ""')
+          {
+            echo "Install DiscordLinked-$version.jar on the Velocity proxy and DiscordLinkedBackend-$version.jar on"
+            echo "every Paper/Folia server, or let them update themselves (0.25.0 and newer)."
+            echo
+            if [ -n "$previous" ] && git rev-parse -q --verify "refs/tags/$previous" > /dev/null; then
+              echo "Changes since $previous:"
+              git log --no-merges --format='- %s' "$previous..$GITHUB_SHA"
+            else
+              git log -1 --format=%B "$GITHUB_SHA" | grep -v -E '^(Co-Authored-By|Claude-Session):'
+            fi
+          } > dist/notes.md
+          # A draft first, so nobody sees the release before all three files are there.
+          gh release create "$tag" "$proxy" "$backend" dist/update.properties --draft --target "$GITHUB_SHA" \
+            --title "DiscordLinked $version" --notes-file dist/notes.md
+          gh release edit "$tag" --draft=false --latest

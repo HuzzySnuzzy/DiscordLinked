@@ -21,6 +21,13 @@ java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
 }
 
+// The updater, shared with the proxy plugin.
+sourceSets {
+    main {
+        java.srcDir(rootProject.file("shared/src/main/java"))
+    }
+}
+
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(21)
