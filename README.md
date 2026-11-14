@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.26.0.jar` there instead.
+   `DiscordLinkedBackend-0.27.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.26.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.27.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -329,6 +329,13 @@ its own leaderboard, made for people building farms and factories. Selling can b
 - **1,000 microcredits = 1 credit** (`microcredits-per-credit`). Sell prices follow the rate, so changing it
   doesn't change what an item is worth in credits. `/exchange <amount|all>` in game, or Shop → **Sell &
   exchange** on the website, turns microcredits into credits. It only goes that way.
+- **Pay the rest with microcredits**: a switch at the top of the Shop (each player's own choice, off until they
+  switch it on). With it on, when an order or a cosmetic costs more credits than they have, just enough of their
+  microcredits are exchanged at the rate to cover the rest, in the same step as the purchase (both histories show
+  the exchange). An order that can't be delivered gives back the credits and the microcredits as they were. The
+  Shop's header shows their credits, microcredits and what both are worth together in credits ("worth 1,550
+  credits in all", whole credits, like an exchange gives); their profile shows the same as **Worth in all**. Only
+  while selling is on, since exchanging is part of it.
 - `/mct` (`/microcredittop`) and `/mct` in Discord show the leaderboard. It ranks by what players hold right now
   (`microcredits-leaderboard=balance`, so exchanging costs rank) or by everything ever sold (`earned`).
 - Optional **dropping prices** (`sell-price-drop`, off by default): the more of one item everyone sells, the less
@@ -737,8 +744,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.26.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.26.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.27.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.27.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

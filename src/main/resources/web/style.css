@@ -925,6 +925,13 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
 /* ---- Shop ---- */
 #view-shop { --slot: 46px; }
 .shop-balance { font-weight: 700; color: var(--gold); white-space: nowrap; }
+.shop-balance { white-space: normal; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0.4em; }
+.shop-balance > span { white-space: nowrap; }
+.wallet-sep { color: var(--muted); font-weight: 400; }
+.wallet-micro { color: var(--text); font-weight: 600; }
+.wallet-total { color: var(--muted); font-weight: 600; }
+.shop-auto { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9em; color: var(--muted); }
+.shop-auto[hidden] { display: none; }
 #shop-notice > * { margin-bottom: 12px; }
 .shop-manage { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .shop-window { padding: 16px; }

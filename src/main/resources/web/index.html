@@ -200,7 +200,11 @@
           <a href="#/shop/cosmetics" data-sub="cosmetics">Cosmetics</a>
           <a href="#/shop/sell" data-sub="sell">Sell &amp; exchange</a>
         </nav>
-        <span id="shop-balance" class="shop-balance"></span>
+        <span id="shop-balance" class="shop-balance" aria-live="polite"></span>
+        <label id="shop-auto" class="shop-auto" hidden>
+          <span class="switch"><input type="checkbox" role="switch" id="shop-auto-micro"><span class="switch-track"></span></span>
+          <span id="shop-auto-text">Pay the rest with microcredits</span>
+        </label>
       </div>
 
       <div id="shop-items">

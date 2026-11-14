@@ -1693,7 +1693,10 @@ function communitySection(p, c) {
       c.market && stat(c.microCurrency.many, [micro(c.micro, c.microCurrency),
         c.microRank ? el('span', { class: 'stat-sub' }, `Rank #${c.microRank}`) : null,
         c.group ? el('a', { class: 'stat-sub', href: '#/community/groups' }, `shared in ${c.group.name} (${c.group.members} players)`) : null]),
-      c.market && stat('Earned by selling', micro(c.microEarned, c.microCurrency))),
+      c.market && stat('Earned by selling', micro(c.microEarned, c.microCurrency)),
+      // Credits and microcredits together, as credits (whole ones: what exchanging would give).
+      c.market && c.microCurrency.rate && stat('Worth in all', [credits(c.credits + Math.floor(c.micro / c.microCurrency.rate), currency),
+        el('span', { class: 'stat-sub' }, `${c.microCurrency.rate.toLocaleString()} ${c.microCurrency.symbol} = 1 ${currency.one}`)])),
     c.favourites.length > 0 && el('div', { class: 'others' },
       el('span', { class: 'muted' }, 'Favourite interactions:'),
       c.favourites.map((f) => el('span', { class: 'chip' }, `/${f.action} ×${f.count.toLocaleString()}`))),
@@ -3517,6 +3520,60 @@ function shopIcon(id) {
   return img;
 }
 
+// ---- Wallet: credits, microcredits and what they're worth together (Shop) ----
+
+/** Credits a buyer can spend: their credits, plus their microcredits' worth if they pay the rest with them. */
+const spendable = (b) => b.balance + (b.autoMicro && b.exchange ? Math.floor(b.micro / b.exchange.rate) : 0);
+
+/** "You have 1,200 credits · 45,000 µc · worth 1,245 credits in all" (microcredits only while exchanging is open). */
+function walletLine(b, currency) {
+  if (!b.linked) return [];
+  const parts = [el('span', {}, `You have ${credits(b.balance, currency)}`)];
+  if (b.exchange) {
+    const worth = b.balance + Math.floor(b.micro / b.exchange.rate);
+    parts.push(el('span', { class: 'wallet-micro', title: `${b.exchange.rate.toLocaleString()} ${b.exchange.symbol} = 1 ${currency.one}` },
+      micro(b.micro, b.exchange)));
+    parts.push(el('span', { class: 'wallet-total' }, `worth ${credits(worth, currency)} in all`));
+  }
+  return parts.flatMap((part, i) => (i ? [el('span', { class: 'wallet-sep', 'aria-hidden': 'true' }, '·'), part] : [part]));
+}
+
+/** The header's balance and "pay the rest with microcredits" switch, for the Items and Cosmetics tabs. */
+function renderWallet(b, currency) {
+  $('shop-balance').replaceChildren(...walletLine(b, currency));
+  const wrap = $('shop-auto');
+  wrap.hidden = !b.linked || !b.exchange;
+  if (wrap.hidden) return;
+  const box = $('shop-auto-micro');
+  box.checked = !!b.autoMicro;
+  $('shop-auto-text').textContent = `Pay the rest with ${b.exchange.many.toLowerCase()}`;
+  wrap.title = `When your ${currency.many.toLowerCase()} aren't enough, just enough ${b.exchange.many.toLowerCase()} are exchanged at `
+    + `${b.exchange.rate.toLocaleString()} ${b.exchange.symbol} = 1 ${currency.one}.`;
+}
+
+$('shop-auto-micro').addEventListener('change', async (e) => {
+  const box = e.currentTarget;
+  box.disabled = true;
+  try {
+    const result = await api('/api/shop/auto-micro', { on: box.checked });
+    for (const data of [shop.data, cos.data]) if (data?.buyer) data.buyer.autoMicro = result.autoMicro;
+    toast(result.message);
+  } catch (err) {
+    box.checked = !box.checked;
+    toast(err.message);
+  } finally {
+    box.disabled = false;
+  }
+  if (currentRoute().sub === 'cosmetics') renderCosmetics();
+  else renderShop();
+});
+
+/** " (4,000 µc of it)" when a price takes some microcredits, else "". */
+function microPart(b, price) {
+  if (!b.autoMicro || !b.exchange || price <= b.balance) return '';
+  return ` (${micro((price - b.balance) * b.exchange.rate, b.exchange)} of it)`;
+}
+
 function renderShop() {
   keepFocus($('shop-items'), fillShop);
 }
@@ -3525,7 +3582,7 @@ function renderShop() {
 function fillShop() {
   const d = shop.data;
   const b = d.buyer;
-  $('shop-balance').textContent = b.linked ? `You have ${credits(b.balance, d.currency)}` : '';
+  renderWallet(b, d.currency);
   const notices = [];
   if (!d.open) {
     notices.push(el('div', { class: 'card panel shop-closed' }, d.manage
@@ -3941,12 +3998,13 @@ function renderShopTotal() {
     : [el('span', { class: 'muted' }, 'The chest is empty.')]), held].filter(Boolean));
   const buy = $('shop-buy');
   const reason = !d.open ? 'The shop is closed' : !b.linked ? 'Link your Minecraft account first'
-    : !t.stacks ? 'Put something in the chest first' : t.credits > b.balance ? needMore(t.credits - b.balance, d.currency)
+    : !t.stacks ? 'Put something in the chest first' : t.credits > spendable(b) ? needMore(t.credits - spendable(b), d.currency)
       : giftTo ? '' : !b.online ? 'Join the Minecraft server to check out' : !b.serverReady ? `${b.server} can't deliver orders` : '';
   buy.disabled = !!reason || shop.busy;
   buy.title = reason;
   buy.textContent = shop.busy ? 'Delivering…' : !t.stacks || reason ? 'Check out'
-    : giftTo ? `Gift to ${giftTo.name} for ${credits(t.credits, d.currency)}` : `Buy for ${credits(t.credits, d.currency)}`;
+    : giftTo ? `Gift to ${giftTo.name} for ${credits(t.credits, d.currency)}${microPart(b, t.credits)}`
+      : `Buy for ${credits(t.credits, d.currency)}${microPart(b, t.credits)}`;
   $('shop-clear').disabled = !t.stacks;
 }
 
@@ -4262,7 +4320,7 @@ async function loadCosmetics() {
 function renderCosmetics() {
   const d = cos.data;
   const b = d.buyer;
-  $('shop-balance').textContent = b.linked ? `You have ${credits(b.balance, d.currency)}` : '';
+  renderWallet(b, d.currency);
   const parts = [];
   if (!d.open) {
     parts.push(el('div', { class: 'card panel shop-closed' }, d.manage
@@ -4307,9 +4365,9 @@ function cosmeticTile(item) {
     action = el('button', { class: `btn btn-small ${item.equipped ? 'btn-ghost' : ''}`, type: 'button',
       onclick: (e) => equipCosmetic(item, !item.equipped, e.currentTarget) }, item.equipped ? 'Stop using' : 'Use');
   } else if (sellable) {
-    const short = b.linked && b.balance < item.price;
+    const short = b.linked && spendable(b) < item.price;
     action = el('button', { class: 'btn btn-small', type: 'button', disabled: !d.open || !b.linked || short,
-      title: short ? needMore(item.price - b.balance, d.currency) : null,
+      title: short ? needMore(item.price - spendable(b), d.currency) : microPart(b, item.price).trim() || null,
       onclick: () => buyCosmetic(item) }, item.price ? `Buy · ${credits(item.price, d.currency)}` : 'Get for free');
   }
   return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${!item.owned && !sellable ? 'not-for-sale' : ''}`, 'data-key': item.id },
@@ -4330,11 +4388,12 @@ function buyCosmetic(item) {
   const d = cos.data;
   confirmDialog({
     title: `Buy ${item.name}?`,
-    text: [`${credits(item.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`,
+    text: [`${credits(item.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`
+      + (microPart(d.buyer, item.price) ? ` The rest is paid with ${micro((item.price - d.buyer.balance) * d.buyer.exchange.rate, d.buyer.exchange)}.` : ''),
       item.kind === 'keepinv' ? keepInventoryText(d.keepInventoryDelay)
         : `It's switched on straight away; switch it off any time here or under Your unlocks on your profile${
           item.kind === 'trail' || item.kind === 'aura' ? `, where you also pick its look (halo, wings, helix…)${item.colorable ? ' and colour' : ''}` : ''}.`],
-    confirmLabel: item.price ? `Buy for ${credits(item.price, d.currency)}` : 'Get it',
+    confirmLabel: item.price ? `Buy for ${credits(item.price, d.currency)}${microPart(d.buyer, item.price)}` : 'Get it',
     onConfirm: async () => {
       const result = await api('/api/cosmetics/buy', { id: item.id });
       toast(result.message);
@@ -4485,7 +4544,8 @@ function loadShopView() {
   $('shop-items').hidden = sub !== '';
   $('shop-cosmetics').hidden = sub !== 'cosmetics';
   $('shop-sell').hidden = sub !== 'sell';
-  $('shop-balance').textContent = '';
+  $('shop-balance').replaceChildren();
+  $('shop-auto').hidden = true;
   if (sub === 'cosmetics') loadCosmetics();
   else if (sub === 'sell') loadMarket();
   else loadShop();
@@ -4706,7 +4766,9 @@ function fillMarket() {
   const d = market.data;
   const cur = d.currency;
   const me = d.me;
-  $('shop-balance').textContent = me.linked ? `You have ${credits(me.credits, d.credits)}` : '';
+  $('shop-balance').replaceChildren(...walletLine({ linked: me.linked, balance: me.credits, micro: me.micro,
+    exchange: d.open ? { ...cur, rate: d.rate } : null }, d.credits));
+  $('shop-auto').hidden = true;
   const notices = [];
   if (!d.open) {
     notices.push(el('div', { class: 'card panel shop-closed' }, d.manage

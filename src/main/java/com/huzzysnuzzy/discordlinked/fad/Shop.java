@@ -3,6 +3,7 @@ package com.huzzysnuzzy.discordlinked.fad;
 import com.huzzysnuzzy.discordlinked.AuditLog.EventTypes;
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.PluginConfig;
+import com.huzzysnuzzy.discordlinked.storage.Database;
 import com.huzzysnuzzy.discordlinked.storage.LinkedAccount;
 import com.huzzysnuzzy.discordlinked.storage.ShopOverride;
 import com.velocitypowered.api.proxy.Player;
@@ -196,28 +197,31 @@ public final class Shop {
         try {
             String summary = summary(lines) + (gift ? " (gift to " + receiverName + ")" : "");
             PluginConfig c = plugin.config();
-            long balance = plugin.database().addCredits(buyer.uuid(), buyer.minecraftName(), -cost, "SHOP", summary, actor);
-            if (balance < 0) {
-                long has = plugin.database().creditAccount(buyer.uuid()).map(a -> a.credits()).orElse(0L);
-                return fail("This costs " + c.credits(cost) + " but you have " + c.credits(has) + ".");
+            Market market = community.market();
+            Database.Charge charge = plugin.database().chargeCredits(buyer.uuid(), buyer.minecraftName(), cost,
+                    market.shopRate(buyer.uuid()), "SHOP", summary, actor);
+            if (!charge.ok()) {
+                return fail(market.shortOf(buyer.uuid(), "This", cost));
             }
+            long balance = charge.balance();
+            String exchanged = market.exchangedNote(charge);
             String title = gift ? "Gift from " + buyer.minecraftName() : "Shop order";
             String outcome = deliver(connection.get(), receiverId, lines, title);
             String stacks = lines.size() + (lines.size() == 1 ? " stack" : " stacks");
             if ("ok".equals(outcome)) {
                 plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.SHOP_PURCHASE,
-                        (gift ? "gifted " : "bought ") + summary + " in a chest for " + c.credits(cost) + ", now "
-                                + c.credits(balance), actor, server);
+                        (gift ? "gifted " : "bought ") + summary + " in a chest for " + c.credits(cost) + exchanged
+                                + ", now " + c.credits(balance), actor, server);
                 if (gift) {
                     receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.gift-received",
                             "from", buyer.minecraftName(), "stacks", stacks));
                     online.ifPresent(player -> player.sendMessage(plugin.messages().minecraft("minecraft.shop.gift-sent",
                             "to", receiverName, "stacks", stacks, "cost", c.credits(cost))));
-                    return new Result(true, "Delivered! " + receiverName + " got your gift.", cost, balance);
+                    return new Result(true, "Delivered! " + receiverName + " got your gift." + exchanged, cost, balance);
                 }
                 receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.delivered",
                         "stacks", stacks, "cost", c.credits(cost)));
-                return new Result(true, "Delivered! The chest is in your inventory.", cost, balance);
+                return new Result(true, "Delivered! The chest is in your inventory." + exchanged, cost, balance);
             }
             String whose = gift ? receiverName + "'s" : "your";
             String reason = switch (outcome) {
@@ -229,8 +233,9 @@ public final class Shop {
                         : outcome.startsWith("stack:") ? name(outcome.substring(6)) + " doesn't stack that high on that server"
                         : outcome;
             };
-            long refunded = plugin.database().addCredits(buyer.uuid(), buyer.minecraftName(), cost, "SHOP",
-                    "refund: " + reason, actor, false);
+            // Credits back, and microcredits that were exchanged for it back as microcredits.
+            long refunded = plugin.database().refundCharge(buyer.uuid(), buyer.minecraftName(), cost, charge, "SHOP",
+                    "refund: " + reason, actor);
             plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.SHOP_PURCHASE,
                     "declined (" + reason + "), refunded " + c.credits(cost) + ": " + summary, actor, server);
             online.ifPresent(player -> player.sendMessage(plugin.messages().minecraft("minecraft.shop.declined",

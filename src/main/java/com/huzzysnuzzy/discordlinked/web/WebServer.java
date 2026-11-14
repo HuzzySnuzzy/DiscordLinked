@@ -103,7 +103,7 @@ public final class WebServer {
     /** Everything the community view (non-admins and off-duty admins) may call. */
     private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
             "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty",
-            "GET /api/shop", "POST /api/shop/checkout", "GET /api/market", "POST /api/market/exchange",
+            "GET /api/shop", "POST /api/shop/checkout", "POST /api/shop/auto-micro", "GET /api/market", "POST /api/market/exchange",
             "GET /api/leaderboard", "GET /api/cosmetics", "POST /api/cosmetics/buy", "POST /api/cosmetics/equip",
             "POST /api/cosmetics/style", "GET /api/groups", "POST /api/groups/create", "POST /api/groups/invite",
             "POST /api/groups/cancel-invite", "POST /api/groups/accept", "POST /api/groups/decline", "POST /api/groups/leave",
@@ -610,6 +610,7 @@ public final class WebServer {
             case "POST /api/credits/adjust" -> adjustCredits(ex, session);
             case "GET /api/shop" -> sendJson(ex, 200, shop(session));
             case "POST /api/shop/checkout" -> shopCheckout(ex, session);
+            case "POST /api/shop/auto-micro" -> shopAutoMicro(ex, session);
             case "POST /api/shop/item" -> shopItem(ex, session);
             case "GET /api/market" -> sendJson(ex, 200, market(session));
             case "POST /api/market/exchange" -> marketExchange(ex, session);
@@ -1247,7 +1248,7 @@ public final class WebServer {
                 .put("microRank", plugin.community().market().rank(uuid))
                 .put("group", plugin.database().groupOf(uuid).map(g -> DataObject.empty().put("id", g.id())
                         .put("name", g.name()).put("members", g.members().size())).orElse(null))
-                .put("microCurrency", microCurrency())
+                .put("microCurrency", microCurrency().put("rate", plugin.config().microPerCredit()))
                 .put("microTransactions", microTransactions);
     }
 
@@ -1357,9 +1358,9 @@ public final class WebServer {
         if (me.isPresent()) {
             Optional<Player> online = plugin.proxy().getPlayer(me.get().uuid());
             String server = online.flatMap(Player::getCurrentServer).map(c -> c.getServerInfo().getName()).orElse("");
+            wallet(buyer, me.get().uuid());
             buyer.put("name", me.get().minecraftName())
                     .put("uuid", me.get().uuid().toString())
-                    .put("balance", plugin.database().creditAccount(me.get().uuid()).map(CreditAccount::credits).orElse(0L))
                     .put("online", online.isPresent())
                     .put("server", server)
                     .put("serverReady", !server.isEmpty() && plugin.community().servers().containsKey(server));
@@ -1391,6 +1392,41 @@ public final class WebServer {
                 .put("chestPrice", shop.chestCents(overrides))
                 .put("buyer", buyer)
                 .put("items", items);
+    }
+
+    /**
+     * A buyer's credits, microcredits (a group member's: their group's), whether they pay what credits don't cover
+     * with microcredits, and the exchange ({@code exchange}: null while selling, so exchanging, is closed).
+     */
+    private void wallet(DataObject buyer, UUID uuid) throws SQLException {
+        Optional<CreditAccount> account = plugin.database().creditAccount(uuid);
+        PluginConfig c = plugin.config();
+        boolean open = plugin.community().market().open();
+        buyer.put("balance", account.map(CreditAccount::credits).orElse(0L))
+                .put("micro", account.map(CreditAccount::micro).orElse(0L))
+                .put("autoMicro", plugin.database().shopAutoMicro(uuid))
+                .put("exchange", open ? microCurrency().put("rate", c.microPerCredit()) : null);
+    }
+
+    /** {@code {on}}: whether the player pays what their credits don't cover with microcredits. */
+    private void shopAutoMicro(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Optional<LinkedAccount> me = plugin.database().findByDiscordId(session.user.id());
+        if (me.isEmpty()) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        boolean on = body.getBoolean("on", false);
+        plugin.database().setShopAutoMicro(me.get().uuid(), me.get().minecraftName(), on);
+        PluginConfig c = plugin.config();
+        String many = c.microNamePlural().toLowerCase(java.util.Locale.ROOT);
+        sendJson(ex, 200, DataObject.empty().put("ok", true).put("autoMicro", on).put("message", on
+                ? "What your " + c.creditsNamePlural().toLowerCase(java.util.Locale.ROOT) + " don't cover is paid with your "
+                        + many + " (" + c.micro(c.microPerCredit()) + " = 1 " + c.creditsName() + ")."
+                : "You pay with " + c.creditsNamePlural().toLowerCase(java.util.Locale.ROOT) + " only."));
     }
 
     private void shopCheckout(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
@@ -1656,8 +1692,8 @@ public final class WebServer {
         }
         DataObject buyer = DataObject.empty().put("linked", me != null);
         if (me != null) {
-            buyer.put("uuid", me.uuid().toString()).put("name", me.minecraftName())
-                    .put("balance", plugin.database().creditAccount(me.uuid()).map(CreditAccount::credits).orElse(0L));
+            buyer.put("uuid", me.uuid().toString()).put("name", me.minecraftName());
+            wallet(buyer, me.uuid());
         }
         return DataObject.empty()
                 .put("open", cosmetics.open())

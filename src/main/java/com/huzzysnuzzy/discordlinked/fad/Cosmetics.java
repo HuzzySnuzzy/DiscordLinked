@@ -203,23 +203,27 @@ public final class Cosmetics {
         }
         PluginConfig c = config();
         String detail = "Bought " + describe(cosmetic);
-        long balance = plugin.database().buyCosmetic(buyer.uuid(), buyer.minecraftName(), cosmetic, detail, actor);
-        if (balance == -2) {
+        Market market = plugin.community().market();
+        Database.Charge charge = plugin.database().buyCosmetic(buyer.uuid(), buyer.minecraftName(), cosmetic,
+                market.shopRate(buyer.uuid()), detail, actor);
+        if (charge.balance() == -2) {
             return Result.fail("You already have " + cosmetic.name() + ".");
         }
-        if (balance < 0) {
-            long has = plugin.database().creditAccount(buyer.uuid()).map(a -> a.credits()).orElse(0L);
-            return Result.fail(cosmetic.name() + " costs " + c.credits(cosmetic.price()) + " but you have " + c.credits(has) + ".");
+        if (!charge.ok()) {
+            return Result.fail(market.shortOf(buyer.uuid(), cosmetic.name(), cosmetic.price()));
         }
+        long balance = charge.balance();
+        String exchanged = market.exchangedNote(charge);
         plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.COSMETIC,
-                "bought " + describe(cosmetic) + " for " + c.credits(cosmetic.price()) + ", now " + c.credits(balance), actor);
+                "bought " + describe(cosmetic) + " for " + c.credits(cosmetic.price()) + exchanged + ", now "
+                        + c.credits(balance), actor);
         plugin.database().setCosmeticEquipped(buyer.uuid(), id, cosmetic.kind(), true);
         reload();
         push(buyer.uuid());
         String using = cosmetic.kind().equals(KEEP_INVENTORY) && c.keepInventoryDelayMinutes() > 0
                 ? " It starts working in " + c.keepInventoryDelayMinutes() + " minutes."
                 : " It's on now.";
-        return new Result(true, "Bought " + cosmetic.name() + "!" + using, balance);
+        return new Result(true, "Bought " + cosmetic.name() + "!" + exchanged + using, balance);
     }
 
     /** Switches one of the player's own cosmetics on or off. */

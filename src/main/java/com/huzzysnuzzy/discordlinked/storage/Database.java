@@ -414,6 +414,8 @@ public final class Database implements AutoCloseable {
                         fetched_at INTEGER NOT NULL
                     )""");
         }
+        // Added in 0.27.0: whether a player pays what their credits don't cover with microcredits (Shop).
+        addColumnIfMissing("fad_accounts", "shop_auto_micro", "INTEGER NOT NULL DEFAULT 0");
         // Added in 0.26.0: resets of players' data (website: MC data), their delivery to the backend servers, and
         // what each server last said about each player's data.
         try (Statement st = connection.createStatement()) {
@@ -2075,19 +2077,22 @@ public final class Database implements AutoCloseable {
     /**
      * Buys a cosmetic: takes the credits and adds it to what the player has, in one go.
      *
-     * @return the new balance, -1 if they don't have enough credits, -2 if they already have it
+     * With {@code microPerCredit} above 0, credits they're short of are first exchanged from their microcredits
+     * (see {@link #chargeCredits}).
+     *
+     * @return the new balance (-1 if they don't have enough, -2 if they already have it) and what was exchanged
      */
-    public synchronized long buyCosmetic(UUID uuid, String name, Cosmetic cosmetic, String detail, String actor)
-            throws SQLException {
+    public synchronized Charge buyCosmetic(UUID uuid, String name, Cosmetic cosmetic, long microPerCredit, String detail,
+                                           String actor) throws SQLException {
         return transaction(() -> {
             if (ownsCosmetic(uuid, cosmetic.id())) {
-                return -2L;
+                return new Charge(-2, 0, 0);
             }
-            ensureCreditAccount(uuid, name);
+            long[] covered = coverWithMicro(uuid, name, cosmetic.price(), microPerCredit, detail, actor);
+            if (covered == null) {
+                return new Charge(-1, 0, 0);
+            }
             long balance = creditBalance(uuid) - cosmetic.price();
-            if (balance < 0) {
-                return -1L;
-            }
             try (PreparedStatement ps = connection.prepareStatement(
                     "UPDATE fad_accounts SET credits = credits - ? WHERE minecraft_uuid = ?")) {
                 ps.setLong(1, cosmetic.price());
@@ -2096,7 +2101,7 @@ public final class Database implements AutoCloseable {
             }
             insertCreditTransaction(uuid, -cosmetic.price(), balance, "COSMETIC", detail, actor, Instant.now());
             insertOwned(uuid, cosmetic.id(), cosmetic.price());
-            return balance;
+            return new Charge(balance, covered[0], covered[1]);
         });
     }
 
@@ -3530,6 +3535,123 @@ public final class Database implements AutoCloseable {
             }
         }
         return counts;
+    }
+
+    // ---- Paying with microcredits too (0.27.0) ----
+
+    /**
+     * A purchase: the credit balance after it ({@code -1} = not enough, nothing changed; {@code -2} = a cosmetic they
+     * already have), and the microcredits exchanged for the {@code converted} credits it was short of.
+     */
+    public record Charge(long balance, long microUsed, long converted) {
+        public boolean ok() {
+            return balance >= 0;
+        }
+    }
+
+    /**
+     * Inside a transaction: when the player has fewer than {@code cost} credits and {@code microPerCredit} is above
+     * 0, exchanges just enough of their microcredits (a group member's come from the group) for the rest. Returns
+     * [microcredits used, credits gained] ([0, 0] when their credits were enough), or null if even that isn't enough.
+     */
+    private long[] coverWithMicro(UUID uuid, String name, long cost, long microPerCredit, String detail, String actor)
+            throws SQLException {
+        ensureCreditAccount(uuid, name);
+        long have = creditBalance(uuid);
+        if (have >= cost) {
+            return new long[] {0, 0};
+        }
+        long need = cost - have;
+        if (microPerCredit <= 0 || need > Long.MAX_VALUE / microPerCredit) {
+            return null;
+        }
+        long microCost = need * microPerCredit;
+        String what = "Paid the rest of: " + detail;
+        if (changeMicro(uuid, name, -microCost, "EXCHANGE", what, actor, false) < 0) {
+            return null;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE fad_accounts SET credits = credits + ? WHERE minecraft_uuid = ?")) {
+            ps.setLong(1, need);
+            ps.setString(2, uuid.toString());
+            ps.executeUpdate();
+        }
+        insertCreditTransaction(uuid, need, have + need, "EXCHANGE", what, actor, Instant.now());
+        return new long[] {microCost, need};
+    }
+
+    /**
+     * Takes {@code cost} credits for a purchase ({@code kind}, e.g. SHOP), in one transaction. With
+     * {@code microPerCredit} above 0, credits they're short of are exchanged from their microcredits first (shown as
+     * an exchange in both histories).
+     */
+    public synchronized Charge chargeCredits(UUID uuid, String name, long cost, long microPerCredit, String kind,
+                                             String detail, String actor) throws SQLException {
+        return transaction(() -> {
+            long[] covered = coverWithMicro(uuid, name, cost, microPerCredit, detail, actor);
+            if (covered == null) {
+                return new Charge(-1, 0, 0);
+            }
+            long balance = creditBalance(uuid) - cost;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET credits = credits - ? WHERE minecraft_uuid = ?")) {
+                ps.setLong(1, cost);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            insertCreditTransaction(uuid, -cost, balance, kind, detail, actor, Instant.now());
+            return new Charge(balance, covered[0], covered[1]);
+        });
+    }
+
+    /**
+     * Gives back a {@link #chargeCredits} purchase that didn't happen (e.g. the order couldn't be delivered): the
+     * credits they had, and the microcredits that were exchanged. Returns the credit balance after it.
+     */
+    public synchronized long refundCharge(UUID uuid, String name, long cost, Charge charge, String kind, String detail,
+                                          String actor) throws SQLException {
+        return transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            long credits = cost - charge.converted();
+            long balance = creditBalance(uuid) + credits;
+            if (credits > 0) {
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "UPDATE fad_accounts SET credits = credits + ? WHERE minecraft_uuid = ?")) {
+                    ps.setLong(1, credits);
+                    ps.setString(2, uuid.toString());
+                    ps.executeUpdate();
+                }
+                insertCreditTransaction(uuid, credits, balance, kind, detail, actor, Instant.now());
+            }
+            if (charge.microUsed() > 0) {
+                changeMicro(uuid, name, charge.microUsed(), kind, detail, actor, false);
+            }
+            return balance;
+        });
+    }
+
+    /** Whether the player has "pay the rest with microcredits" on for the Shop. */
+    public synchronized boolean shopAutoMicro(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT shop_auto_micro FROM fad_accounts WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getInt(1) != 0;
+            }
+        }
+    }
+
+    public synchronized void setShopAutoMicro(UUID uuid, String name, boolean on) throws SQLException {
+        transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET shop_auto_micro = ? WHERE minecraft_uuid = ?")) {
+                ps.setInt(1, on ? 1 : 0);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            return null;
+        });
     }
 
     private interface SqlWork<T> {

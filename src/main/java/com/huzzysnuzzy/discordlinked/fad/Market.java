@@ -239,6 +239,42 @@ public final class Market {
         return new Sale(paid, balance, refused);
     }
 
+    // ---- Paying with microcredits (Shop) ----
+
+    /**
+     * How many microcredits make a credit when this player pays in the Shop: the exchange rate if they switched on
+     * paying the rest with microcredits (and selling, so exchanging, is open), else 0 (credits only).
+     */
+    public long shopRate(UUID uuid) throws SQLException {
+        return open() && plugin.database().shopAutoMicro(uuid) ? config().microPerCredit() : 0;
+    }
+
+    /** "… costs 12 credits but you have 3 and 4,000 µc (worth 4 credits)", with a hint when switching on would help. */
+    public String shortOf(UUID uuid, String what, long cost) throws SQLException {
+        PluginConfig c = config();
+        Optional<CreditAccount> account = plugin.database().creditAccount(uuid);
+        long credits = account.map(CreditAccount::credits).orElse(0L);
+        String text = what + " costs " + c.credits(cost) + " but you have " + c.credits(credits);
+        long micro = account.map(CreditAccount::micro).orElse(0L);
+        if (!open() || micro <= 0) {
+            return text + ".";
+        }
+        long worth = micro / c.microPerCredit();
+        text += " and " + c.micro(micro) + " (worth " + c.credits(worth) + ")";
+        if (!plugin.database().shopAutoMicro(uuid) && credits + worth >= cost) {
+            return text + ". Switch on \"Pay the rest with " + c.microNamePlural().toLowerCase(java.util.Locale.ROOT)
+                    + "\" to use them.";
+        }
+        return text + ".";
+    }
+
+    /** " (4,000 µc exchanged for 4 credits)" after a purchase that used microcredits, else "". */
+    public String exchangedNote(Database.Charge charge) {
+        PluginConfig c = config();
+        return charge.microUsed() > 0
+                ? " (" + c.micro(charge.microUsed()) + " exchanged for " + c.credits(charge.converted()) + ")" : "";
+    }
+
     // ---- Exchanging ----
 
     /** What an exchange did, with a message for the player. {@code ok} false = nothing changed. */
