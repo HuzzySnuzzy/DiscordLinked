@@ -23,7 +23,8 @@ public final class AuditLog {
     private static final Set<String> DISCORD_EVENTS = Set.of(
             EventTypes.LINK, EventTypes.UNLINK, EventTypes.JOIN, EventTypes.LEAVE, EventTypes.DENIED_UNLINKED,
             EventTypes.SUSPEND, EventTypes.SUSPEND_EDIT, EventTypes.UNSUSPEND, EventTypes.KICK, EventTypes.NOTE,
-            EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_RESTORE, EventTypes.CREDITS_ADJUST);
+            EventTypes.SPY_START, EventTypes.SPY_END, EventTypes.INVENTORY_RESTORE, EventTypes.CREDITS_ADJUST,
+            EventTypes.MCDATA_RESET);
 
     private final Database database;
     private final Logger logger;
@@ -131,6 +132,8 @@ public final class AuditLog {
         public static final String INTERACTION = "INTERACTION";
         public static final String ADVANCEMENT = "ADVANCEMENT";
         public static final String CREDITS_ADJUST = "CREDITS_ADJUST";
+        /** Players' data reset (or a reset undone) on the website's MC data page. */
+        public static final String MCDATA_RESET = "MCDATA_RESET";
         /** A website Shop order: delivered, or declined and refunded. */
         public static final String SHOP_PURCHASE = "SHOP_PURCHASE";
         /** An admin teleported to a player's location or bed from the website. */

@@ -85,6 +85,12 @@ public final class Community {
         return bridge;
     }
 
+    /** Sends an MC data reset or undo to a server, through a player on it (see McDataManager). */
+    public void sendMcData(com.velocitypowered.api.proxy.ServerConnection connection, String token, String kind,
+                           String target, String categories, long created, String actor) {
+        bridge.mcData(connection, token, kind, target, categories, created, actor);
+    }
+
     /** Sends the update settings for the backend servers (and the newest release seen) to every server in use. */
     public void sendUpdateSettings() {
         bridge.updatesToAll();

@@ -414,6 +414,47 @@ public final class Database implements AutoCloseable {
                         fetched_at INTEGER NOT NULL
                     )""");
         }
+        // Added in 0.26.0: resets of players' data (website: MC data), their delivery to the backend servers, and
+        // what each server last said about each player's data.
+        try (Statement st = connection.createStatement()) {
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS mcdata_ops (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        token       TEXT NOT NULL,
+                        created_at  INTEGER NOT NULL,
+                        actor       TEXT NOT NULL,
+                        target_uuid TEXT,
+                        target_name TEXT,
+                        servers     TEXT NOT NULL,
+                        mc          TEXT NOT NULL,
+                        dl          TEXT NOT NULL,
+                        dl_summary  TEXT,
+                        dl_backup   TEXT,
+                        undone_at   INTEGER,
+                        undone_by   TEXT
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS mcdata_servers (
+                        op_id         INTEGER NOT NULL,
+                        server        TEXT NOT NULL,
+                        sent_at       INTEGER,
+                        acked_at      INTEGER,
+                        undo_sent_at  INTEGER,
+                        undo_acked_at INTEGER,
+                        applied       INTEGER NOT NULL DEFAULT 0,
+                        restored      INTEGER NOT NULL DEFAULT 0,
+                        updated_at    INTEGER,
+                        PRIMARY KEY (op_id, server)
+                    )""");
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS mc_summaries (
+                        minecraft_uuid TEXT NOT NULL,
+                        server         TEXT NOT NULL,
+                        data           TEXT NOT NULL,
+                        updated_at     INTEGER NOT NULL,
+                        PRIMARY KEY (minecraft_uuid, server)
+                    )""");
+        }
     }
 
     /** A first set so the shop isn't empty; the settings owner can change or delete all of them. */
@@ -2903,6 +2944,592 @@ public final class Database implements AutoCloseable {
             ps.setString(1, name);
             return ps.executeUpdate() > 0;
         }
+    }
+
+    // ---- MC data: resets of players' data (0.26.0) ----
+
+    /**
+     * One reset from the website's MC data page. {@code targetUuid} null = everyone. {@code servers}: the backend
+     * servers its Minecraft part ({@code mc}) goes to; {@code dl}: what of DiscordLinked's own data was reset.
+     */
+    public record McDataOp(long id, String token, long createdAt, String actor, String targetUuid, String targetName,
+                           List<String> servers, List<String> mc, List<String> dl, String dlSummary, String dlBackup,
+                           Long undoneAt, String undoneBy) {
+    }
+
+    /** How far an operation got on one server. Times are null until it happened. */
+    public record McDataServer(long opId, String server, Long sentAt, Long ackedAt, Long undoSentAt, Long undoAckedAt,
+                               int applied, int restored, Long updatedAt) {
+    }
+
+    private static List<String> list(String text) {
+        List<String> parts = new ArrayList<>();
+        if (text != null) {
+            for (String part : text.split(",")) {
+                if (!part.isBlank()) {
+                    parts.add(part.strip());
+                }
+            }
+        }
+        return parts;
+    }
+
+    /** Turns what a DiscordLinked reset took into [summary, backup JSON] to keep with the operation. */
+    public interface DlBackupWriter {
+        String[] write(DlBackup backup);
+    }
+
+    /**
+     * Saves a new operation and, in the same transaction, resets DiscordLinked's data it names ({@code dl}) and keeps
+     * what that was: either all of it happens or none of it.
+     */
+    public synchronized McDataOp insertMcDataOp(String token, String actor, UUID target, String targetName,
+                                                List<String> servers, List<String> mc, List<String> dl,
+                                                DlBackupWriter writer) throws SQLException {
+        long now = Instant.now().toEpochMilli();
+        return transaction(() -> {
+            long id;
+            try (PreparedStatement ps = connection.prepareStatement("INSERT INTO mcdata_ops (token, created_at, actor, "
+                    + "target_uuid, target_name, servers, mc, dl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    Statement.RETURN_GENERATED_KEYS)) {
+                ps.setString(1, token);
+                ps.setLong(2, now);
+                ps.setString(3, actor);
+                ps.setString(4, target == null ? null : target.toString());
+                ps.setString(5, targetName);
+                ps.setString(6, String.join(",", servers));
+                ps.setString(7, String.join(",", mc));
+                ps.setString(8, String.join(",", dl));
+                ps.executeUpdate();
+                try (ResultSet keys = ps.getGeneratedKeys()) {
+                    keys.next();
+                    id = keys.getLong(1);
+                }
+            }
+            if (!mc.isEmpty()) {
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "INSERT INTO mcdata_servers (op_id, server, updated_at) VALUES (?, ?, ?)")) {
+                    for (String server : servers) {
+                        ps.setLong(1, id);
+                        ps.setString(2, server);
+                        ps.setLong(3, now);
+                        ps.executeUpdate();
+                    }
+                }
+            }
+            String summary = null;
+            String json = null;
+            if (!dl.isEmpty()) {
+                DlBackup backup = resetDlDataNow(target, dl.contains("advcredits"), dl.contains("playtime"),
+                        dl.contains("credits"), dl.contains("micro"), dl.contains("streak"), "MC data reset #" + id, actor);
+                String[] written = writer.write(backup);
+                summary = written[0];
+                json = written[1];
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "UPDATE mcdata_ops SET dl_summary = ?, dl_backup = ? WHERE id = ?")) {
+                    ps.setString(1, summary);
+                    ps.setString(2, json);
+                    ps.setLong(3, id);
+                    ps.executeUpdate();
+                }
+            }
+            return new McDataOp(id, token, now, actor, target == null ? null : target.toString(), targetName,
+                    servers, mc, dl, summary, json, null, null);
+        });
+    }
+
+    /** Reads an operation's DiscordLinked backup back (see {@link DlBackupWriter}). */
+    public interface DlBackupReader {
+        DlBackup read(String json);
+    }
+
+    /**
+     * Marks an operation undone and, in the same transaction, gives back DiscordLinked's data it reset. False if it
+     * doesn't exist or was already undone (then nothing changes).
+     */
+    public synchronized boolean undoMcDataOp(long id, String by, DlBackupReader reader) throws SQLException {
+        return transaction(() -> {
+            String backup;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT dl_backup FROM mcdata_ops WHERE id = ? AND undone_at IS NULL")) {
+                ps.setLong(1, id);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return false;
+                    }
+                    backup = rs.getString(1);
+                }
+            }
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE mcdata_ops SET undone_at = ?, undone_by = ? WHERE id = ?")) {
+                ps.setLong(1, Instant.now().toEpochMilli());
+                ps.setString(2, by);
+                ps.setLong(3, id);
+                ps.executeUpdate();
+            }
+            if (backup != null) {
+                undoDlDataNow(reader.read(backup), "Undo of MC data reset #" + id, by);
+            }
+            return true;
+        });
+    }
+
+    private static McDataOp mcDataOp(ResultSet rs) throws SQLException {
+        long undone = rs.getLong("undone_at");
+        Long undoneAt = rs.wasNull() ? null : undone;
+        return new McDataOp(rs.getLong("id"), rs.getString("token"), rs.getLong("created_at"), rs.getString("actor"),
+                rs.getString("target_uuid"), rs.getString("target_name"), list(rs.getString("servers")),
+                list(rs.getString("mc")), list(rs.getString("dl")), rs.getString("dl_summary"),
+                rs.getString("dl_backup"), undoneAt, rs.getString("undone_by"));
+    }
+
+    /** The newest first. */
+    public synchronized List<McDataOp> mcDataOps(int limit) throws SQLException {
+        List<McDataOp> ops = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM mcdata_ops ORDER BY id DESC LIMIT ?")) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ops.add(mcDataOp(rs));
+                }
+            }
+        }
+        return ops;
+    }
+
+    public synchronized Optional<McDataOp> mcDataOp(long id) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM mcdata_ops WHERE id = ?")) {
+            ps.setLong(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(mcDataOp(rs)) : Optional.empty();
+            }
+        }
+    }
+
+    public synchronized Optional<McDataOp> mcDataOpByToken(String token) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM mcdata_ops WHERE token = ?")) {
+            ps.setString(1, token);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(mcDataOp(rs)) : Optional.empty();
+            }
+        }
+    }
+
+    private static McDataServer mcDataServer(ResultSet rs) throws SQLException {
+        return new McDataServer(rs.getLong("op_id"), rs.getString("server"), nullableLong(rs, "sent_at"),
+                nullableLong(rs, "acked_at"), nullableLong(rs, "undo_sent_at"), nullableLong(rs, "undo_acked_at"),
+                rs.getInt("applied"), rs.getInt("restored"), nullableLong(rs, "updated_at"));
+    }
+
+    public synchronized List<McDataServer> mcDataServers(long opId) throws SQLException {
+        List<McDataServer> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT * FROM mcdata_servers WHERE op_id = ? ORDER BY server COLLATE NOCASE")) {
+            ps.setLong(1, opId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(mcDataServer(rs));
+                }
+            }
+        }
+        return rows;
+    }
+
+    /** Deliveries still waiting for the server's answer: resets not acknowledged, and undos not acknowledged. */
+    public synchronized List<McDataServer> mcDataUndelivered() throws SQLException {
+        List<McDataServer> rows = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT s.* FROM mcdata_servers s JOIN mcdata_ops o ON o.id = s.op_id "
+                     + "WHERE (o.undone_at IS NULL AND s.acked_at IS NULL) "
+                     + "OR (o.undone_at IS NOT NULL AND s.undo_acked_at IS NULL) ORDER BY s.op_id")) {
+            while (rs.next()) {
+                rows.add(mcDataServer(rs));
+            }
+        }
+        return rows;
+    }
+
+    public synchronized void markMcDataSent(long opId, String server, boolean undo) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE mcdata_servers SET "
+                + (undo ? "undo_sent_at" : "sent_at") + " = ? WHERE op_id = ? AND server = ?")) {
+            ps.setLong(1, Instant.now().toEpochMilli());
+            ps.setLong(2, opId);
+            ps.setString(3, server);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A server's MCDATA_STATE: acknowledged, with how many players got it and had it undone. */
+    public synchronized void mcDataState(long opId, String server, boolean undo, int applied, int restored)
+            throws SQLException {
+        long now = Instant.now().toEpochMilli();
+        // An undo's answer also stands for the reset's (the server has the operation either way).
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE mcdata_servers SET acked_at = COALESCE(acked_at, ?), "
+                + "undo_acked_at = CASE WHEN ? THEN COALESCE(undo_acked_at, ?) ELSE undo_acked_at END, "
+                + "applied = MAX(applied, ?), restored = MAX(restored, ?), updated_at = ? WHERE op_id = ? AND server = ?")) {
+            ps.setLong(1, now);
+            ps.setBoolean(2, undo);
+            ps.setLong(3, now);
+            ps.setInt(4, applied);
+            ps.setInt(5, restored);
+            ps.setLong(6, now);
+            ps.setLong(7, opId);
+            ps.setString(8, server);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A server's summary of a player's Minecraft data there (JSON, written by DiscordLinkedBackend). */
+    public synchronized void saveMcSummary(UUID uuid, String server, String json) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO mc_summaries (minecraft_uuid, server, data, "
+                + "updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (minecraft_uuid, server) DO UPDATE SET "
+                + "data = excluded.data, updated_at = excluded.updated_at")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, server);
+            ps.setString(3, json);
+            ps.setLong(4, Instant.now().toEpochMilli());
+            ps.executeUpdate();
+        }
+    }
+
+    public record McSummary(String server, String json, long updatedAt) {
+    }
+
+    public synchronized List<McSummary> mcSummaries(UUID uuid) throws SQLException {
+        List<McSummary> rows = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT server, data, updated_at FROM mc_summaries WHERE minecraft_uuid = ? ORDER BY server COLLATE NOCASE")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new McSummary(rs.getString(1), rs.getString(2), rs.getLong(3)));
+                }
+            }
+        }
+        return rows;
+    }
+
+    /** How many players have a summary from each server (who's been on it since 0.26.0). */
+    public synchronized Map<String, Integer> mcSummaryCounts() throws SQLException {
+        Map<String, Integer> counts = new HashMap<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT server, COUNT(*) FROM mc_summaries GROUP BY server")) {
+            while (rs.next()) {
+                counts.put(rs.getString(1), rs.getInt(2));
+            }
+        }
+        return counts;
+    }
+
+    // DiscordLinked's own data of a player (or everyone): what a reset takes away, kept to give it back.
+
+    public record AdvRow(String uuid, String advancement, String title, String frame, String server, long credits,
+                         long earnedAt) {
+    }
+
+    public record PlaytimeRow(String uuid, long active, long afk, long unpaid) {
+    }
+
+    public record BalanceRow(String uuid, String name, long amount) {
+    }
+
+    public record GroupBalanceRow(long id, long balance) {
+    }
+
+    public record StreakRow(String uuid, String lastDay, int streak, int best) {
+    }
+
+    public record DlBackup(List<AdvRow> advancements, List<PlaytimeRow> playtime, List<BalanceRow> credits,
+                           List<BalanceRow> micro, List<GroupBalanceRow> groups, List<StreakRow> streaks) {
+    }
+
+    /**
+     * Resets DiscordLinked's data of {@code target} (null = everyone), inside a transaction, and returns what it was:
+     * the advancements that earned credits (so they earn them again), playtime, credits and microcredits (set to 0,
+     * with a RESET entry in their history; for everyone also the groups' shared balances) and login streaks.
+     */
+    private DlBackup resetDlDataNow(UUID target, boolean advancements, boolean playtime, boolean credits,
+                                    boolean micro, boolean streaks, String detail, String actor) throws SQLException {
+        String where = target == null ? "" : " WHERE minecraft_uuid = ?";
+        String and = target == null ? "" : " AND minecraft_uuid = ?";
+        {
+            List<AdvRow> adv = new ArrayList<>();
+            List<PlaytimeRow> time = new ArrayList<>();
+            List<BalanceRow> creditRows = new ArrayList<>();
+            List<BalanceRow> microRows = new ArrayList<>();
+            List<GroupBalanceRow> groups = new ArrayList<>();
+            List<StreakRow> streakRows = new ArrayList<>();
+            Instant now = Instant.now();
+            if (advancements) {
+                try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM fad_advancements" + where)) {
+                    bind(ps, target);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            adv.add(new AdvRow(rs.getString("minecraft_uuid"), rs.getString("advancement"),
+                                    rs.getString("title"), rs.getString("frame"), rs.getString("server"),
+                                    rs.getLong("credits"), rs.getLong("earned_at")));
+                        }
+                    }
+                }
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM fad_advancements" + where)) {
+                    bind(ps, target);
+                    ps.executeUpdate();
+                }
+            }
+            if (playtime) {
+                try (PreparedStatement ps = connection.prepareStatement("SELECT minecraft_uuid, active_seconds, "
+                        + "afk_seconds, unpaid_seconds FROM fad_accounts WHERE (active_seconds > 0 OR afk_seconds > 0 "
+                        + "OR unpaid_seconds > 0)" + and)) {
+                    bind(ps, target);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            time.add(new PlaytimeRow(rs.getString(1), rs.getLong(2), rs.getLong(3), rs.getLong(4)));
+                        }
+                    }
+                }
+                try (PreparedStatement ps = connection.prepareStatement("UPDATE fad_accounts SET active_seconds = 0, "
+                        + "afk_seconds = 0, unpaid_seconds = 0" + where)) {
+                    bind(ps, target);
+                    ps.executeUpdate();
+                }
+            }
+            if (credits) {
+                try (PreparedStatement ps = connection.prepareStatement("SELECT minecraft_uuid, minecraft_name, credits "
+                        + "FROM fad_accounts WHERE credits > 0" + and)) {
+                    bind(ps, target);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            creditRows.add(new BalanceRow(rs.getString(1), rs.getString(2), rs.getLong(3)));
+                        }
+                    }
+                }
+                for (BalanceRow row : creditRows) {
+                    try (PreparedStatement ps = connection.prepareStatement(
+                            "UPDATE fad_accounts SET credits = 0 WHERE minecraft_uuid = ?")) {
+                        ps.setString(1, row.uuid());
+                        ps.executeUpdate();
+                    }
+                    insertCreditTransaction(UUID.fromString(row.uuid()), -row.amount(), 0, "RESET", detail, actor, now);
+                }
+            }
+            if (micro) {
+                try (PreparedStatement ps = connection.prepareStatement("SELECT minecraft_uuid, minecraft_name, micro "
+                        + "FROM fad_accounts WHERE micro > 0" + and)) {
+                    bind(ps, target);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            microRows.add(new BalanceRow(rs.getString(1), rs.getString(2), rs.getLong(3)));
+                        }
+                    }
+                }
+                for (BalanceRow row : microRows) {
+                    try (PreparedStatement ps = connection.prepareStatement(
+                            "UPDATE fad_accounts SET micro = 0 WHERE minecraft_uuid = ?")) {
+                        ps.setString(1, row.uuid());
+                        ps.executeUpdate();
+                    }
+                    insertMicroTransaction(row.uuid(), -row.amount(), 0, "RESET", detail, actor);
+                }
+                // A group's shared balance belongs to all its members: only a reset for everyone empties it.
+                if (target == null) {
+                    try (Statement st = connection.createStatement();
+                         ResultSet rs = st.executeQuery("SELECT id, balance FROM player_groups WHERE balance > 0")) {
+                        while (rs.next()) {
+                            groups.add(new GroupBalanceRow(rs.getLong(1), rs.getLong(2)));
+                        }
+                    }
+                    for (GroupBalanceRow group : groups) {
+                        addToGroup(group.id(), -group.balance());
+                        insertGroupLog(group.id(), null, actor, "RESET", -group.balance(), 0, detail);
+                    }
+                }
+            }
+            if (streaks) {
+                try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM login_streaks" + where)) {
+                    bind(ps, target);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            streakRows.add(new StreakRow(rs.getString("minecraft_uuid"), rs.getString("last_day"),
+                                    rs.getInt("streak"), rs.getInt("best")));
+                        }
+                    }
+                }
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM login_streaks" + where)) {
+                    bind(ps, target);
+                    ps.executeUpdate();
+                }
+            }
+            return new DlBackup(adv, time, creditRows, microRows, groups, streakRows);
+        }
+    }
+
+    /**
+     * Gives back what {@link #resetDlDataNow} took, inside a transaction: balances and playtime are added to what
+     * players have now, advancements are put back, and streaks are joined up with any started since.
+     */
+    private void undoDlDataNow(DlBackup backup, String detail, String actor) throws SQLException {
+        {
+            try (PreparedStatement ps = connection.prepareStatement("INSERT OR IGNORE INTO fad_advancements "
+                    + "(minecraft_uuid, advancement, title, frame, server, credits, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                for (AdvRow row : backup.advancements()) {
+                    ps.setString(1, row.uuid());
+                    ps.setString(2, row.advancement());
+                    ps.setString(3, row.title());
+                    ps.setString(4, row.frame());
+                    ps.setString(5, row.server());
+                    ps.setLong(6, row.credits());
+                    ps.setLong(7, row.earnedAt());
+                    ps.executeUpdate();
+                }
+            }
+            try (PreparedStatement ps = connection.prepareStatement("UPDATE fad_accounts SET active_seconds = "
+                    + "active_seconds + ?, afk_seconds = afk_seconds + ?, unpaid_seconds = unpaid_seconds + ? "
+                    + "WHERE minecraft_uuid = ?")) {
+                for (PlaytimeRow row : backup.playtime()) {
+                    ps.setLong(1, row.active());
+                    ps.setLong(2, row.afk());
+                    ps.setLong(3, row.unpaid());
+                    ps.setString(4, row.uuid());
+                    ps.executeUpdate();
+                }
+            }
+            Instant now = Instant.now();
+            for (BalanceRow row : backup.credits()) {
+                UUID uuid = UUID.fromString(row.uuid());
+                ensureCreditAccountKeepName(uuid, row.name());
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "UPDATE fad_accounts SET credits = credits + ? WHERE minecraft_uuid = ?")) {
+                    ps.setLong(1, row.amount());
+                    ps.setString(2, row.uuid());
+                    ps.executeUpdate();
+                }
+                insertCreditTransaction(uuid, row.amount(), creditBalance(uuid), "RESET_UNDO", detail, actor, now);
+            }
+            for (BalanceRow row : backup.micro()) {
+                UUID uuid = UUID.fromString(row.uuid());
+                ensureCreditAccountKeepName(uuid, row.name());
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "UPDATE fad_accounts SET micro = micro + ? WHERE minecraft_uuid = ?")) {
+                    ps.setLong(1, row.amount());
+                    ps.setString(2, row.uuid());
+                    ps.executeUpdate();
+                }
+                insertMicroTransaction(row.uuid(), row.amount(), microBalance(uuid), "RESET_UNDO", detail, actor);
+            }
+            for (GroupBalanceRow group : backup.groups()) {
+                try (PreparedStatement ps = connection.prepareStatement("SELECT 1 FROM player_groups WHERE id = ?")) {
+                    ps.setLong(1, group.id());
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (!rs.next()) {
+                            continue; // the group ended since
+                        }
+                    }
+                }
+                addToGroup(group.id(), group.balance());
+                insertGroupLog(group.id(), null, actor, "RESET_UNDO", group.balance(), groupBalance(group.id()), detail);
+            }
+            for (StreakRow row : backup.streaks()) {
+                StreakRow since = null;
+                try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM login_streaks WHERE minecraft_uuid = ?")) {
+                    ps.setString(1, row.uuid());
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            since = new StreakRow(row.uuid(), rs.getString("last_day"), rs.getInt("streak"), rs.getInt("best"));
+                        }
+                    }
+                }
+                StreakRow merged = mergeStreaks(row, since);
+                try (PreparedStatement ps = connection.prepareStatement("INSERT OR REPLACE INTO login_streaks "
+                        + "(minecraft_uuid, last_day, streak, best) VALUES (?, ?, ?, ?)")) {
+                    ps.setString(1, merged.uuid());
+                    ps.setString(2, merged.lastDay());
+                    ps.setInt(3, merged.streak());
+                    ps.setInt(4, merged.best());
+                    ps.executeUpdate();
+                }
+            }
+        }
+    }
+
+    /**
+     * The streak given back by an undo, joined with one started since the reset ({@code since}, or null): if the new
+     * one began the day after the old one's last day (or overlaps it), they're one streak; otherwise the newer one
+     * stands. The last day is always the later one, so today's daily reward isn't paid again.
+     */
+    static StreakRow mergeStreaks(StreakRow old, StreakRow since) {
+        if (since == null) {
+            return old;
+        }
+        int best = Math.max(old.best(), since.best());
+        try {
+            java.time.LocalDate oldLast = java.time.LocalDate.parse(old.lastDay());
+            java.time.LocalDate newLast = java.time.LocalDate.parse(since.lastDay());
+            if (!newLast.isAfter(oldLast)) {
+                int streak = Math.max(old.streak(), since.streak());
+                return new StreakRow(old.uuid(), old.lastDay(), streak, Math.max(best, streak));
+            }
+            java.time.LocalDate newStart = newLast.minusDays(since.streak() - 1L);
+            if (!newStart.isAfter(oldLast.plusDays(1))) {
+                int streak = old.streak() + (int) java.time.temporal.ChronoUnit.DAYS.between(oldLast, newLast);
+                return new StreakRow(old.uuid(), since.lastDay(), streak, Math.max(best, streak));
+            }
+            return new StreakRow(old.uuid(), since.lastDay(), since.streak(), best);
+        } catch (java.time.format.DateTimeParseException e) {
+            return new StreakRow(old.uuid(), since.lastDay(), since.streak(), best);
+        }
+    }
+
+    private void ensureCreditAccountKeepName(UUID uuid, String name) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR IGNORE INTO fad_accounts (minecraft_uuid, minecraft_name) VALUES (?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, name);
+            ps.executeUpdate();
+        }
+    }
+
+    private static void bind(PreparedStatement ps, UUID target) throws SQLException {
+        if (target != null) {
+            ps.setString(1, target.toString());
+        }
+    }
+
+    private void insertMicroTransaction(String uuid, long amount, long balance, String kind, String detail, String actor)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO micro_transactions (minecraft_uuid, amount, balance, kind, detail, actor, created_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, uuid);
+            ps.setLong(2, amount);
+            ps.setLong(3, balance);
+            ps.setString(4, kind);
+            ps.setString(5, detail);
+            ps.setString(6, actor);
+            ps.setLong(7, Instant.now().toEpochMilli());
+            ps.executeUpdate();
+        }
+    }
+
+    /** How many players have DiscordLinked data of each kind (for the MC data page's preview). */
+    public synchronized Map<String, Long> dlDataCounts(UUID target) throws SQLException {
+        Map<String, Long> counts = new HashMap<>();
+        String and = target == null ? "" : " AND minecraft_uuid = ?";
+        String[][] queries = {
+                {"advcredits", "SELECT COUNT(DISTINCT minecraft_uuid) FROM fad_advancements WHERE 1 = 1" + and},
+                {"playtime", "SELECT COUNT(*) FROM fad_accounts WHERE (active_seconds > 0 OR afk_seconds > 0)" + and},
+                {"credits", "SELECT COUNT(*) FROM fad_accounts WHERE credits > 0" + and},
+                {"micro", "SELECT COUNT(*) FROM fad_accounts WHERE micro > 0" + and},
+                {"streak", "SELECT COUNT(*) FROM login_streaks WHERE 1 = 1" + and},
+        };
+        for (String[] query : queries) {
+            try (PreparedStatement ps = connection.prepareStatement(query[1])) {
+                bind(ps, target);
+                try (ResultSet rs = ps.executeQuery()) {
+                    counts.put(query[0], rs.next() ? rs.getLong(1) : 0);
+                }
+            }
+        }
+        return counts;
     }
 
     private interface SqlWork<T> {

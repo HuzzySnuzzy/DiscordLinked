@@ -15,6 +15,7 @@ import com.huzzysnuzzy.discordlinked.fad.Groups;
 import com.huzzysnuzzy.discordlinked.fad.Market;
 import com.huzzysnuzzy.discordlinked.fad.ParticleStyle;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
+import com.huzzysnuzzy.discordlinked.mcdata.McDataManager;
 import com.huzzysnuzzy.discordlinked.players.ClientInfo;
 import com.huzzysnuzzy.discordlinked.players.Regions;
 import com.huzzysnuzzy.discordlinked.servers.BackendServers;
@@ -575,6 +576,8 @@ public final class WebServer {
                 }
             }
             case "GET /api/player/inventory" -> inventory(ex, query(ex), session);
+            case "GET /api/mcdata", "GET /api/mcdata/preview", "POST /api/mcdata/reset", "POST /api/mcdata/undo" ->
+                    mcData(ex, method, path, session);
             case "GET /api/player/snapshots" -> snapshots(ex, query(ex));
             case "GET /api/player/snapshot" -> snapshotPreview(ex, query(ex));
             case "POST /api/player/snapshot/save" -> snapshotSave(ex, session);
@@ -1147,6 +1150,7 @@ public final class WebServer {
         }
         sendJson(ex, 200, DataObject.empty().put("player", player).put("suspensions", suspensions)
                 .put("notes", notes).put("ips", ips).put("community", playerCommunity(uuid, linked))
+                .put("mcData", mcSummaries(uuid))
                 .put("cosmetics", playerCosmetics(uuid, session)));
     }
 
@@ -2451,6 +2455,211 @@ public final class WebServer {
             return;
         }
         sendJson(ex, 200, serversJson().put("ok", true).put("message", message));
+    }
+
+    // ---- MC data: players' Minecraft data on the servers (summaries for staff; resets for the settings owner) ----
+
+    /** What each server last said about a player's Minecraft data: advancements, level, statistics. */
+    private DataArray mcSummaries(UUID uuid) throws SQLException {
+        DataArray servers = DataArray.empty();
+        for (var summary : plugin.database().mcSummaries(uuid)) {
+            DataObject data;
+            try {
+                data = DataObject.fromJson(summary.json());
+            } catch (RuntimeException e) {
+                continue;
+            }
+            servers.add(DataObject.empty().put("server", summary.server()).put("updatedAt", summary.updatedAt())
+                    .put("data", data));
+        }
+        return servers;
+    }
+
+    private void mcData(HttpExchange ex, String method, String path, Sessions.Session session)
+            throws IOException, SQLException {
+        if (!isOwner(session)) {
+            sendJson(ex, 403, error("Only the settings owner can manage players' data."));
+            return;
+        }
+        String actor = session.user.actor() + " (website)";
+        switch (path) {
+            case "/api/mcdata" -> sendJson(ex, 200, mcDataJson());
+            case "/api/mcdata/preview" -> {
+                String raw = query(ex).getOrDefault("uuid", "");
+                UUID target = null;
+                if (!raw.isEmpty()) {
+                    try {
+                        target = UUID.fromString(raw);
+                    } catch (IllegalArgumentException e) {
+                        sendJson(ex, 400, error("Unknown player"));
+                        return;
+                    }
+                }
+                DataObject counts = DataObject.empty();
+                plugin.database().dlDataCounts(target).forEach(counts::put);
+                DataObject answer = DataObject.empty().put("dl", counts);
+                if (target != null) {
+                    answer.put("name", plugin.database().knownPlayer(target).map(KnownPlayer::name).orElse(null));
+                    answer.put("summaries", mcSummaries(target));
+                    var account = plugin.database().creditAccount(target);
+                    answer.put("account", account.map(a -> DataObject.empty().put("credits", a.credits())
+                            .put("micro", a.micro()).put("activeSeconds", a.activeSeconds())).orElse(null));
+                } else {
+                    answer.put("knownPlayers", plugin.database().knownPlayerCount());
+                    DataObject perServer = DataObject.empty();
+                    plugin.database().mcSummaryCounts().forEach(perServer::put);
+                    answer.put("summaryCounts", perServer);
+                }
+                sendJson(ex, 200, answer);
+            }
+            case "/api/mcdata/reset" -> mcDataReset(ex, actor);
+            case "/api/mcdata/undo" -> {
+                DataObject body = readJson(ex);
+                if (body == null) {
+                    return;
+                }
+                String problem = plugin.mcData().undo(body.getLong("id", 0), actor);
+                if (problem != null) {
+                    sendJson(ex, 409, error(problem));
+                    return;
+                }
+                sendJson(ex, 200, mcDataJson().put("message", "Undone. Players get their data back on each server when "
+                        + "they're next there (right away for those online)."));
+            }
+            default -> sendJson(ex, 404, error("Unknown endpoint"));
+        }
+    }
+
+    /**
+     * {@code {target: uuid | null (everyone), servers: [names] | ["*"], mc: [...], dl: [...], confirm}}. confirm
+     * must be the player's name, or RESET for everyone.
+     */
+    private void mcDataReset(HttpExchange ex, String actor) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        UUID target = null;
+        String targetName = null;
+        String raw = body.isNull("target") ? "" : body.getString("target", "");
+        if (!raw.isEmpty()) {
+            try {
+                target = UUID.fromString(raw);
+            } catch (IllegalArgumentException e) {
+                sendJson(ex, 400, error("Unknown player"));
+                return;
+            }
+            var known = plugin.database().knownPlayer(target);
+            if (known.isEmpty()) {
+                sendJson(ex, 400, error("That player has never joined."));
+                return;
+            }
+            targetName = known.get().name();
+        }
+        List<String> mc = new ArrayList<>();
+        List<String> dl = new ArrayList<>();
+        List<String> wanted = new ArrayList<>();
+        for (String key : new String[] {"mc", "dl"}) {
+            DataArray array = body.optArray(key).orElse(DataArray.empty());
+            for (int i = 0; i < array.length(); i++) {
+                String value = array.getString(i);
+                List<String> allowed = key.equals("mc") ? McDataManager.MC : McDataManager.DL;
+                if (!allowed.contains(value)) {
+                    sendJson(ex, 400, error("Unknown kind of data: " + value));
+                    return;
+                }
+                (key.equals("mc") ? mc : dl).add(value);
+                wanted.add(value);
+            }
+        }
+        // In the website's order, without repeats.
+        mc = McDataManager.MC.stream().filter(mc::contains).toList();
+        dl = McDataManager.DL.stream().filter(dl::contains).toList();
+        if (mc.isEmpty() && dl.isEmpty()) {
+            sendJson(ex, 400, error("Pick what to reset."));
+            return;
+        }
+        List<String> registered = plugin.servers().list().stream().filter(BackendServers.Server::registered)
+                .map(BackendServers.Server::name).toList();
+        List<String> servers = new ArrayList<>();
+        DataArray picked = body.optArray("servers").orElse(DataArray.empty());
+        for (int i = 0; i < picked.length(); i++) {
+            String name = picked.getString(i);
+            if (name.equals("*")) {
+                // Every server with DiscordLinkedBackend (one without it could never do it).
+                servers = new ArrayList<>(plugin.servers().list().stream()
+                        .filter(server -> server.registered() && "DiscordLinkedBackend".equals(server.pluginName()))
+                        .map(BackendServers.Server::name).toList());
+                break;
+            }
+            String match = registered.stream().filter(n -> n.equalsIgnoreCase(name)).findFirst().orElse(null);
+            if (match == null) {
+                sendJson(ex, 400, error("Unknown server: " + name));
+                return;
+            }
+            if (!servers.contains(match)) {
+                servers.add(match);
+            }
+        }
+        if (!mc.isEmpty() && servers.isEmpty()) {
+            sendJson(ex, 400, error(picked.length() > 0 && picked.getString(0).equals("*")
+                    ? "No server has DiscordLinkedBackend, so there's nowhere to reset Minecraft data."
+                    : "Pick the servers to reset Minecraft data on."));
+            return;
+        }
+        String confirm = body.getString("confirm", "").strip();
+        String expected = target == null ? "RESET" : targetName;
+        if (!confirm.equalsIgnoreCase(expected)) {
+            sendJson(ex, 400, error(target == null ? "Type RESET to confirm." : "Type the player's name to confirm."));
+            return;
+        }
+        var op = plugin.mcData().reset(target, targetName, servers, mc, dl, actor);
+        String who = target == null ? "everyone" : targetName;
+        String message = "Reset " + (mc.isEmpty() ? "" : "on " + String.join(", ", servers) + " ") + "for " + who + "."
+                + (mc.isEmpty() ? "" : " Players online there are reset now, the others when they next join.");
+        sendJson(ex, 200, mcDataJson().put("message", message).put("id", op.id()));
+    }
+
+    private DataObject mcDataJson() throws SQLException {
+        DataArray ops = DataArray.empty();
+        long keepMillis = java.time.Duration.ofDays(30).toMillis();
+        for (var op : plugin.database().mcDataOps(50)) {
+            DataArray servers = DataArray.empty();
+            for (var row : plugin.database().mcDataServers(op.id())) {
+                servers.add(DataObject.empty().put("name", row.server()).put("sentAt", row.sentAt())
+                        .put("ackedAt", row.ackedAt()).put("undoSentAt", row.undoSentAt())
+                        .put("undoAckedAt", row.undoAckedAt()).put("applied", row.applied())
+                        .put("restored", row.restored()).put("updatedAt", row.updatedAt()));
+            }
+            ops.add(DataObject.empty()
+                    .put("id", op.id())
+                    .put("createdAt", op.createdAt())
+                    .put("actor", op.actor())
+                    .put("target", op.targetUuid() == null ? null
+                            : DataObject.empty().put("uuid", op.targetUuid()).put("name", op.targetName()))
+                    .put("mc", DataArray.fromCollection(op.mc()))
+                    .put("dl", DataArray.fromCollection(op.dl()))
+                    .put("dlSummary", op.dlSummary())
+                    .put("servers", servers)
+                    .put("undoneAt", op.undoneAt())
+                    .put("undoneBy", op.undoneBy())
+                    // Minecraft backups are kept for 30 days; DiscordLinked's are kept with the operation.
+                    .put("undoable", op.undoneAt() == null
+                            && (op.mc().isEmpty() || System.currentTimeMillis() - op.createdAt() < keepMillis)));
+        }
+        DataArray servers = DataArray.empty();
+        for (BackendServers.Server s : plugin.servers().list()) {
+            if (!s.registered()) {
+                continue;
+            }
+            servers.add(DataObject.empty().put("name", s.name()).put("plugin", s.pluginName())
+                    .put("version", s.pluginVersion()).put("online", s.reachable()).put("players", s.players()));
+        }
+        DataArray mc = DataArray.empty();
+        McDataManager.MC.forEach(key -> mc.add(DataObject.empty().put("key", key).put("label", McDataManager.label(key))));
+        DataArray dl = DataArray.empty();
+        McDataManager.DL.forEach(key -> dl.add(DataObject.empty().put("key", key).put("label", McDataManager.label(key))));
+        return DataObject.empty().put("ops", ops).put("servers", servers).put("mc", mc).put("dl", dl);
     }
 
     // ---- Settings (one Discord user only) ----

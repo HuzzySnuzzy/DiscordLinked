@@ -86,7 +86,9 @@ final class PlayerTracker implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onAdvancement(PlayerAdvancementDoneEvent event) {
-        if (!plugin.settings().advancementCredits) {
+        // Advancements given back by an undo on the website's MC data page earn nothing again.
+        if (!plugin.settings().advancementCredits
+                || (plugin.mcData() != null && plugin.mcData().restoring(event.getPlayer()))) {
             return;
         }
         AdvancementDisplay display = event.getAdvancement().getDisplay();

@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.25.0.jar` there instead.
+   `DiscordLinkedBackend-0.26.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.25.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.26.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -553,6 +553,42 @@ The same button works with **Your own address** (or a `web-tunnel-token` tunnel)
 (Settings → Your own address shows it with a copy button), and restart the proxy. It can't work on the
 automatic trycloudflare address, because Discord only sends people back to addresses listed there.
 
+### MC data (settings owner only)
+
+**Settings → MC data** resets players' data, for one player or for everyone (a player's page also has a **Manage MC
+data** button). Pick what to reset:
+
+- **Minecraft data**, on the servers you pick (**All servers** = every server with DiscordLinkedBackend): advancements (recipe unlocks included), statistics, inventory (armour
+  and off-hand too), ender chest, experience, health & hunger (and effects, fire, air), position & spawn point (sent to
+  the world spawn, bed or respawn anchor forgotten) and unlocked recipes.
+- **DiscordLinked data**, at once: advancement credits (which advancements already earned credits, so making them
+  again earns credits again), playtime, credits, microcredits (for everyone also groups' shared balances) and login
+  streaks. Balances are set to 0 with a "Reset" entry in each player's history.
+
+To confirm, type the player's name, or `RESET` for everyone. Every reset is logged (and posted to the Discord log
+channel) and listed on the page with how far it got on each server.
+
+How the Minecraft part happens: DiscordLinkedBackend (0.26.0 or newer) on each server does it through the game
+itself, never by editing the world's player files. Players online there are reset right away; everyone else the
+moment they next join that server, before they can do anything. A reset for everyone also reaches players who come
+back months later, but not players who join a server for the first time after it. The proxy can only talk to a server
+through a player on it, so a server nobody is on gets the reset when someone joins it (the page says "waiting for
+someone to join"). Players are told in chat when their data was reset or given back (`mcdata-reset` and
+`mcdata-restored` in DiscordLinkedBackend's config.yml).
+
+**Undo**: what a reset takes away is kept (`plugins/DiscordLinkedBackend/mcdata/backups/`, for 30 days; an inventory
+also shows as a "Before MC data reset" snapshot on the player's page), so **Undo** gives it back: advancements,
+statistics (added to what players have now), items (added to their inventory, the rest dropped at their feet),
+experience, recipes and the respawn point, and DiscordLinked's balances, playtime, advancement credits and streaks.
+Health and hunger, and where players stood, aren't given back. Players get it back the same way: now if they're
+online, otherwise when they next join. Advancements given back don't pay their experience again (rewards a datapack
+adds, like functions, do run again). A reset only happens once its backup is saved; if a player's file in
+`mcdata/players/` can't be read, nothing is done to them until it's fixed. If you restored the "Before MC data reset"
+snapshot by hand, don't also undo the reset, or those items come back twice.
+
+Admins see a summary of each player's Minecraft data on their page (advancements, level, hours played, deaths, mobs
+killed, blocks mined, distance, what they carry), sent by each server every few minutes while they play.
+
 ### Discord message log (settings owner only)
 
 A read-only log of every Discord channel the bot can see. Turn it on with **Discord message log** in
@@ -701,8 +737,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.25.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.25.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.26.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.26.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

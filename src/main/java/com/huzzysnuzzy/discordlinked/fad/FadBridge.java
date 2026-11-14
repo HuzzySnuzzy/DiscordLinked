@@ -89,6 +89,19 @@ final class FadBridge {
                     plugin.servers().status(server, new BackendServers.Status(name, version, minecraft, folia, online,
                             max, tps, mspt, spy, update));
                 }
+                // DiscordLinkedBackend 0.26.0: how far an MC data reset got on this server, and a player's summary.
+                case "MCDATA_STATE" -> {
+                    String token = in.readUTF();
+                    boolean undone = in.readBoolean();
+                    int applied = in.readInt();
+                    int restored = in.readInt();
+                    later(() -> plugin.mcData().state(server, token, undone, applied, restored));
+                }
+                case "MCSUMMARY" -> {
+                    String json = new String(readBlob(in), StandardCharsets.UTF_8);
+                    UUID uuid = player.getUniqueId();
+                    later(() -> plugin.mcData().summary(uuid, server, json));
+                }
                 case "INTERACT" -> {
                     String id = in.readUTF();
                     String action = in.readUTF();
@@ -230,6 +243,20 @@ final class FadBridge {
         } catch (IllegalStateException e) {
             plugin.logger().debug("Couldn't send the update settings, the player left: {}", e.getMessage());
         }
+    }
+
+    /** An MC data reset (or its undo) for this server (see McDataManager). Throws if the player left. */
+    void mcData(ServerConnection connection, String token, String kind, String target, String categories,
+                long created, String actor) {
+        send(connection, out -> {
+            out.writeUTF("MCDATA");
+            out.writeUTF(token);
+            out.writeUTF(kind);
+            out.writeUTF(target);
+            out.writeUTF(categories);
+            out.writeLong(created);
+            out.writeUTF(actor.length() > 100 ? actor.substring(0, 100) : actor);
+        });
     }
 
     /** {@link #updates} to every server someone is on (through one player each). Others get it with their HELLO. */

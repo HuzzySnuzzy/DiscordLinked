@@ -53,6 +53,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
     private volatile FadSettings settings;
     private ProxyLink link;
     private BackendUpdater updater;
+    private McData mcData;
     private SpyService spy;
     private final SellPrices sellPrices = new SellPrices();
     private Cosmetics cosmetics;
@@ -101,6 +102,10 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         }
         spy = new SpyService(this);
         spy.start();
+        // Resets from the website's MC data page (after the inventory side, which takes a snapshot first).
+        mcData = new McData(this);
+        getServer().getPluginManager().registerEvents(mcData, this);
+        mcData.start();
         getLogger().info("Ready with " + settings.actions.size() + " interactions, spy sessions and the inventory "
                 + "viewer" + (folia ? " (Folia)" : ""));
     }
@@ -228,6 +233,16 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
     /** Null before onEnable got that far. */
     BackendUpdater updater() {
         return updater;
+    }
+
+    /** Null before onEnable got that far. */
+    McData mcData() {
+        return mcData;
+    }
+
+    /** Inventory snapshots; null before the spy side started. */
+    InventoryBridge inventories() {
+        return spy == null ? null : spy.inventory();
     }
 
     SellPrices sellPrices() {

@@ -2335,5 +2335,30 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 }
 
 .warn-text { color: var(--warning); }
+
+/* MC data */
+.mc-grid { grid-template-columns: minmax(0, 1fr); }
+.mc-section { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--border); }
+.mc-section .setting-label { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.mc-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px 16px; }
+.mc-check, .mc-choice { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; line-height: 1.4; }
+.mc-check input, .mc-choice input { margin-top: 3px; flex: none; }
+.mc-check > span { display: grid; min-width: 0; }
+.mc-label { font-weight: 600; }
+.mc-note { color: var(--muted); font-size: 0.86em; overflow-wrap: anywhere; }
+.mc-target, .mc-result { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mc-head { border-radius: 4px; image-rendering: pixelated; }
+.mc-find input { width: 100%; max-width: 360px; }
+.mc-results { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; max-width: 360px; }
+.mc-result { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; font: inherit; text-align: left; cursor: pointer; }
+.mc-result:hover, .mc-result:focus-visible { border-color: var(--accent); }
+.mc-preview { display: grid; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2);
+  border: 1px solid var(--border); overflow-wrap: anywhere; }
+.mc-ops { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.mc-op { display: grid; gap: 3px; padding-top: 12px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.mc-op:first-child { border-top: 0; padding-top: 0; }
+.mc-op.undone > div:not(.mc-op-head):not(.actions) { opacity: 0.75; }
+.mc-op-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .update-servers { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
 .update-servers li { line-height: 1.45; overflow-wrap: anywhere; }

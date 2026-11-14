@@ -51,6 +51,11 @@ final class SpyService implements PluginMessageListener, Listener {
     private final DiscordLinkedBackend plugin;
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
     private InventoryBridge inventory;
+
+    /** Snapshots and the inventory viewer; null until started. */
+    InventoryBridge inventory() {
+        return inventory;
+    }
     private Teleports teleports;
 
     /** Where the target was last seen, copied by the target's own scheduler. */

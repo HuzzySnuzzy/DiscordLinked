@@ -30,6 +30,7 @@ const EVENT_LABELS = {
   INTERACTION: ['Interaction', ''],
   ADVANCEMENT: ['Advancement', 'good'],
   CREDITS_ADJUST: ['Credits changed', 'info'],
+  MCDATA_RESET: ['MC data reset', 'warn'],
   SHOP_PURCHASE: ['Shop order', ''],
   TELEPORT: ['Teleport', 'info'],
   SALE: ['Sold', 'good'],
@@ -1062,6 +1063,7 @@ function renderPlayer() {
     profile,
     el('div', { class: 'grid' }, discord, minecraft, suspension),
     ...inventorySection(p),
+    ...mcDataSection(p, state.player.mcData),
     ...unlocksSection(p, state.player.cosmetics),
     ...communitySection(p, state.player.community),
     ...notesSection, ...historySection, ...ipSection, ...activitySection);
@@ -1240,7 +1242,7 @@ let liveInventoryTimer = null;
 
 const SNAPSHOT_LABELS = {
   DEATH: ['Death', 'bad'], JOIN: ['Join', 'info'], QUIT: ['Quit', ''], WORLD_CHANGE: ['World change', ''],
-  MANUAL: ['Manual', 'good'], BEFORE_RESTORE: ['Before restore', 'warn'],
+  MANUAL: ['Manual', 'good'], BEFORE_RESTORE: ['Before restore', 'warn'], BEFORE_RESET: ['Before MC data reset', 'warn'],
 };
 
 function stopLiveInventory() {
@@ -1658,7 +1660,8 @@ const stat = (label, value, title) => el('div', { class: 'stat', title },
 
 const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
 const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop', DAILY: 'Daily reward',
-  SALE: 'Sold', EXCHANGE: 'Exchange', COSMETIC: 'Cosmetics', GROUP: 'Group' };
+  SALE: 'Sold', EXCHANGE: 'Exchange', COSMETIC: 'Cosmetics', GROUP: 'Group', RESET: 'Reset (MC data)',
+  RESET_UNDO: 'Reset undone' };
 
 function creditsDialog(p, community) {
   const currency = community.currency;
@@ -1975,7 +1978,7 @@ function renderInteractions() {
 
 const groupState = { data: null, logOpen: new Set(), logs: new Map() };
 const GROUP_LOG_KINDS = { CREATE: 'Made', JOIN: 'Joined', LEAVE: 'Left', REMOVED: 'Removed', SALE: 'Sold', EXCHANGE: 'Exchanged',
-  RENAME: 'Renamed', LEADER: 'New leader', GROUP: 'Moved' };
+  RENAME: 'Renamed', LEADER: 'New leader', GROUP: 'Moved', RESET: 'Reset (MC data)', RESET_UNDO: 'Reset undone' };
 
 /** Runs a group action, shows its message and reloads the tab. */
 async function groupAction(path, body = {}) {
@@ -2985,6 +2988,325 @@ function updatesCard() {
     el('div', { class: 'setting-label' }, 'Backend servers'),
     backends.length ? el('ul', { class: 'update-servers' }, backends) : el('p', { class: 'muted' }, 'No servers in Velocity\'s config.'));
   return card;
+}
+
+// ---- MC data: reset players' Minecraft data (and DiscordLinked's) on the servers; settings owner only ----
+
+const MCDATA_HELP = {
+  advancements: 'Every advancement and its progress, recipe unlocks included.',
+  stats: 'Every statistic: play time, blocks mined, kills, deaths, distance…',
+  inventory: 'Everything they carry, armour and off-hand. Saved as an inventory snapshot first.',
+  enderchest: 'Everything in their ender chest.',
+  xp: 'Levels and experience.',
+  health: 'Back to full health and hunger; effects, fire and air cleared. Can\'t be undone.',
+  location: 'Sent to the world spawn; their bed or respawn anchor is forgotten. Where they stood isn\'t given back by an undo.',
+  recipes: 'The recipes unlocked in their recipe book.',
+  advcredits: 'Which advancements already earned them credits, so making them again earns credits again.',
+  playtime: 'The active and AFK time DiscordLinked counted (Community, profiles).',
+  credits: 'Their credits, set to 0 (it shows in their credit history).',
+  micro: 'Their microcredits, set to 0. For everyone, groups\' shared balances too.',
+  streak: 'Their daily login streak and best streak.',
+};
+
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** A small Minecraft head. */
+const mcHead = (uuid, size) => el('img', { class: 'head mc-head', src: headUrl(uuid, size * 2), alt: '', width: size, height: size, loading: 'lazy' });
+
+/** What the reset form holds (kept while you look at other pages). */
+const mcForm = { target: null, everyone: true, servers: new Set(['*']), mc: new Set(), dl: new Set(), results: [], query: '', routeSub: '' };
+
+/** Servers "All servers" means: the ones with DiscordLinkedBackend. */
+const mcPluginServers = () => (state.mcdata?.servers || []).filter((s) => s.plugin === 'DiscordLinkedBackend');
+
+async function loadMcData(sub) {
+  const body = $('mcdata-body');
+  if (!state.mcdata) body.replaceChildren(loadingNote());
+  // #/mcdata/<uuid> (from a player's page) picks that player.
+  // Only when arriving from a link: a refresh mustn't undo a different choice made on the page since.
+  if (sub !== mcForm.routeSub) mcForm.routeSub = sub;
+  else sub = '';
+  if (sub && /^[0-9a-f-]{36}$/i.test(sub)) {
+    const uuid = sub.toLowerCase();
+    if (mcForm.target?.uuid !== uuid) {
+      mcForm.target = { uuid, name: state.player?.player?.uuid === uuid ? state.player.player.minecraftName : uuid };
+    }
+    mcForm.everyone = false;
+  }
+  try {
+    state.mcdata = await api('/api/mcdata');
+  } catch (e) {
+    if (state.mcdata) toast(e.message);
+    else loadError(body, e, () => loadMcData(sub));
+    return;
+  }
+  await loadMcPreview();
+  renderMcData();
+}
+
+async function loadMcPreview() {
+  const uuid = mcForm.everyone ? '' : mcForm.target?.uuid || '';
+  if (!mcForm.everyone && !uuid) {
+    state.mcPreview = null;
+    return;
+  }
+  try {
+    state.mcPreview = await api(`/api/mcdata/preview?uuid=${encodeURIComponent(uuid)}`);
+    if (state.mcPreview.name && mcForm.target?.uuid === uuid) mcForm.target.name = state.mcPreview.name;
+  } catch (e) {
+    state.mcPreview = null;
+  }
+}
+
+function renderMcData() {
+  keepFocus($('mcdata-body'), () => $('mcdata-body').replaceChildren(mcResetCard(), mcHistoryCard()));
+}
+
+/** A server's DiscordLinkedBackend can do resets from 0.26.0 on. */
+const mcServerNote = (s) => (!s.plugin ? 'no DiscordLinkedBackend: nothing happens there'
+  : versionAtLeast(s.version, '0.26.0') === false ? `DiscordLinkedBackend ${s.version}: waits until it's 0.26.0 or newer` : '');
+
+function mcResetCard() {
+  const d = state.mcdata;
+  const card = el('div', { class: 'card panel settings-group mc-reset', id: 'mc-reset' }, el('h2', {}, 'Reset players\' data'));
+
+  // Whose data.
+  const radio = (value, label) => {
+    const input = el('input', { type: 'radio', name: 'mc-who', value });
+    input.checked = (value === 'everyone') === mcForm.everyone;
+    input.addEventListener('change', async () => {
+      mcForm.everyone = value === 'everyone';
+      await loadMcPreview();
+      renderMcData();
+    });
+    return el('label', { class: 'mc-choice' }, input, ' ', label);
+  };
+  let who;
+  if (mcForm.everyone) {
+    who = null;
+  } else if (mcForm.target) {
+    who = el('div', { class: 'mc-target' }, mcHead(mcForm.target.uuid, 28), el('strong', {}, mcForm.target.name),
+      el('a', { href: `#/player/${mcForm.target.uuid}` }, 'Profile'),
+      el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => { mcForm.target = null; state.mcPreview = null; renderMcData(); } }, 'Change'));
+  } else {
+    const input = el('input', { type: 'search', placeholder: 'Find a player…', 'aria-label': 'Find a player', value: mcForm.query });
+    let timer;
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      mcForm.query = input.value;
+      timer = setTimeout(async () => {
+        const q = input.value.trim();
+        try {
+          mcForm.results = q ? await api(`/api/search?q=${encodeURIComponent(q)}`) : [];
+        } catch (e) {
+          toast(e.message);
+        }
+        renderMcData();
+      }, 250);
+    });
+    who = el('div', { class: 'mc-find' }, input,
+      mcForm.results.length > 0 && el('ul', { class: 'mc-results' }, mcForm.results.slice(0, 8).map((r) => el('li', {},
+        el('button', { type: 'button', class: 'mc-result', onclick: async () => {
+          mcForm.target = { uuid: r.uuid, name: r.minecraftName };
+          mcForm.results = [];
+          mcForm.query = '';
+          await loadMcPreview();
+          renderMcData();
+        } }, mcHead(r.uuid, 24), r.minecraftName)))));
+  }
+
+  // On which servers (the Minecraft part).
+  const serverBox = (name, label, note, hasPlugin = true) => {
+    const box = el('input', { type: 'checkbox', 'aria-label': label });
+    box.checked = mcForm.servers.has(name) || (name !== '*' && hasPlugin && mcForm.servers.has('*'));
+    box.disabled = name !== '*' && mcForm.servers.has('*');
+    box.addEventListener('change', () => {
+      if (box.checked) mcForm.servers.add(name);
+      else mcForm.servers.delete(name);
+      renderMcData();
+    });
+    return el('label', { class: 'mc-check' }, box, el('span', {}, label, note && el('span', { class: 'mc-note' }, note)));
+  };
+  const servers = el('div', { class: 'mc-checks' }, serverBox('*', 'All servers'),
+    d.servers.map((s) => serverBox(s.name, s.name, mcServerNote(s), s.plugin === 'DiscordLinkedBackend')));
+
+  const kindBox = (set, item) => {
+    const box = el('input', { type: 'checkbox', 'aria-label': item.label });
+    box.checked = set.has(item.key);
+    box.addEventListener('change', () => {
+      if (box.checked) set.add(item.key);
+      else set.delete(item.key);
+      renderMcData();
+    });
+    return el('label', { class: 'mc-check' }, box, el('span', {}, el('span', { class: 'mc-label' }, capitalize(item.label)),
+      el('span', { class: 'mc-note' }, MCDATA_HELP[item.key] || '')));
+  };
+  const allButton = (set, items) => el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => {
+    const all = items.every((i) => set.has(i.key));
+    items.forEach((i) => (all ? set.delete(i.key) : set.add(i.key)));
+    renderMcData();
+  } }, items.every((i) => set.has(i.key)) ? 'None' : 'All');
+
+  const preview = mcPreviewText();
+  const ready = (mcForm.everyone || mcForm.target) && (mcForm.mc.size || mcForm.dl.size)
+    && (!mcForm.mc.size || mcForm.servers.size > 0);
+  card.append(
+    el('p', { class: 'muted' }, 'Minecraft data is reset by DiscordLinkedBackend on each server you pick: players online there right '
+      + 'away, everyone else when they next join it (before they can play). What\'s taken away is kept for 30 days, so a reset '
+      + 'can be undone below; health and hunger, and where players stood, can\'t be given back.'),
+    el('div', { class: 'mc-section' }, el('div', { class: 'setting-label' }, 'Whose data'),
+      el('div', { class: 'mc-checks' }, radio('everyone', 'Everyone'), radio('one', 'One player')), who),
+    el('div', { class: 'mc-section' }, el('div', { class: 'setting-label' }, 'Minecraft data', allButton(mcForm.mc, d.mc)),
+      el('div', { class: 'mc-checks' }, d.mc.map((item) => kindBox(mcForm.mc, item)))),
+    mcForm.mc.size > 0 && el('div', { class: 'mc-section' }, el('div', { class: 'setting-label' }, 'On which servers'), servers),
+    el('div', { class: 'mc-section' }, el('div', { class: 'setting-label' }, 'DiscordLinked data', allButton(mcForm.dl, d.dl)),
+      el('div', { class: 'mc-checks' }, d.dl.map((item) => kindBox(mcForm.dl, item)))),
+    preview && el('div', { class: 'mc-preview', role: 'status' }, preview),
+    el('div', { class: 'actions' }, el('button', { class: 'btn btn-danger', type: 'button', disabled: !ready || null,
+      onclick: (e) => confirmMcReset(e.currentTarget) }, 'Reset…')));
+  return card;
+}
+
+/** What the picked player has (from their servers' summaries), or how many players have DiscordLinked data. */
+function mcPreviewText() {
+  const pv = state.mcPreview;
+  if (!pv) return null;
+  const lines = [];
+  if (!mcForm.everyone && pv.summaries) {
+    if (!pv.summaries.length) lines.push(el('div', {}, 'No server has reported this player\'s data yet (they need to have been on a server with DiscordLinkedBackend 0.26.0).'));
+    for (const s of pv.summaries) lines.push(el('div', {}, el('strong', {}, s.server), ': ', mcSummaryLine(s.data), el('span', { class: 'muted' }, ` · ${timeAgo(s.updatedAt)}`)));
+    if (pv.account) {
+      const cur = { one: savedSetting('credits-name') || 'credit', many: savedSetting('credits-name-plural') || 'credits' };
+      lines.push(el('div', {}, el('strong', {}, 'DiscordLinked'), ': ', dotted([credits(pv.account.credits, cur),
+        `${pv.account.micro.toLocaleString()} microcredits`, `${Math.round(pv.account.activeSeconds / 3600).toLocaleString()} h played`])));
+    }
+  } else if (mcForm.everyone) {
+    const dl = pv.dl || {};
+    const picked = [...mcForm.dl].map((k) => `${(dl[k] || 0).toLocaleString()} with ${MCDATA_LABEL(k)}`);
+    lines.push(el('div', {}, `${(pv.knownPlayers || 0).toLocaleString()} players have joined the network.`,
+      picked.length ? ` DiscordLinked data: ${picked.join(', ')}.` : ''));
+  }
+  return lines.length ? lines : null;
+}
+
+const MCDATA_LABEL = (key) => [...(state.mcdata?.mc || []), ...(state.mcdata?.dl || [])].find((i) => i.key === key)?.label || key;
+
+/** "12/122 advancements · level 30 · 41 h played · 3 deaths…" */
+function mcSummaryLine(d) {
+  return dotted([
+    d.advancementsTotal != null && `${d.advancements}/${d.advancementsTotal} advancements`,
+    d.level != null && `level ${d.level}`,
+    d.playMinutes != null && `${Math.round(d.playMinutes / 60).toLocaleString()} h played`,
+    d.deaths != null && `${d.deaths.toLocaleString()} deaths`,
+    d.mobKills != null && `${d.mobKills.toLocaleString()} mobs killed`,
+    d.blocksMined != null && `${d.blocksMined.toLocaleString()} blocks mined`,
+    d.distanceKm != null && `${d.distanceKm.toLocaleString()} km travelled`,
+    d.inventoryStacks != null && `${d.inventoryStacks} stacks carried`,
+    d.enderStacks != null && `${d.enderStacks} in the ender chest`,
+  ]);
+}
+
+function confirmMcReset(button) {
+  // What the dialog shows is what's sent, even if the form changes behind it.
+  const target = mcForm.everyone ? null : { ...mcForm.target };
+  const mc = [...mcForm.mc];
+  const dl = [...mcForm.dl];
+  const picked = mcForm.servers.has('*') ? ['*'] : [...mcForm.servers];
+  const who = target ? target.name : 'everyone';
+  const expected = target ? target.name : 'RESET';
+  const kinds = [...state.mcdata.mc, ...state.mcdata.dl].filter((i) => mc.includes(i.key) || dl.includes(i.key)).map((i) => i.label);
+  const servers = picked[0] === '*' ? mcPluginServers().map((s) => s.name) : picked;
+  const input = el('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', 'aria-label': `Type ${expected} to confirm` });
+  confirmDialog({
+    title: `Reset ${who === 'everyone' ? 'everyone\'s' : `${who}'s`} data?`,
+    text: [
+      `${capitalize(kinds.join(', '))}${mc.length ? ` on ${servers.join(', ') || 'no server'}` : ''}.`,
+      target ? null : 'This is every player, including those who come back to these servers later.',
+      el('p', {}, 'Type ', el('strong', {}, expected), ' to confirm.'), input,
+    ],
+    confirmLabel: 'Reset',
+    confirmClass: 'btn-danger',
+    onConfirm: async () => {
+      if (input.value.trim().toLowerCase() !== expected.toLowerCase()) throw new Error(`Type ${expected} to confirm.`);
+      button.disabled = true;
+      const result = await api('/api/mcdata/reset', {
+        target: target ? target.uuid : null, servers: picked, mc, dl, confirm: input.value.trim(),
+      });
+      state.mcdata = result;
+      mcForm.mc.clear();
+      mcForm.dl.clear();
+      toast(result.message);
+      await loadMcPreview();
+      renderMcData();
+    },
+  });
+  setTimeout(() => input.focus(), 0);
+}
+
+function mcServerStatus(op, s) {
+  const everyone = !op.target;
+  if (op.undoneAt) {
+    if (s.undoAckedAt) return `${s.name}: undone · ${s.restored.toLocaleString()} of ${s.applied.toLocaleString()} given back so far`
+      + (s.restored < s.applied ? ', the rest when they next join' : '');
+    return `${s.name}: undo waiting for someone to join it`;
+  }
+  if (s.ackedAt) {
+    return `${s.name}: ${s.applied.toLocaleString()} player${s.applied === 1 ? '' : 's'} reset`
+      + (everyone ? ' so far, everyone else when they next join' : s.applied ? '' : ' · when they next join');
+  }
+  return `${s.name}: waiting for someone to join it${s.sentAt ? ' (sent, no answer yet)' : ''}`;
+}
+
+function mcHistoryCard() {
+  const ops = state.mcdata.ops;
+  const card = el('div', { class: 'card panel settings-group', id: 'mc-history' }, el('h2', {}, 'Resets'));
+  if (!ops.length) {
+    card.append(el('p', { class: 'muted' }, 'No resets yet.'));
+    return card;
+  }
+  const label = MCDATA_LABEL;
+  card.append(el('ul', { class: 'mc-ops' }, ops.map((op) => el('li', { class: `mc-op ${op.undoneAt ? 'undone' : ''}` },
+    el('div', { class: 'mc-op-head' },
+      el('strong', {}, `#${op.id} `, op.target ? el('a', { href: `#/player/${op.target.uuid}` }, op.target.name) : 'Everyone'),
+      op.undoneAt && el('span', { class: 'badge' }, 'Undone'),
+      el('span', { class: 'muted', title: formatTime(op.createdAt) }, ` ${timeAgo(op.createdAt)} · by `, actorLabel(op.actor))),
+    el('div', {}, capitalize([...op.mc, ...op.dl].map(label).join(', '))),
+    op.servers.map((s) => el('div', { class: 'muted' }, mcServerStatus(op, s))),
+    op.dlSummary && el('div', { class: 'muted' }, `DiscordLinked: ${op.dlSummary}${op.undoneAt ? ' (given back)' : ''}`),
+    op.undoneAt && el('div', { class: 'muted' }, `Undone ${timeAgo(op.undoneAt)} by `, actorLabel(op.undoneBy)),
+    op.undoable && el('div', { class: 'actions' }, el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: (e) => {
+      const button = e.currentTarget;
+      confirmDialog({
+        title: `Undo reset #${op.id}?`,
+        text: ['Players get back what was taken: advancements, statistics (added to what they have now), items (added to their '
+          + 'inventory, the rest dropped at their feet), experience, recipes and their respawn point; DiscordLinked balances and '
+          + 'playtime are added back. Health and where they stood aren\'t. Players online get it now, the others when they next join.',
+          op.mc.includes('inventory') || op.mc.includes('enderchest')
+            ? 'If you already restored someone\'s "Before MC data reset" inventory snapshot, they\'d get those items twice.' : null],
+        confirmLabel: 'Undo',
+        onConfirm: async () => {
+          button.disabled = true;
+          const result = await api('/api/mcdata/undo', { id: op.id });
+          state.mcdata = result;
+          toast(result.message);
+          renderMcData();
+        },
+      });
+    } }, 'Undo'))))));
+  return card;
+}
+
+/** A player's page: what each server last said about their Minecraft data (staff), and a way to reset it (owner). */
+function mcDataSection(p, summaries) {
+  if (!summaries?.length && !state.me.isOwner) return [];
+  return [
+    el('h2', { class: 'section-title' }, 'Minecraft data',
+      state.me.isOwner && el('a', { class: 'btn btn-ghost btn-small', href: `#/mcdata/${p.uuid}` }, 'Manage MC data')),
+    el('div', { class: 'card panel' }, summaries?.length
+      ? el('dl', { class: 'kv' }, summaries.flatMap((s) => [el('dt', {}, s.server),
+        el('dd', {}, mcSummaryLine(s.data), el('span', { class: 'muted' }, ` · ${timeAgo(s.updatedAt)}`))]))
+      : el('p', { class: 'muted' }, 'No server has reported their data yet. Servers with DiscordLinkedBackend 0.26.0 or newer do while they play.')),
+  ];
 }
 
 const formatBytes = (n) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB`
@@ -4576,7 +4898,7 @@ function onPresence(change) {
 
 // ---- On duty / off duty ----
 
-const ADMIN_VIEWS = new Set(['players', 'logs', 'moderate', 'settings', 'messages', 'community', 'shop']);
+const ADMIN_VIEWS = new Set(['players', 'logs', 'moderate', 'settings', 'messages', 'mcdata', 'community', 'shop']);
 const MEMBER_VIEWS = new Set(['home', 'players', 'community', 'shop']);
 const homeView = () => (isStaff() ? 'players' : 'home');
 const homeHash = () => `#/${homeView()}`;
@@ -4625,7 +4947,7 @@ $('duty-switch').addEventListener('change', async (e) => {
 // Which log events change which page.
 const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK', 'SUSPEND', 'SUSPEND_EDIT',
   'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED', 'ADVANCEMENT',
-  'CREDITS_ADJUST', 'COSMETIC']);
+  'CREDITS_ADJUST', 'COSMETIC', 'MCDATA_RESET']);
 const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'SHOP_PURCHASE', 'SALE', 'EXCHANGE',
   'COSMETIC', 'GROUP', 'JOIN', 'LEAVE']);
 const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'SALE', 'EXCHANGE', 'COSMETIC', 'ADVANCEMENT', 'JOIN',
@@ -5052,7 +5374,7 @@ function currentRoute() {
   // Pages from before 0.18 moved: the Linked list is part of Players, the Market is a Shop tab.
   if (view === 'linked') view = 'players';
   if (view === 'market') [view, sub] = ['shop', 'sell'];
-  if ((view === 'settings' || view === 'messages') && !state.me.isOwner) return { view: homeView() };
+  if ((view === 'settings' || view === 'messages' || view === 'mcdata') && !state.me.isOwner) return { view: homeView() };
   // Each view only exists in its own mode; anything else goes to that mode's home page.
   if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view, sub };
   return { view: homeView() };
@@ -5068,10 +5390,11 @@ function refreshCurrentView() {
   else if (route.view === 'community') loadCommunity();
   else if (route.view === 'shop') loadShopView();
   else if (route.view === 'messages') loadMessageLog();
+  else if (route.view === 'mcdata') loadMcData(route.sub);
   else if (route.view === 'logs') loadLogs(true);
 }
 
-const VIEWS = ['logs', 'player', 'moderate', 'settings', 'messages', 'community', 'home', 'players', 'shop'];
+const VIEWS = ['logs', 'player', 'moderate', 'settings', 'messages', 'mcdata', 'community', 'home', 'players', 'shop'];
 
 function showView() {
   const route = currentRoute();
@@ -5081,7 +5404,7 @@ function showView() {
     // A player's page sits under Players, so that tab stays lit (without claiming to be the current page).
     if (route.view === 'player' && a.dataset.view === 'players') a.classList.add('active');
   });
-  markCurrent($('settings-link'), route.view === 'settings' || route.view === 'messages');
+  markCurrent($('settings-link'), route.view === 'settings' || route.view === 'messages' || route.view === 'mcdata');
   // Player pages say "Player" until the player has loaded (renderPlayer names them); the rest use their heading, without its count.
   if (route.view !== 'player') {
     const h1 = $(`view-${route.view}`).querySelector('h1');

@@ -57,6 +57,16 @@ final class InventoryCodec {
         player.updateInventory();
     }
 
+    /** A saved copy's parts, without touching any player. */
+    record Items(ItemStack[] storage, ItemStack[] armor, ItemStack[] offhand, ItemStack[] ender) {
+    }
+
+    static Items read(byte[] data) throws IOException {
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
+            return new Items(readItems(in), readItems(in), readItems(in), readItems(in));
+        }
+    }
+
     static int countStacks(Player player) {
         int count = 0;
         for (ItemStack[] group : new ItemStack[][] {player.getInventory().getStorageContents(),

@@ -138,6 +138,7 @@
 
     <section id="view-settings" hidden>
       <div class="toolbar"><h1>Settings</h1><span class="muted" id="settings-owner-note"></span>
+        <a class="btn btn-ghost btn-small" href="#/mcdata">MC data</a>
         <a class="btn btn-ghost btn-small" href="#/messages">Discord message log</a></div>
       <div id="settings-body"></div>
       <div id="settings-bar" class="settings-bar card" hidden>
@@ -145,6 +146,15 @@
         <button type="button" class="btn btn-ghost btn-small" id="settings-discard">Discard</button>
         <button type="button" class="btn btn-small" id="settings-save">Save changes</button>
       </div>
+    </section>
+
+    <section id="view-mcdata" hidden>
+      <a class="back" href="#/settings">← Settings</a>
+      <div class="toolbar">
+        <h1>MC data</h1>
+        <span class="muted">Only you (the settings owner) can see this page.</span>
+      </div>
+      <div id="mcdata-body" class="settings-grid mc-grid"></div>
     </section>
 
     <section id="view-messages" hidden>

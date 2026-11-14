@@ -8,6 +8,7 @@ import com.huzzysnuzzy.discordlinked.discord.DiscordBot;
 import com.huzzysnuzzy.discordlinked.fad.Community;
 import com.huzzysnuzzy.discordlinked.link.LinkCodeManager;
 import com.huzzysnuzzy.discordlinked.listener.PlayerListener;
+import com.huzzysnuzzy.discordlinked.mcdata.McDataManager;
 import com.huzzysnuzzy.discordlinked.players.ClientInfo;
 import com.huzzysnuzzy.discordlinked.players.Regions;
 import com.huzzysnuzzy.discordlinked.servers.BackendServers;
@@ -50,7 +51,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.25.0";
+    public static final String VERSION = "0.26.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -71,6 +72,7 @@ public final class DiscordLinked {
     private ClientInfo clients;
     private Regions regions;
     private ProxyUpdater updates;
+    private McDataManager mcData;
 
     @Inject
     public DiscordLinked(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -111,6 +113,9 @@ public final class DiscordLinked {
         proxy.getEventManager().register(this, maintenance);
         clients.start();
         proxy.getEventManager().register(this, clients);
+        mcData = new McDataManager(this);
+        mcData.start();
+        proxy.getEventManager().register(this, mcData);
         community.start();
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dlink").plugin(this).build(),
@@ -383,6 +388,11 @@ public final class DiscordLinked {
     /** Players' Minecraft versions, clients and average pings. */
     public ClientInfo clients() {
         return clients;
+    }
+
+    /** Resets of players' data from the website's MC data page. */
+    public McDataManager mcData() {
+        return mcData;
     }
 
     /** Keeps DiscordLinked up to date from GitHub releases (Settings -> Updates). */

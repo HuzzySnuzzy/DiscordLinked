@@ -224,6 +224,27 @@ final class ProxyLink implements PluginMessageListener {
         });
     }
 
+    /** How far an MC data operation got here: players reset, and players who had it undone. */
+    void mcDataState(Player carrier, McData.Op op, int[] count) {
+        send(carrier, out -> {
+            out.writeUTF("MCDATA_STATE");
+            out.writeUTF(op.id);
+            out.writeBoolean(op.undone);
+            out.writeInt(count[0]);
+            out.writeInt(count[1]);
+        });
+    }
+
+    /** A summary of a player's Minecraft data here (advancements, level, statistics), through them. */
+    void mcSummary(Player player, com.google.gson.JsonObject summary) {
+        byte[] json = summary.toString().getBytes(StandardCharsets.UTF_8);
+        send(player, out -> {
+            out.writeUTF("MCSUMMARY");
+            out.writeInt(json.length);
+            out.write(json);
+        });
+    }
+
     /** /mct. The proxy replies in chat. */
     void microTop(Player player) {
         String id = expect(player, null, null);
@@ -385,6 +406,20 @@ final class ProxyLink implements PluginMessageListener {
                     Player player = Bukkit.getPlayer(uuid);
                     if (player != null) {
                         player.getScheduler().run(plugin, task -> plugin.cosmetics().apply(player, state), null);
+                    }
+                }
+                // An MC data reset (or its undo) from the website.
+                case "MCDATA" -> {
+                    String id = in.readUTF();
+                    String kind = in.readUTF();
+                    String target = in.readUTF();
+                    String categories = in.readUTF();
+                    long created = in.readLong();
+                    String actor = in.readUTF();
+                    McData mcData = plugin.mcData();
+                    if (mcData != null && id.matches("[A-Za-z0-9-]{1,40}")
+                            && (target.isEmpty() || target.matches("[0-9a-f-]{36}"))) {
+                        mcData.receive(carrier, id, kind, target, categories, created, actor);
                     }
                 }
                 // The proxy's update settings for the backend servers, and the newest release it has seen.

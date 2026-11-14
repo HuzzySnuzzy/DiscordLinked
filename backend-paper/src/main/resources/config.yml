@@ -157,6 +157,9 @@ messages:
   keepinv-no-pvp: "<red>You have KeepInventory on, so you can't hurt other players.</red> <gray>Switch it off on the website.</gray>"
   # When lots of it was sold lately and prices drop. <percent> of the normal price
   worth-dropped: "<yellow>Lots of this was sold lately, so it sells for <percent>% of its normal price.</yellow>"
+  # When staff reset some of a player's Minecraft data on the website (MC data), and when they undo it.
+  mcdata-reset: "<yellow>Some of your Minecraft data on this server was reset by staff.</yellow>"
+  mcdata-restored: "<green>Your Minecraft data that was reset has been given back.</green>"
   # Before a restart for an update (see auto-update). <time> = e.g. "5 minutes"
   update-restart-warning: "<gold>This server restarts in <time> to install an update.</gold>"
 
