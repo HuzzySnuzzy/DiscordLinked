@@ -1074,8 +1074,8 @@ function renderPlayer() {
 /** Cosmetic kinds in shop order: [kind, section title, one of them, what it does]. */
 const COSMETIC_KINDS = [
   ['prefix', 'Prefixes', 'prefix', 'Shown in front of your name in chat and the tab list.'],
-  ['trail', 'Trails', 'trail', 'Particles that follow you while you walk.'],
-  ['aura', 'Auras', 'aura', 'Particles around you while you stand still.'],
+  ['particle', 'Particles', 'particle', 'Buy a particle once, then use it for free as your trail (while you walk), your aura '
+    + '(while you stand still) or both, each with its own look.'],
   ['card', 'Profile cards', 'profile card', 'A picture behind your name in the player lists and on your profile.'],
   ['keepinv', 'Quality of life', 'KeepInventory', ''],
 ];
@@ -1085,12 +1085,12 @@ function keepInventoryText(delayMinutes) {
     + (delayMinutes > 0 ? ` It starts working ${delayMinutes} minute${delayMinutes === 1 ? '' : 's'} after you switch it on.` : '');
 }
 
-async function equipCosmetic(item, on, button) {
+async function equipCosmetic(item, on, button, as) {
   // aria-disabled, not disabled: a disabled control loses keyboard focus, so the re-render would have nothing to give it back to.
   if (button?.getAttribute('aria-disabled') === 'true') return;
   button?.setAttribute('aria-disabled', 'true');
   try {
-    const result = await api('/api/cosmetics/equip', { id: item.id, on });
+    const result = await api('/api/cosmetics/equip', { id: item.id, on, as });
     toast(result.message);
   } catch (e) {
     toast(e.message);
@@ -1112,7 +1112,33 @@ function unlocksSection(p, cos) {
         : 'Working: items and XP are kept on death';
     }
     let control;
-    if (self) {
+    let look = null;
+    if (item.kind === 'particle') {
+      // A trail and an aura, each switched on separately and with its own look (picked here, saved at once).
+      const use = (as, label, on, style, fallback) => {
+        let toggle;
+        if (self) {
+          const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `${item.name} as your ${as}` });
+          box.checked = on;
+          box.addEventListener('change', () => equipCosmetic(item, box.checked, box, as));
+          toggle = el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }));
+        } else {
+          toggle = el('span', { class: `badge ${on ? 'good' : ''}` }, on ? 'On' : 'Off');
+        }
+        const editor = self ? styleEditor(style, fallback, item.colorable, async (picked) => {
+          try {
+            toast((await api('/api/cosmetics/style', { id: item.id, as, style: picked })).message);
+          } catch (e) {
+            toast(e.message);
+          }
+          refreshCurrentView();
+        }) : styleText(style) && el('span', { class: 'muted' }, styleText(style));
+        return el('div', { class: `particle-use ${on ? 'on' : ''}` }, el('span', { class: 'particle-use-label' }, label), toggle, editor);
+      };
+      look = el('div', { class: 'particle-uses' },
+        use('trail', 'Trail', item.asTrail, item.trailStyle, item.trailDefault),
+        use('aura', 'Aura', item.asAura, item.auraStyle, item.auraDefault));
+    } else if (self) {
       const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `Use ${item.name}` });
       box.checked = item.equipped;
       box.addEventListener('change', () => equipCosmetic(item, box.checked, box));
@@ -1120,22 +1146,8 @@ function unlocksSection(p, cos) {
     } else {
       control = el('span', { class: `badge ${item.equipped ? 'good' : ''}` }, item.equipped ? 'In use' : 'Off');
     }
-    const styled = item.kind === 'trail' || item.kind === 'aura';
-    let look = null;
-    if (styled && self) {
-      // Their own look for it: saved as soon as a menu changes.
-      look = styleEditor(item.myStyle, item.style, item.colorable, async (style) => {
-        try {
-          toast((await api('/api/cosmetics/style', { id: item.id, style })).message);
-        } catch (e) {
-          toast(e.message);
-        }
-        refreshCurrentView();
-      });
-    } else if (styled && styleText(item.myStyle)) {
-      sub += ` · ${styleText(item.myStyle)}`;
-    }
-    return el('div', { class: `unlock ${item.equipped ? 'on' : ''}`, 'data-key': item.id },
+    const inUse = item.equipped || item.asTrail || item.asAura;
+    return el('div', { class: `unlock ${inUse ? 'on' : ''} ${item.kind === 'particle' ? 'unlock-particle' : ''}`, 'data-key': item.id },
       cosmeticPreview(item, { name: p.minecraftName, uuid: p.uuid }, true),
       el('div', { class: 'unlock-text' }, el('div', { class: 'unlock-name' }, item.name), el('div', { class: 'muted' }, sub)),
       look,
@@ -4102,11 +4114,25 @@ const PARTICLES = {
   composter: ['Compost', '🌱'], firework: ['Fireworks', '🎆'], nautilus: ['Nautilus', '🐚'], dolphin: ['Dolphin', '🐬'],
   glow_squid_ink: ['Glow ink', '💎'], squid_ink: ['Ink', '⚫'], egg_crack: ['Egg crack', '🥚'],
   trial_spawner_detection: ['Trial flames', '🔥'], ominous_spawning: ['Ominous', '🕸️'], dust_plume: ['Dust', '💨'],
+  // 0.28.0: only the icons are used (names are Minecraft's).
+  poof: ['', '💨'], explosion: ['', '💥'], bubble: ['', '🫧'], splash: ['', '💦'], fishing: ['', '🎣'], underwater: ['', '🌊'],
+  smoke: ['', '🌫️'], large_smoke: ['', '🌫️'], white_smoke: ['', '🌫️'], effect: ['', '✨'], instant_effect: ['', '✨'],
+  dripping_water: ['', '💧'], falling_water: ['', '💧'], dripping_lava: ['', '🟠'], falling_lava: ['', '🟠'], landing_lava: ['', '🟠'],
+  lava: ['', '🌋'], mycelium: ['', '🍄'], item_snowball: ['', '⚪'], item_slime: ['', '🟢'], rain: ['', '🌧️'],
+  dragon_breath: ['', '🐉'], damage_indicator: ['', '🖤'], sweep_attack: ['', '🗡️'], spit: ['', '🦙'], current_down: ['', '🔽'],
+  bubble_column_up: ['', '🔼'], sneeze: ['', '🤧'], campfire_cosy_smoke: ['', '🔥'], campfire_signal_smoke: ['', '🔥'],
+  flash: ['', '⚪'], falling_honey: ['', '🍯'], landing_honey: ['', '🍯'], ash: ['', '🌫️'], crimson_spore: ['', '🔴'],
+  warped_spore: ['', '🔵'], dripping_obsidian_tear: ['', '🟣'], falling_obsidian_tear: ['', '🟣'], landing_obsidian_tear: ['', '🟣'],
+  spore_blossom_air: ['', '🌸'], dripping_dripstone_lava: ['', '🟠'], falling_dripstone_lava: ['', '🟠'],
+  dripping_dripstone_water: ['', '💧'], falling_dripstone_water: ['', '💧'], sonic_boom: ['', '🔊'], sculk_charge_pop: ['', '🔵'],
+  gust: ['', '🌀'], small_gust: ['', '🌀'], trial_spawner_detection_ominous: ['', '🔥'], vault_connection: ['', '🔑'],
+  infested: ['', '🐛'], item_cobweb: ['', '🕸️'], raid_omen: ['', '⚔️'], trial_omen: ['', '🗝️'],
 };
 /** Particles Minecraft can colour; every other one always looks like itself. */
 const COLORABLE_PARTICLES = new Set(['dust', 'entity_effect']);
-const particleName = (key) => PARTICLES[key]?.[0] || titleCase(key);
-const DEFAULT_PRICES = { prefix: 200, trail: 300, aura: 350, card: 250, keepinv: 750 };
+/** A particle's Minecraft name: "soul_fire_flame" → "Soul Fire Flame". */
+const particleName = (key) => titleCase(key).replace(/ Of /g, ' of ');
+const DEFAULT_PRICES = { prefix: 200, card: 250, keepinv: 750 };
 
 // ---- Trail and aura looks: shape, animation and colour ----
 
@@ -4217,11 +4243,19 @@ function drawParticlePreview(preview, tick) {
     if (style.color === 'rainbow') dot.style.color = `hsl(${Math.round(((tick * 0.02 + index * 0.07) % 1) * 360)} 90% 60%)`;
   });
 }
+/** Only previews on screen are animated (the shop has one for every particle). */
+const previewObserver = 'IntersectionObserver' in window ? new IntersectionObserver((entries) => {
+  for (const entry of entries) entry.target.previewVisible = entry.isIntersecting;
+}, { rootMargin: '100px' }) : null;
 function tickParticlePreviews() {
   const tick = Math.floor(performance.now() / 50);
   for (const preview of particlePreviews) {
-    if (!preview.root.isConnected) particlePreviews.delete(preview);
-    else drawParticlePreview(preview, tick);
+    if (!preview.root.isConnected) {
+      particlePreviews.delete(preview);
+      previewObserver?.unobserve(preview.root);
+    } else if (!previewObserver || preview.root.previewVisible) {
+      drawParticlePreview(preview, tick);
+    }
   }
   if (!particlePreviews.size) {
     clearInterval(particleTimer);
@@ -4229,7 +4263,7 @@ function tickParticlePreviews() {
   }
 }
 /** A head with a trail's or aura's particles around it, moving like in game. */
-function particlePreview(item, style, head, small) {
+function particlePreview(item, style, head, small, trail = false) {
   const icon = PARTICLES[item.value]?.[1] || '✦';
   const colored = COLORABLE_PARTICLES.has(item.value);
   const field = el('span', { class: `pfield ${colored ? 'colored' : ''}`, 'aria-hidden': 'true' });
@@ -4237,11 +4271,12 @@ function particlePreview(item, style, head, small) {
   // Drawn to scale (a player is 1.8 blocks tall): the head on a faint body, the particles around them.
   const root = el('div', { class: `cos-preview particles ${small ? 'small' : ''}`, title: [particleName(item.value), styleText(style)].filter(Boolean).join(' · ') },
     el('span', { class: 'pbody', 'aria-hidden': 'true' }, el('span', { class: 'ptorso' }), head), field);
-  const preview = { root, style, icon: colored ? '●' : icon, field, size: small ? 16 : 28, trail: item.kind === 'trail' };
+  const preview = { root, style, icon: colored ? '●' : icon, field, size: small ? 16 : 28, trail };
   if (reducedMotion()) {
     for (let t = 0; t <= 12; t++) drawParticlePreview(preview, t);
   } else {
     particlePreviews.add(preview);
+    previewObserver?.observe(root);
     drawParticlePreview(preview, Math.floor(performance.now() / 50));
     particleTimer ??= setInterval(tickParticlePreviews, 50);
   }
@@ -4293,9 +4328,11 @@ function cosmeticPreview(item, who, small = false) {
     case 'prefix':
       return el('div', { class: `cos-preview chat ${small ? 'small' : ''}` },
         el('span', {}, mcText(item.value || ''), ' ', el('span', { class: 'chat-name' }, name), !small && el('span', { class: 'chat-msg' }, ': hiii~')));
-    case 'trail':
-    case 'aura':
-      return particlePreview(item, item.myStyle || item.style || { shape: 'cloud', animation: 'still', color: '' }, head, small);
+    case 'particle': {
+      const asTrail = item.asTrail && !item.asAura;
+      const style = asTrail ? item.trailStyle || item.trailDefault : item.auraStyle || item.auraDefault;
+      return particlePreview(item, style || { shape: 'orbit', animation: 'spin', color: '' }, head, small, asTrail);
+    }
     case 'card':
       return el('div', { class: `cos-preview cardp ${item.card ? 'has-card' : ''} ${small ? 'small' : ''}` },
         item.card ? cardBackdrop(item.card) : el('span', { class: 'muted cardp-empty' }, 'No picture yet'),
@@ -4329,8 +4366,9 @@ function renderCosmetics() {
   }
   if (!b.linked) parts.push(el('p', { class: 'card panel muted' }, 'Link your Minecraft account to buy cosmetics (/link in Discord).'));
   else if (!d.manage || !cos.edit) {
-    parts.push(el('p', { class: 'card panel muted cos-intro' }, 'Bought once, yours to keep. Use or stop using them here; '
-      + 'pick a trail\'s or aura\'s look under ', el('a', { href: playerHref(b.uuid) }, 'Your unlocks'), ' on your profile.'));
+    parts.push(el('p', { class: 'card panel muted cos-intro' }, 'Bought once, yours to keep. Use or stop using them here; a '
+      + 'particle you have is your trail, your aura or both for free, and you pick each one\'s look under ',
+    el('a', { href: playerHref(b.uuid) }, 'Your unlocks'), ' on your profile.'));
   }
   if (d.manage) {
     parts.push(el('div', { class: 'card panel shop-manage' },
@@ -4341,14 +4379,39 @@ function renderCosmetics() {
   }
   const editing = d.manage && cos.edit;
   for (const [kind, title, one, help] of COSMETIC_KINDS) {
-    const items = d.items.filter((item) => item.kind === kind);
-    const canAdd = editing && (kind !== 'keepinv' || !items.length);
+    let items = d.items.filter((item) => item.kind === kind);
+    const canAdd = editing && kind !== 'particle' && (kind !== 'keepinv' || !items.length);
     if (!items.length && !canAdd) continue;
+    let tools = null;
+    if (kind === 'particle') {
+      // Yours first, then the rest by name; a search narrows them down.
+      items.sort((a, b2) => (b2.owned - a.owned) || a.name.localeCompare(b2.name));
+      const query = (cos.particleQuery || '').trim().toLowerCase();
+      if (query) items = items.filter((i) => i.name.toLowerCase().includes(query) || i.value.includes(query.replace(/ /g, '_')));
+      const search = el('input', { type: 'search', class: 'cos-search', placeholder: 'Find a particle…', 'aria-label': 'Find a particle',
+        value: cos.particleQuery || '', 'data-key': 'particle-search' });
+      search.addEventListener('input', () => { cos.particleQuery = search.value; renderCosmetics(); });
+      const price = editing && el('form', { class: 'cos-bulk', onsubmit: async (e) => {
+        e.preventDefault();
+        const input = e.currentTarget.querySelector('input');
+        try {
+          toast((await api('/api/cosmetics/particle-price', { price: Number(input.value) })).message);
+          await loadCosmetics();
+        } catch (err) {
+          toast(err.message);
+        }
+      } }, el('label', {}, `Price of every particle (${d.currency.many}) `,
+        el('input', { type: 'number', min: '0', step: '1', value: d.particlePrice, required: true, 'aria-label': 'Price of every particle' })),
+        el('button', { class: 'btn btn-ghost btn-small', type: 'submit' }, 'Set for all'));
+      tools = el('div', { class: 'cos-tools' }, search, price);
+    }
     parts.push(el('section', { class: 'cos-section' },
       el('h2', { class: 'section-title' }, title,
         canAdd && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => cosmeticDialog(null, kind) }, `New ${one}`)),
       help && el('p', { class: 'muted cos-help' }, help),
-      items.length ? el('div', { class: 'cos-grid' }, items.map(cosmeticTile)) : el('p', { class: 'muted' }, 'None yet.')));
+      tools,
+      items.length ? el('div', { class: 'cos-grid' }, items.map(cosmeticTile))
+        : el('p', { class: 'muted' }, kind === 'particle' && cos.particleQuery ? 'No particle by that name.' : 'None yet.')));
   }
   keepFocus($('shop-cosmetics'), () => $('shop-cosmetics').replaceChildren(...parts));
 }
@@ -4361,6 +4424,12 @@ function cosmeticTile(item) {
   let action;
   if (editing) {
     action = el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => cosmeticDialog(item) }, 'Edit');
+  } else if (item.owned && item.kind === 'particle') {
+    // Free to use either way: a toggle for each.
+    const toggle = (as, label, on) => el('button', { class: `btn btn-small ${on ? '' : 'btn-ghost'}`, type: 'button',
+      'aria-pressed': String(on), title: on ? `Stop using it as your ${as}` : `Use it as your ${as} (free)`,
+      onclick: (e) => equipCosmetic(item, !on, e.currentTarget, as) }, label);
+    action = el('div', { class: 'cos-uses' }, toggle('trail', 'Trail', item.asTrail), toggle('aura', 'Aura', item.asAura));
   } else if (item.owned) {
     action = el('button', { class: `btn btn-small ${item.equipped ? 'btn-ghost' : ''}`, type: 'button',
       onclick: (e) => equipCosmetic(item, !item.equipped, e.currentTarget) }, item.equipped ? 'Stop using' : 'Use');
@@ -4370,14 +4439,16 @@ function cosmeticTile(item) {
       title: short ? needMore(item.price - spendable(b), d.currency) : microPart(b, item.price).trim() || null,
       onclick: () => buyCosmetic(item) }, item.price ? `Buy · ${credits(item.price, d.currency)}` : 'Get for free');
   }
-  return el('div', { class: `card cos-tile ${item.equipped ? 'equipped' : ''} ${!item.owned && !sellable ? 'not-for-sale' : ''}`, 'data-key': item.id },
+  const inUse = item.equipped || item.asTrail || item.asAura;
+  const usedAs = [item.asTrail && 'trail', item.asAura && 'aura'].filter(Boolean);
+  return el('div', { class: `card cos-tile ${inUse ? 'equipped' : ''} ${!item.owned && !sellable ? 'not-for-sale' : ''}`, 'data-key': item.id },
     cosmeticPreview(item, b.linked ? { name: b.name, uuid: b.uuid } : null),
     el('div', { class: 'cos-info' },
       el('div', { class: 'cos-name' }, item.name,
-        item.equipped ? el('span', { class: 'badge good' }, 'In use') : item.owned && el('span', { class: 'badge' }, 'Yours'),
+        usedAs.length ? el('span', { class: 'badge good' }, `Your ${usedAs.join(' & ')}`)
+          : item.equipped ? el('span', { class: 'badge good' }, 'In use') : item.owned && el('span', { class: 'badge' }, 'Yours'),
         !editing && !item.owned && !sellable && el('span', { class: 'badge' }, 'Not for sale')),
-      (item.kind === 'trail' || item.kind === 'aura') && particleName(item.value).toLowerCase() !== item.name.toLowerCase()
-        && el('div', { class: 'muted cos-meta' }, particleName(item.value)),
+      item.kind === 'particle' && el('div', { class: 'muted cos-meta mono' }, item.value + (item.colorable ? ' · any colour' : '')),
       item.kind === 'keepinv' && el('p', { class: 'muted cos-desc' }, keepInventoryText(d.keepInventoryDelay)),
       editing && el('div', { class: 'muted cos-meta' }, `${credits(item.price, d.currency)} · ${item.owners} ${item.owners === 1 ? 'player has' : 'players have'} it`
         + (item.forSale ? '' : ' · not for sale') + (item.kind === 'card' && !item.card ? ' · needs a picture' : ''))),
@@ -4391,8 +4462,9 @@ function buyCosmetic(item) {
     text: [`${credits(item.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`
       + (microPart(d.buyer, item.price) ? ` The rest is paid with ${micro((item.price - d.buyer.balance) * d.buyer.exchange.rate, d.buyer.exchange)}.` : ''),
       item.kind === 'keepinv' ? keepInventoryText(d.keepInventoryDelay)
-        : `It's switched on straight away; switch it off any time here or under Your unlocks on your profile${
-          item.kind === 'trail' || item.kind === 'aura' ? `, where you also pick its look (halo, wings, helix…)${item.colorable ? ' and colour' : ''}` : ''}.`],
+        : item.kind === 'particle' ? `Yours to use as your trail, your aura or both, for free: switch them here, and pick each one's look `
+          + `(halo, wings, helix…${item.colorable ? ', colour' : ''}) under Your unlocks on your profile.`
+        : 'It\'s switched on straight away; switch it off any time here or under Your unlocks on your profile.'],
     confirmLabel: item.price ? `Buy for ${credits(item.price, d.currency)}${microPart(d.buyer, item.price)}` : 'Get it',
     onConfirm: async () => {
       const result = await api('/api/cosmetics/buy', { id: item.id });
@@ -4439,23 +4511,11 @@ function cosmeticDialog(item, kind = item?.kind) {
       el('p', { class: 'muted' }, 'Colours with & codes: &6 gold, &b aqua, &d pink, &c red, &a green, &#ff8800 any colour; &l bold, &o italic.'),
       preview);
     value = () => input.value;
-  } else if (kind === 'trail' || kind === 'aura') {
-    const select = el('select', { 'aria-label': 'Particle' }, d.particles.map((key) => el('option', { value: key },
-      `${PARTICLES[key]?.[1] || '✦'} ${particleName(key)}`)));
-    select.value = item?.value || d.particles[0];
-    const look = item?.style || (kind === 'aura' ? { shape: 'orbit', animation: 'spin', color: '' } : { shape: 'cloud', animation: 'still', color: '' });
-    let preview = el('div');
+  } else if (kind === 'particle') {
     const who = d.buyer.linked ? { name: d.buyer.name, uuid: d.buyer.uuid } : null;
-    const show = () => {
-      const next = cosmeticPreview({ kind, value: select.value, style: look }, who);
-      preview.replaceWith(next);
-      preview = next;
-    };
-    select.addEventListener('change', show);
-    box.replaceChildren(el('label', { class: 'reason' }, 'Particle', select), preview,
-      el('p', { class: 'muted' }, 'Whoever buys it gets every look: they pick the shape and animation (and for coloured dust and potion swirls, the colour) under Your unlocks.'));
-    show();
-    value = () => select.value;
+    box.replaceChildren(el('p', { class: 'muted' }, `Minecraft's ${item.value} particle. Whoever buys it uses it as their trail, `
+      + 'their aura or both, and picks each one\'s look under Your unlocks.'), cosmeticPreview(item, who));
+    value = () => item.value;
   } else if (kind === 'card') {
     const file = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif', class: 'offscreen' });
     let preview = el('div');
@@ -4489,7 +4549,8 @@ function cosmeticDialog(item, kind = item?.kind) {
     box.replaceChildren(el('p', { class: 'muted' }, keepInventoryText(d.keepInventoryDelay)));
   }
   const remove = $('cosmetic-delete');
-  remove.hidden = !item;
+  // Particles are every Minecraft particle: they're taken off sale, not deleted.
+  remove.hidden = !item || kind === 'particle';
   remove.onclick = () => confirmDialog({
     title: `Delete ${item.name}?`,
     text: item.owners ? `${item.owners} ${item.owners === 1 ? 'player has' : 'players have'} it. They lose it, and everyone who paid gets their ${d.currency.many} back.`

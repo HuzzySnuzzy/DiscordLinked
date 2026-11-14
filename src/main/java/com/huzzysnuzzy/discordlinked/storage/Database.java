@@ -360,18 +360,17 @@ public final class Database implements AutoCloseable {
                     )""");
             st.execute("CREATE INDEX IF NOT EXISTS idx_group_log_group ON group_log (group_id, id)");
         }
-        boolean newStyles = addColumnIfMissing("cosmetics", "style", "TEXT");
+        addColumnIfMissing("cosmetics", "style", "TEXT");
         addColumnIfMissing("cosmetic_owned", "style", "TEXT");
         if (newCosmetics) {
             seedCosmetics();
-            seedAuras();
-        } else if (newStyles) {
-            seedAuras(); // upgrading from 0.18: standing-still particles are new
         }
-        if (marketState("seeded-colour-particles").isEmpty()) { // new in 0.20.2
-            seedColourParticles();
-            setMarketState("seeded-colour-particles", "1");
-        }
+        // 0.28.0: a particle is bought once and used as a trail and/or an aura; owning a particle item replaces the
+        // separate trail and aura items (Cosmetics turns old ones into particles at start).
+        addColumnIfMissing("cosmetic_owned", "trail_at", "INTEGER");
+        addColumnIfMissing("cosmetic_owned", "trail_style", "TEXT");
+        addColumnIfMissing("cosmetic_owned", "aura_at", "INTEGER");
+        addColumnIfMissing("cosmetic_owned", "aura_style", "TEXT");
         // Added in 0.22.0: the backend servers with their earning switches, and which server a log entry is from.
         try (Statement st = connection.createStatement()) {
             st.execute("""
@@ -467,14 +466,6 @@ public final class Database implements AutoCloseable {
                 {"prefix", "Night Owl", "&9[Night Owl]", 200},
                 {"prefix", "Cutie", "&d[✿ Cutie]", 250},
                 {"prefix", "Tycoon", "&6&l[Tycoon]", 400},
-                {"trail", "Hearts", "heart", 300},
-                {"trail", "Flames", "flame", 250},
-                {"trail", "Soul fire", "soul_fire_flame", 300},
-                {"trail", "Music notes", "note", 250},
-                {"trail", "Sparkles", "end_rod", 350},
-                {"trail", "Cherry petals", "cherry_leaves", 400},
-                {"trail", "Snowfall", "snowflake", 250},
-                {"trail", "Magic runes", "enchant", 200},
                 {"keepinv", "KeepInventory", "", 750},
         };
         try (PreparedStatement ps = connection.prepareStatement(
@@ -492,51 +483,6 @@ public final class Database implements AutoCloseable {
         }
     }
 
-    /**
-     * Standing-still particles to start with. Each is a particle type: whoever buys one picks its shape, animation and
-     * colour on their profile.
-     */
-    private void seedAuras() throws SQLException {
-        Object[][] defaults = {
-                {"Hearts", "heart", null, 350},
-                {"Sparkles", "end_rod", null, 350},
-                {"Soul fire", "soul_fire_flame", null, 350},
-                {"Glow", "glow", null, 300},
-                {"Witch magic", "witch", null, 300},
-                {"Cherry petals", "cherry_leaves", null, 400},
-        };
-        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO cosmetics (kind, name, value, style, price, "
-                + "for_sale, sort, created_at) VALUES ('aura', ?, ?, ?, ?, 1, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?)")) {
-            for (Object[] row : defaults) {
-                ps.setString(1, (String) row[0]);
-                ps.setString(2, (String) row[1]);
-                ps.setString(3, (String) row[2]);
-                ps.setLong(4, ((Integer) row[3]).longValue());
-                ps.setLong(5, Instant.now().toEpochMilli());
-                ps.executeUpdate();
-            }
-        }
-    }
-
-    /** The particles that take a colour (players pick it), as a trail and as an aura. */
-    private void seedColourParticles() throws SQLException {
-        Object[][] defaults = {
-                {"trail", "Coloured dust", "dust", 300},
-                {"aura", "Coloured dust", "dust", 350},
-                {"aura", "Potion swirls", "entity_effect", 350},
-        };
-        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO cosmetics (kind, name, value, price, for_sale, "
-                + "sort, created_at) VALUES (?, ?, ?, ?, 1, (SELECT COALESCE(MAX(sort), 0) + 1 FROM cosmetics), ?)")) {
-            for (Object[] row : defaults) {
-                ps.setString(1, (String) row[0]);
-                ps.setString(2, (String) row[1]);
-                ps.setString(3, (String) row[2]);
-                ps.setLong(4, ((Integer) row[3]).longValue());
-                ps.setLong(5, Instant.now().toEpochMilli());
-                ps.executeUpdate();
-            }
-        }
-    }
 
     private boolean tableExists(String table) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -2050,24 +1996,209 @@ public final class Database implements AutoCloseable {
         return readOwned("SELECT * FROM cosmetic_owned WHERE minecraft_uuid = ? ORDER BY acquired_at", uuid.toString());
     }
 
-    /** Every cosmetic in use, by anyone. */
+    /** Every cosmetic in use, by anyone (particles used as a trail or an aura included). */
     public synchronized List<OwnedCosmetic> equippedCosmetics() throws SQLException {
-        return readOwned("SELECT * FROM cosmetic_owned WHERE equipped_at IS NOT NULL", null);
+        return readOwned("SELECT * FROM cosmetic_owned WHERE equipped_at IS NOT NULL OR trail_at IS NOT NULL "
+                + "OR aura_at IS NOT NULL", null);
+    }
+
+    private static Instant instant(ResultSet rs, String column) throws SQLException {
+        long value = rs.getLong(column);
+        return rs.wasNull() ? null : Instant.ofEpochMilli(value);
+    }
+
+    // ---- Particles: bought once, used as a trail and/or an aura (0.28.0) ----
+
+    /**
+     * Uses one of the player's particles as their trail ({@code aura} false) or aura, or stops. A player has one
+     * trail and one aura at a time (the same particle can be both). False if they don't have it.
+     */
+    public synchronized boolean setParticleUse(UUID uuid, long cosmeticId, boolean aura, boolean on) throws SQLException {
+        String column = aura ? "aura_at" : "trail_at";
+        return transaction(() -> {
+            if (!ownsCosmetic(uuid, cosmeticId)) {
+                return false;
+            }
+            if (on) {
+                try (PreparedStatement ps = connection.prepareStatement("UPDATE cosmetic_owned SET " + column
+                        + " = NULL WHERE minecraft_uuid = ? AND cosmetic_id <> ?")) {
+                    ps.setString(1, uuid.toString());
+                    ps.setLong(2, cosmeticId);
+                    ps.executeUpdate();
+                }
+            }
+            try (PreparedStatement ps = connection.prepareStatement(on
+                    ? "UPDATE cosmetic_owned SET " + column + " = COALESCE(" + column + ", ?) WHERE minecraft_uuid = ? AND cosmetic_id = ?"
+                    : "UPDATE cosmetic_owned SET " + column + " = NULL WHERE minecraft_uuid = ? AND cosmetic_id = ?")) {
+                int i = 1;
+                if (on) {
+                    ps.setLong(i++, Instant.now().toEpochMilli());
+                }
+                ps.setString(i++, uuid.toString());
+                ps.setLong(i, cosmeticId);
+                ps.executeUpdate();
+            }
+            return true;
+        });
+    }
+
+    /** The look a player picked for a particle as a trail or an aura (null = the default); false if they don't have it. */
+    public synchronized boolean setParticleStyle(UUID uuid, long cosmeticId, boolean aura, String style)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE cosmetic_owned SET "
+                + (aura ? "aura_style" : "trail_style") + " = ? WHERE minecraft_uuid = ? AND cosmetic_id = ?")) {
+            ps.setString(1, style);
+            ps.setString(2, uuid.toString());
+            ps.setLong(3, cosmeticId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /** Adds a particle item for every particle key missing from the shop. Returns how many were added. */
+    public synchronized int addMissingParticles(List<String[]> keysAndNames, long price) throws SQLException {
+        return transaction(() -> {
+            java.util.Set<String> have = new java.util.HashSet<>();
+            try (PreparedStatement ps = connection.prepareStatement("SELECT value FROM cosmetics WHERE kind = 'particle'");
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    have.add(rs.getString(1));
+                }
+            }
+            int added = 0;
+            try (PreparedStatement ps = connection.prepareStatement("INSERT INTO cosmetics (kind, name, value, price, "
+                    + "for_sale, sort, created_at) VALUES ('particle', ?, ?, ?, 1, (SELECT COALESCE(MAX(sort), 0) + 1 FROM "
+                    + "cosmetics), ?)")) {
+                for (String[] particle : keysAndNames) {
+                    if (have.contains(particle[0])) {
+                        continue;
+                    }
+                    ps.setString(1, particle[1]);
+                    ps.setString(2, particle[0]);
+                    ps.setLong(3, price);
+                    ps.setLong(4, Instant.now().toEpochMilli());
+                    ps.executeUpdate();
+                    added++;
+                }
+            }
+            return added;
+        });
+    }
+
+    /** Sets the price of every particle. Returns how many. */
+    public synchronized int setParticlePrices(long price) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE cosmetics SET price = ? WHERE kind = 'particle'")) {
+            ps.setLong(1, price);
+            return ps.executeUpdate();
+        }
+    }
+
+    /** What turning the old trails and auras into particles did. */
+    public record ParticleMigration(int items, int players, int refunds, long refunded) {
+    }
+
+    /**
+     * Turns every old trail and aura item into the particle item of the same particle, in one transaction: whoever had
+     * one now has that particle (what they paid is kept), used as a trail or an aura if they used it, with their look
+     * (or the item's). Someone who had two items of the same particle (say a trail and an aura of hearts) paid twice
+     * for what is now one, so the second payment is refunded. Then the old items are deleted.
+     */
+    public synchronized ParticleMigration migrateTrailsAndAuras(Map<String, Long> particleIds, String detail, String actor)
+            throws SQLException {
+        return transaction(() -> {
+            record Old(long id, String kind, String particle, String style) {
+            }
+            List<Old> olds = new ArrayList<>();
+            try (Statement st = connection.createStatement();
+                 ResultSet rs = st.executeQuery("SELECT id, kind, value, style FROM cosmetics WHERE kind IN ('trail', 'aura') "
+                         + "ORDER BY kind DESC, sort, id")) {
+                while (rs.next()) {
+                    olds.add(new Old(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4)));
+                }
+            }
+            java.util.Set<String> players = new java.util.HashSet<>();
+            int refunds = 0;
+            long refunded = 0;
+            for (Old old : olds) {
+                Long target = particleIds.get(old.particle());
+                List<OwnedCosmetic> owners = readOwned("SELECT * FROM cosmetic_owned WHERE cosmetic_id = ?", null, old.id());
+                for (OwnedCosmetic owned : owners) {
+                    players.add(owned.uuid().toString());
+                    boolean has = target != null && ownsCosmetic(owned.uuid(), target);
+                    if (target == null || has) {
+                        // Paid twice for what's now one particle (or the particle is gone): the money back.
+                        if (owned.paid() > 0) {
+                            long balance = creditBalance(owned.uuid()) + owned.paid();
+                            try (PreparedStatement ps = connection.prepareStatement(
+                                    "UPDATE fad_accounts SET credits = credits + ? WHERE minecraft_uuid = ?")) {
+                                ps.setLong(1, owned.paid());
+                                ps.setString(2, owned.uuid().toString());
+                                ps.executeUpdate();
+                            }
+                            insertCreditTransaction(owned.uuid(), owned.paid(), balance, "COSMETIC", detail, actor, Instant.now());
+                            refunds++;
+                            refunded += owned.paid();
+                        }
+                    } else {
+                        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO cosmetic_owned "
+                                + "(minecraft_uuid, cosmetic_id, paid, acquired_at) VALUES (?, ?, ?, ?)")) {
+                            ps.setString(1, owned.uuid().toString());
+                            ps.setLong(2, target);
+                            ps.setLong(3, owned.paid());
+                            ps.setLong(4, owned.acquiredAt().toEpochMilli());
+                            ps.executeUpdate();
+                        }
+                    }
+                    if (target != null && owned.equipped()) {
+                        boolean aura = old.kind().equals("aura");
+                        String look = owned.style() != null ? owned.style() : old.style();
+                        // One trail and one aura: what they used before stays what they use.
+                        try (PreparedStatement ps = connection.prepareStatement("UPDATE cosmetic_owned SET "
+                                + (aura ? "aura_at" : "trail_at") + " = NULL WHERE minecraft_uuid = ?")) {
+                            ps.setString(1, owned.uuid().toString());
+                            ps.executeUpdate();
+                        }
+                        try (PreparedStatement ps = connection.prepareStatement("UPDATE cosmetic_owned SET "
+                                + (aura ? "aura_at = ?, aura_style = ?" : "trail_at = ?, trail_style = ?")
+                                + " WHERE minecraft_uuid = ? AND cosmetic_id = ?")) {
+                            ps.setLong(1, owned.equippedAt().toEpochMilli());
+                            ps.setString(2, look);
+                            ps.setString(3, owned.uuid().toString());
+                            ps.setLong(4, target);
+                            ps.executeUpdate();
+                        }
+                    }
+                }
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM cosmetic_owned WHERE cosmetic_id = ?")) {
+                    ps.setLong(1, old.id());
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM cosmetics WHERE id = ?")) {
+                    ps.setLong(1, old.id());
+                    ps.executeUpdate();
+                }
+            }
+            return new ParticleMigration(olds.size(), players.size(), refunds, refunded);
+        });
     }
 
     private List<OwnedCosmetic> readOwned(String sql, String param) throws SQLException {
+        return readOwned(sql, param, null);
+    }
+
+    private List<OwnedCosmetic> readOwned(String sql, String param, Long id) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             if (param != null) {
                 ps.setString(1, param);
+            } else if (id != null) {
+                ps.setLong(1, id);
             }
             List<OwnedCosmetic> list = new ArrayList<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    long equipped = rs.getLong("equipped_at");
-                    boolean isEquipped = !rs.wasNull();
                     list.add(new OwnedCosmetic(UUID.fromString(rs.getString("minecraft_uuid")), rs.getLong("cosmetic_id"),
-                            rs.getLong("paid"), Instant.ofEpochMilli(rs.getLong("acquired_at")),
-                            isEquipped ? Instant.ofEpochMilli(equipped) : null, rs.getString("style")));
+                            rs.getLong("paid"), Instant.ofEpochMilli(rs.getLong("acquired_at")), instant(rs, "equipped_at"),
+                            rs.getString("style"), instant(rs, "trail_at"), rs.getString("trail_style"),
+                            instant(rs, "aura_at"), rs.getString("aura_style")));
                 }
             }
             return list;

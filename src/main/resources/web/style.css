@@ -2369,3 +2369,14 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
 .mc-op-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .update-servers { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
 .update-servers li { line-height: 1.45; overflow-wrap: anywhere; }
+
+/* Particles: one per Minecraft particle, used as a trail and/or aura (0.28.0) */
+.cos-tools { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 12px; }
+.cos-search { width: 100%; max-width: 320px; }
+.cos-bulk { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cos-bulk input { width: 7em; }
+.cos-uses { display: flex; gap: 6px; flex-wrap: wrap; }
+.particle-uses { display: grid; gap: 6px; min-width: 0; }
+.particle-use { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.particle-use-label { min-width: 3.2em; font-weight: 600; color: var(--muted); }
+.particle-use.on .particle-use-label { color: var(--text); }

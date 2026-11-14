@@ -27,9 +27,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
- * Cosmetics bought once with credits on the website: chat prefixes, particle trails, profile cards (an image behind
- * the player in the website's lists and on their page) and KeepInventory. The settings owner makes and prices them;
- * players switch what they have on and off on their profile, one of each kind at a time.
+ * Cosmetics bought once with credits on the website: chat prefixes, particles (each used for free as the player's
+ * trail, aura or both), profile cards (an image behind the player in the website's lists and on their page) and
+ * KeepInventory. The settings owner makes and prices them (particles: every Minecraft particle, priced); players switch
+ * what they have on and off on their profile, one prefix, trail, aura and card at a time.
  *
  * <p>Everything is decided here. Each player's Minecraft server is told what they use (prefix text, trail particle,
  * from when KeepInventory works) when they join it and whenever it changes; the backend plugin applies it.
@@ -37,23 +38,44 @@ import java.util.regex.Pattern;
 public final class Cosmetics {
 
     public static final String PREFIX = "prefix";
+    /**
+     * A Minecraft particle, bought once and then used for free as the player's trail (while walking), aura (while
+     * standing still) or both, each with its own look.
+     */
+    public static final String PARTICLE = "particle";
+    /** Separate trail and aura items from before 0.28.0, turned into particles at start. Only uses are called this now. */
     public static final String TRAIL = "trail";
-    /** Particles around a player while they stand still. */
     public static final String AURA = "aura";
     public static final String CARD = "card";
     public static final String KEEP_INVENTORY = "keepinv";
-    public static final List<String> KINDS = List.of(PREFIX, TRAIL, AURA, CARD, KEEP_INVENTORY);
+    /** Kinds the settings owner can add (particles come from {@link #PARTICLES}, one item each). */
+    public static final List<String> KINDS = List.of(PREFIX, CARD, KEEP_INVENTORY);
 
     /**
-     * Particles a trail or aura can use, in every version the backend plugin runs on. Only the {@link #COLORABLE} ones
-     * take a colour; the rest always look like themselves.
+     * Every particle a trail or aura can use: all of Minecraft 1.21.4's (the oldest version the backend plugin runs
+     * on) that need nothing more than a position, plus dust and potion swirls, which take a colour. Left out: ones
+     * that need a block or item, and the ones that would bother other players (the elder guardian's face, explosion
+     * and gust emitters). Each is one item in the shop, named after its Minecraft name.
      */
-    public static final List<String> PARTICLES = List.of("dust", "entity_effect", "heart", "flame", "small_flame", "soul_fire_flame", "note",
-            "end_rod", "cherry_leaves", "pale_oak_leaves", "snowflake", "enchant", "happy_villager", "angry_villager",
-            "glow", "totem_of_undying", "portal", "reverse_portal", "witch", "electric_spark", "wax_on", "wax_off",
-            "scrape", "bubble_pop", "cloud", "crit", "enchanted_hit", "dripping_honey", "falling_nectar",
-            "falling_spore_blossom", "sculk_soul", "soul", "white_ash", "composter", "firework", "nautilus", "dolphin",
-            "glow_squid_ink", "squid_ink", "egg_crack", "trial_spawner_detection", "ominous_spawning", "dust_plume");
+    public static final List<String> PARTICLES = List.of(
+            "poof", "explosion", "firework", "bubble", "splash", "fishing", "underwater", "crit", "enchanted_hit",
+            "smoke", "large_smoke", "effect", "instant_effect", "entity_effect", "witch", "dripping_water",
+            "dripping_lava", "angry_villager", "happy_villager", "mycelium", "note", "portal", "enchant", "flame",
+            "lava", "cloud", "dust", "item_snowball", "item_slime", "heart", "rain", "dragon_breath", "end_rod",
+            "damage_indicator", "sweep_attack", "totem_of_undying", "spit", "squid_ink", "bubble_pop", "current_down",
+            "bubble_column_up", "nautilus", "dolphin", "sneeze", "campfire_cosy_smoke", "campfire_signal_smoke",
+            "composter", "flash", "falling_lava", "landing_lava", "falling_water", "dripping_honey", "falling_honey",
+            "landing_honey", "falling_nectar", "soul_fire_flame", "ash", "crimson_spore", "warped_spore", "soul",
+            "dripping_obsidian_tear", "falling_obsidian_tear", "landing_obsidian_tear", "reverse_portal", "white_ash",
+            "falling_spore_blossom", "spore_blossom_air", "small_flame", "snowflake", "dripping_dripstone_lava",
+            "falling_dripstone_lava", "dripping_dripstone_water", "falling_dripstone_water", "glow_squid_ink", "glow",
+            "wax_on", "wax_off", "electric_spark", "scrape", "sonic_boom", "sculk_soul", "sculk_charge_pop",
+            "cherry_leaves", "pale_oak_leaves", "egg_crack", "dust_plume", "white_smoke", "gust", "small_gust",
+            "trial_spawner_detection", "trial_spawner_detection_ominous", "vault_connection", "infested", "item_cobweb",
+            "ominous_spawning", "raid_omen", "trial_omen");
+
+    /** New particles' price until the settings owner changes it. */
+    public static final long DEFAULT_PARTICLE_PRICE = 250;
 
     /** Particles Minecraft can colour: dust, and potion swirls. */
     public static final java.util.Set<String> COLORABLE = java.util.Set.of("dust", "entity_effect");
@@ -62,9 +84,24 @@ public final class Cosmetics {
     private static final long MAX_PRICE = 1_000_000_000L;
     private static final long PUSH_DELAY_MS = 1500;
 
+    /** "soul_fire_flame" → "Soul Fire Flame": the particle's Minecraft name. */
+    public static String particleName(String key) {
+        StringBuilder name = new StringBuilder();
+        for (String word : key.split("_")) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            if (!name.isEmpty()) {
+                name.append(' ');
+            }
+            name.append(word.equals("of") && !name.isEmpty() ? word : Character.toUpperCase(word.charAt(0)) + word.substring(1));
+        }
+        return name.toString();
+    }
+
     /**
-     * What a player has in use, with the look of their trail and aura. {@code keepInventorySince} is when they
-     * switched KeepInventory on, or null.
+     * What a player has in use, with the look of their trail and aura (particle items). {@code keepInventorySince} is
+     * when they switched KeepInventory on, or null.
      */
     public record Equipped(Cosmetic prefix, Cosmetic trail, ParticleStyle trailStyle, Cosmetic aura,
                            ParticleStyle auraStyle, Cosmetic card, Instant keepInventorySince) {
@@ -93,9 +130,34 @@ public final class Cosmetics {
 
     void start() {
         try {
+            List<String[]> particles = PARTICLES.stream().map(key -> new String[] {key, particleName(key)}).toList();
+            int added = plugin.database().addMissingParticles(particles, DEFAULT_PARTICLE_PRICE);
+            if (added > 0) {
+                plugin.logger().info("Added {} particles to the Cosmetics shop.", added);
+            }
+            migrateTrailsAndAuras();
             reload();
         } catch (SQLException e) {
             plugin.logger().error("Could not load the cosmetics", e);
+        }
+    }
+
+    /** Old separate trail and aura items become particles (once; nothing happens when there are none). */
+    private void migrateTrailsAndAuras() throws SQLException {
+        Map<String, Long> ids = new HashMap<>();
+        for (Cosmetic c : plugin.database().cosmetics()) {
+            if (c.kind().equals(PARTICLE)) {
+                ids.put(c.value(), c.id());
+            }
+        }
+        Database.ParticleMigration done = plugin.database().migrateTrailsAndAuras(ids,
+                "Refund: you had a trail and an aura of the same particle, which is now one particle", "DiscordLinked");
+        if (done.items() > 0) {
+            plugin.logger().info("Trails and auras are particles now: {} old items moved for {} players ({} refunds, {} "
+                    + "credits).", done.items(), done.players(), done.refunds(), done.refunded());
+            plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "trails and auras became particles: "
+                    + done.items() + " items for " + done.players() + " players moved, " + done.refunds()
+                    + " double payments refunded (" + config().credits(done.refunded()) + ")", "DiscordLinked");
         }
     }
 
@@ -111,12 +173,24 @@ public final class Cosmetics {
                 continue;
             }
             Equipped e = inUse.getOrDefault(owned.uuid(), Equipped.NONE);
+            if (c.kind().equals(PARTICLE)) {
+                if (owned.trail()) {
+                    e = new Equipped(e.prefix(), c, trailStyle(c, owned), e.aura(), e.auraStyle(), e.card(), e.keepInventorySince());
+                }
+                if (owned.aura()) {
+                    e = new Equipped(e.prefix(), e.trail(), e.trailStyle(), c, auraStyle(c, owned), e.card(), e.keepInventorySince());
+                }
+                inUse.put(owned.uuid(), e);
+                continue;
+            }
+            if (!owned.equipped()) {
+                continue;
+            }
             inUse.put(owned.uuid(), switch (c.kind()) {
                 case PREFIX -> new Equipped(c, e.trail(), e.trailStyle(), e.aura(), e.auraStyle(), e.card(), e.keepInventorySince());
-                case TRAIL -> new Equipped(e.prefix(), c, style(c, owned), e.aura(), e.auraStyle(), e.card(), e.keepInventorySince());
-                case AURA -> new Equipped(e.prefix(), e.trail(), e.trailStyle(), c, style(c, owned), e.card(), e.keepInventorySince());
                 case CARD -> new Equipped(e.prefix(), e.trail(), e.trailStyle(), e.aura(), e.auraStyle(), c, e.keepInventorySince());
-                default -> new Equipped(e.prefix(), e.trail(), e.trailStyle(), e.aura(), e.auraStyle(), e.card(), owned.equippedAt());
+                case KEEP_INVENTORY -> new Equipped(e.prefix(), e.trail(), e.trailStyle(), e.aura(), e.auraStyle(), e.card(), owned.equippedAt());
+                default -> e;
             });
         }
         catalog = items;
@@ -128,14 +202,24 @@ public final class Cosmetics {
         return COLORABLE.contains(c.value());
     }
 
-    /** A trail's or aura's own look (as the settings owner made it). */
-    public static ParticleStyle style(Cosmetic c) {
-        return withoutColor(c, ParticleStyle.parse(c.style(), ParticleStyle.defaultFor(c.kind())));
+    /** A particle's default look as a trail. */
+    public static ParticleStyle trailDefault(Cosmetic c) {
+        return withoutColor(c, ParticleStyle.defaultFor(TRAIL));
     }
 
-    /** The look a player uses: what they picked, else the item's own. */
-    public static ParticleStyle style(Cosmetic c, OwnedCosmetic owned) {
-        return withoutColor(c, ParticleStyle.parse(owned == null ? null : owned.style(), style(c)));
+    /** A particle's default look as an aura. */
+    public static ParticleStyle auraDefault(Cosmetic c) {
+        return withoutColor(c, ParticleStyle.defaultFor(AURA));
+    }
+
+    /** The look a player uses for a particle as their trail: what they picked, else the default. */
+    public static ParticleStyle trailStyle(Cosmetic c, OwnedCosmetic owned) {
+        return withoutColor(c, ParticleStyle.parse(owned == null ? null : owned.trailStyle(), trailDefault(c)));
+    }
+
+    /** The same as their aura. */
+    public static ParticleStyle auraStyle(Cosmetic c, OwnedCosmetic owned) {
+        return withoutColor(c, ParticleStyle.parse(owned == null ? null : owned.auraStyle(), auraDefault(c)));
     }
 
     /** Particles that can't be coloured always look like themselves (whatever was saved before). */
@@ -143,9 +227,6 @@ public final class Cosmetics {
         return colorable(c) || style.color().isEmpty() ? style : new ParticleStyle(style.shape(), style.animation(), "");
     }
 
-    private static boolean particles(String kind) {
-        return TRAIL.equals(kind) || AURA.equals(kind);
-    }
 
     private PluginConfig config() {
         return plugin.config();
@@ -217,20 +298,51 @@ public final class Cosmetics {
         plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.COSMETIC,
                 "bought " + describe(cosmetic) + " for " + c.credits(cosmetic.price()) + exchanged + ", now "
                         + c.credits(balance), actor);
-        plugin.database().setCosmeticEquipped(buyer.uuid(), id, cosmetic.kind(), true);
+        String using;
+        if (cosmetic.kind().equals(PARTICLE)) {
+            // Put to use where nothing is: as their trail, else as their aura; otherwise they pick.
+            Equipped now = equipped(buyer.uuid());
+            if (now.trail() == null) {
+                plugin.database().setParticleUse(buyer.uuid(), id, false, true);
+                using = " It's your trail now; use it as your aura too if you like.";
+            } else if (now.aura() == null) {
+                plugin.database().setParticleUse(buyer.uuid(), id, true, true);
+                using = " It's your aura now; use it as your trail too if you like.";
+            } else {
+                using = " Use it as your trail or aura whenever you like.";
+            }
+        } else {
+            plugin.database().setCosmeticEquipped(buyer.uuid(), id, cosmetic.kind(), true);
+            using = cosmetic.kind().equals(KEEP_INVENTORY) && c.keepInventoryDelayMinutes() > 0
+                    ? " It starts working in " + c.keepInventoryDelayMinutes() + " minutes."
+                    : " It's on now.";
+        }
         reload();
         push(buyer.uuid());
-        String using = cosmetic.kind().equals(KEEP_INVENTORY) && c.keepInventoryDelayMinutes() > 0
-                ? " It starts working in " + c.keepInventoryDelayMinutes() + " minutes."
-                : " It's on now.";
         return new Result(true, "Bought " + cosmetic.name() + "!" + exchanged + using, balance);
     }
 
-    /** Switches one of the player's own cosmetics on or off. */
-    public Result equip(UUID uuid, String name, Long discordId, long id, boolean on, String actor) throws SQLException {
+    /**
+     * Switches one of the player's own cosmetics on or off; a particle as their trail or aura ({@code as}), which
+     * costs nothing.
+     */
+    public Result equip(UUID uuid, String name, Long discordId, long id, boolean on, String as, String actor)
+            throws SQLException {
         Cosmetic cosmetic = catalog.get(id);
         if (cosmetic == null) {
             return Result.fail("That cosmetic doesn't exist any more.");
+        }
+        if (cosmetic.kind().equals(PARTICLE)) {
+            boolean aura = AURA.equals(as);
+            if (!aura && !TRAIL.equals(as)) {
+                return Result.fail("Use it as a trail or as an aura.");
+            }
+            if (!plugin.database().setParticleUse(uuid, id, aura, on)) {
+                return Result.fail("You don't have " + cosmetic.name() + ".");
+            }
+            reload();
+            push(uuid);
+            return new Result(true, cosmetic.name() + (on ? " is your " : " is no longer your ") + (aura ? "aura." : "trail."), -1);
         }
         if (on && cosmetic.kind().equals(CARD) && cosmetic.value().isEmpty()) {
             return Result.fail("That profile card has no picture yet.");
@@ -250,22 +362,24 @@ public final class Cosmetics {
         return new Result(true, on ? cosmetic.name() + " is on." : cosmetic.name() + " is off.", -1);
     }
 
-    /** A player picks how their trail or aura looks ({@code style} null = back to the item's own). */
-    public Result setStyle(UUID uuid, long id, ParticleStyle style) throws SQLException {
+    /** A player picks how a particle looks as their trail or aura ({@code style} null = back to the default). */
+    public Result setStyle(UUID uuid, long id, String as, ParticleStyle style) throws SQLException {
         Cosmetic cosmetic = catalog.get(id);
-        if (cosmetic == null || !particles(cosmetic.kind())) {
+        boolean aura = AURA.equals(as);
+        if (cosmetic == null || !cosmetic.kind().equals(PARTICLE) || !aura && !TRAIL.equals(as)) {
             return Result.fail("That can't be styled.");
         }
         if (style != null && !style.color().isEmpty() && !colorable(cosmetic)) {
             return Result.fail(cosmetic.name() + " can't be coloured.");
         }
-        if (!plugin.database().setOwnedStyle(uuid, id, style == null ? null : style.encode())) {
+        if (!plugin.database().setParticleStyle(uuid, id, aura, style == null ? null : style.encode())) {
             return Result.fail("You don't have " + cosmetic.name() + ".");
         }
         reload();
         push(uuid);
-        return new Result(true, style == null ? cosmetic.name() + " looks like it did in the shop again."
-                : "Saved how " + cosmetic.name() + " looks.", -1);
+        String use = aura ? " as an aura" : " as a trail";
+        return new Result(true, style == null ? cosmetic.name() + use + " looks like it does by default again."
+                : "Saved how " + cosmetic.name() + " looks" + use + ".", -1);
     }
 
     /** What a player has, in shop order, for their profile. */
@@ -287,8 +401,9 @@ public final class Cosmetics {
             throw new IllegalArgumentException("That cosmetic doesn't exist any more.");
         }
         String k = old != null ? old.kind() : kind;
-        if (!KINDS.contains(k)) {
-            throw new IllegalArgumentException("Unknown kind of cosmetic.");
+        if (!KINDS.contains(k) && !(old != null && k.equals(PARTICLE))) {
+            throw new IllegalArgumentException(PARTICLE.equals(k) ? "Every Minecraft particle is in the shop already."
+                    : "Unknown kind of cosmetic.");
         }
         String n = name == null ? "" : name.strip();
         if (n.isEmpty() || n.length() > 32 || n.chars().anyMatch(Character::isISOControl)) {
@@ -307,12 +422,7 @@ public final class Cosmetics {
                 }
                 yield text;
             }
-            case TRAIL, AURA -> {
-                if (!PARTICLES.contains(value)) {
-                    throw new IllegalArgumentException("Pick a particle.");
-                }
-                yield value;
-            }
+            case PARTICLE -> old.value(); // the particle itself never changes
             case CARD -> old == null ? "" : old.value(); // the picture is uploaded separately
             default -> "";
         };
@@ -320,7 +430,7 @@ public final class Cosmetics {
                 && catalog.values().stream().anyMatch(c -> c.kind().equals(KEEP_INVENTORY))) {
             throw new IllegalArgumentException("There's already a KeepInventory item; change that one.");
         }
-        String s = particles(k) && style != null ? style.encode() : old == null ? null : old.style();
+        String s = old == null ? null : old.style();
         long saved = plugin.database().saveCosmetic(new Cosmetic(id, k, n, v, s, price, forSale, old == null ? 0 : old.sort()));
         reload();
         Cosmetic now = catalog.get(saved);
@@ -337,6 +447,10 @@ public final class Cosmetics {
         Cosmetic cosmetic = catalog.get(id);
         if (cosmetic == null) {
             return 0;
+        }
+        if (cosmetic.kind().equals(PARTICLE)) {
+            throw new IllegalArgumentException("Particles stay in the shop (they'd come back at the next start); take it "
+                    + "off sale instead.");
         }
         List<UUID> using = whoUses(id);
         PluginConfig c = config();
@@ -358,6 +472,18 @@ public final class Cosmetics {
         }
         using.forEach(this::push);
         return refunds.size();
+    }
+
+    /** Sets every particle's price (the settings owner). Returns how many particles there are. */
+    public int setParticlePrices(long price, String actor) throws SQLException {
+        if (price < 0 || price > MAX_PRICE) {
+            throw new IllegalArgumentException("The price must be between 0 and " + MAX_PRICE + ".");
+        }
+        int count = plugin.database().setParticlePrices(price);
+        reload();
+        plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "set every particle's price to "
+                + config().credits(price), actor);
+        return count;
     }
 
     /** Sets a profile card's picture from an uploaded image. Throws IllegalArgumentException if it isn't one. */
@@ -442,8 +568,7 @@ public final class Cosmetics {
     static String describe(Cosmetic c) {
         return switch (c.kind()) {
             case PREFIX -> "prefix " + c.name();
-            case TRAIL -> "trail " + c.name();
-            case AURA -> "aura " + c.name();
+            case PARTICLE -> "particle " + c.name();
             case CARD -> "profile card " + c.name();
             default -> c.name();
         };

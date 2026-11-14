@@ -600,6 +600,7 @@ public final class WebServer {
             case "POST /api/cosmetics/buy", "POST /api/cosmetics/equip", "POST /api/cosmetics/style" ->
                     cosmeticForSelf(ex, path, session);
             case "POST /api/cosmetics/save", "POST /api/cosmetics/delete", "POST /api/cosmetics/card",
+                 "POST /api/cosmetics/particle-price",
                  "POST /api/cosmetics/give", "POST /api/cosmetics/revoke" -> cosmeticForOwner(ex, path, session);
             case "GET /api/groups" -> sendJson(ex, 200, groupsJson(session));
             case "GET /api/groups/log" -> groupLogForStaff(ex, query(ex));
@@ -1643,18 +1644,32 @@ public final class WebServer {
                 .put("name", c.name())
                 .put("value", c.kind().equals(Cosmetics.CARD) ? null : c.value())
                 .put("card", Cosmetics.cardUrl(c))
-                .put("style", styleJson(c.kind(), Cosmetics.style(c)))
+                .put("trailDefault", c.kind().equals(Cosmetics.PARTICLE) ? styleJson(Cosmetics.trailDefault(c)) : null)
+                .put("auraDefault", c.kind().equals(Cosmetics.PARTICLE) ? styleJson(Cosmetics.auraDefault(c)) : null)
                 .put("colorable", Cosmetics.colorable(c))
                 .put("price", c.price())
                 .put("forSale", c.forSale());
     }
 
-    /** A trail's or aura's look, or null for other kinds. */
-    private static DataObject styleJson(String kind, ParticleStyle style) {
-        if (!kind.equals(Cosmetics.TRAIL) && !kind.equals(Cosmetics.AURA)) {
-            return null;
-        }
+    /** A trail's or aura's look. */
+    private static DataObject styleJson(ParticleStyle style) {
         return DataObject.empty().put("shape", style.shape()).put("animation", style.animation()).put("color", style.color());
+    }
+
+    /**
+     * What a player does with something they have: switched on (most kinds), or for a particle whether it's their
+     * trail and/or aura, with the look of each (and whether they picked it).
+     */
+    private static DataObject useJson(DataObject json, Cosmetic c, OwnedCosmetic owned) {
+        json.put("equipped", owned != null && owned.equipped());
+        if (c.kind().equals(Cosmetics.PARTICLE)) {
+            json.put("asTrail", owned != null && owned.trail()).put("asAura", owned != null && owned.aura())
+                    .put("trailStyle", styleJson(Cosmetics.trailStyle(c, owned)))
+                    .put("auraStyle", styleJson(Cosmetics.auraStyle(c, owned)))
+                    .put("customTrail", owned != null && owned.trailStyle() != null)
+                    .put("customAura", owned != null && owned.auraStyle() != null);
+        }
+        return json;
     }
 
     /** A shape, animation and colour sent by the page; null if none was sent (or "reset" asked for). */
@@ -1686,8 +1701,7 @@ public final class WebServer {
             if (!manage && mine == null && !sellable) {
                 continue;
             }
-            items.add(cosmeticJson(c).put("owned", mine != null).put("equipped", mine != null && mine.equipped())
-                    .put("myStyle", mine == null ? null : styleJson(c.kind(), Cosmetics.style(c, mine)))
+            items.add(useJson(cosmeticJson(c), c, mine).put("owned", mine != null)
                     .put("owners", manage ? owners.getOrDefault(c.id(), 0L) : null));
         }
         DataObject buyer = DataObject.empty().put("linked", me != null);
@@ -1701,7 +1715,8 @@ public final class WebServer {
                 .put("manage", manage)
                 .put("currency", currency())
                 .put("keepInventoryDelay", plugin.config().keepInventoryDelayMinutes())
-                .put("particles", manage ? DataArray.fromCollection(Cosmetics.PARTICLES) : null)
+                .put("particlePrice", cosmetics.catalog().stream().filter(c -> c.kind().equals(Cosmetics.PARTICLE))
+                        .mapToLong(Cosmetic::price).max().orElse(Cosmetics.DEFAULT_PARTICLE_PRICE))
                 .put("buyer", buyer)
                 .put("items", items);
     }
@@ -1717,9 +1732,7 @@ public final class WebServer {
         DataArray items = DataArray.empty();
         for (OwnedCosmetic owned : cosmetics.owned(uuid)) {
             Cosmetic c = cosmetics.get(owned.cosmeticId());
-            items.add(cosmeticJson(c).put("equipped", owned.equipped())
-                    .put("myStyle", styleJson(c.kind(), Cosmetics.style(c, owned)))
-                    .put("customStyle", owned.style() != null)
+            items.add(useJson(cosmeticJson(c), c, owned)
                     .put("equippedAt", owned.equipped() ? owned.equippedAt().toEpochMilli() : null)
                     .put("paid", owned.paid()).put("acquiredAt", owned.acquiredAt().toEpochMilli()));
         }
@@ -1757,8 +1770,9 @@ public final class WebServer {
         try {
             result = switch (path) {
                 case "/api/cosmetics/buy" -> cosmetics.buy(me, id, actor);
-                case "/api/cosmetics/style" -> cosmetics.setStyle(me.uuid(), id, styleFrom(body));
-                default -> cosmetics.equip(me.uuid(), me.minecraftName(), me.discordId(), id, body.getBoolean("on", true), actor);
+                case "/api/cosmetics/style" -> cosmetics.setStyle(me.uuid(), id, body.getString("as", ""), styleFrom(body));
+                default -> cosmetics.equip(me.uuid(), me.minecraftName(), me.discordId(), id, body.getBoolean("on", true),
+                        body.getString("as", ""), actor);
             };
         } catch (IllegalArgumentException e) {
             sendJson(ex, 400, error(e.getMessage()));
@@ -1795,6 +1809,11 @@ public final class WebServer {
                             body.getString("value", ""), styleFrom(body), body.getLong("price", 0),
                             body.getBoolean("forSale", true), actor);
                     sendJson(ex, 200, cosmeticJson(saved).put("ok", true));
+                }
+                case "/api/cosmetics/particle-price" -> {
+                    int count = cosmetics.setParticlePrices(body.getLong("price", -1), actor);
+                    sendJson(ex, 200, DataObject.empty().put("ok", true).put("message", "Every particle (" + count
+                            + ") costs " + plugin.config().credits(body.getLong("price", 0)) + " now."));
                 }
                 case "/api/cosmetics/delete" -> {
                     int had = cosmetics.delete(id, actor);

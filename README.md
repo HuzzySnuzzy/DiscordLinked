@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.27.0.jar` there instead.
+   `DiscordLinkedBackend-0.28.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -98,7 +98,7 @@ Good to know:
   so nothing is done twice. Remove the old jar and restart.
 - A server that only had DiscordLinkedSpy (a creative server, say) now also gets everything DiscordLinkedFAD
   did: interactions, `/credits`, selling and `/exchange`, credits for playtime and advancements, cosmetics
-  (prefixes, trails, KeepInventory) and Shop deliveries. It has no DiscordLinkedFAD folder to copy from, so before
+  (prefixes, trails, auras, KeepInventory) and Shop deliveries. It has no DiscordLinkedFAD folder to copy from, so before
   its first start put the `config.yml` from one of your other servers in its `plugins/DiscordLinkedBackend/`, so
   every server has the same interactions. If players shouldn't earn there, switch **Earn credits** and **Earn
   microcredits** off for it (see [Several servers](#several-servers)). To hide the commands there, take the
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.27.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.28.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -379,14 +379,18 @@ name in the top bar). One of each kind is on at a time, and a new purchase is sw
   highest-priority prefix: put it above your rank prefixes to replace them while it's on, or below them to only
   show it for players without one (or set up LuckPerms' prefix stacking to show both). Without LuckPerms the
   prefix goes in front of the player's display name.
-- **Trails**: particles behind the player while they walk (hearts, flames, music notes, cherry petals, snow,
-  …). **Auras**: particles around them while they stand still (shown after half a second without moving).
-  Nothing shows while they're in spectator mode, invisible or vanished.
-- Trails and auras are bought per particle type, and buying one gives every look of it: next to it under **Your
-  unlocks**, one menu picks the look (**Default**, the particle's own look, or cloud, ring at the feet, halo, orbit, helix or wings, each still,
-  spinning, pulsing (wings flap) or rising). Particles Minecraft can colour, **Coloured dust** and **Potion
-  swirls**, also get a colour menu (white, rainbow, a preset or any custom colour); every other particle always
-  keeps its own colour. Changes show in game straight away, and the
+- **Particles**: every Minecraft particle is in the shop, under its Minecraft name (Flame, Soul Fire Flame,
+  Cherry Leaves, Totem of Undying, Smoke…; 97 of them, with a search). A particle is bought once and then used
+  for free as the player's **trail** (behind them while they walk), their **aura** (around them while they stand
+  still, shown after half a second without moving) or both. They have one trail and one aura at a time, switched
+  with **Trail** and **Aura** on the particle in the shop or under **Your unlocks**. A newly bought particle
+  becomes their trail if they have none, else their aura if they have none. Nothing shows while they're in
+  spectator mode, invisible or vanished. Left out are particles that need a block or item to show and ones that
+  would bother other players (the elder guardian's face, explosion and gust emitters).
+- Under **Your unlocks** each particle has a look for its trail and one for its aura (**Default**, or cloud,
+  ring at the feet, halo, orbit, helix or wings, each still, spinning, pulsing (wings flap) or rising). **Dust**
+  and **Entity Effect** (potion swirls), the particles Minecraft can colour, also get a colour menu (white,
+  rainbow, a preset or any custom colour); every other particle always keeps its own colour. Changes show in game straight away, and the
   previews on the website use the same shapes. `cosmetics.trail-interval-ticks` (how often they're drawn,
   default 2) and `cosmetics.trail-particles` (how many particles a cloud has) are in DiscordLinkedBackend's config.yml.
 - **Profile cards**: a picture behind the player's name in the Players list, fading out to the right, and at
@@ -398,10 +402,14 @@ name in the top bar). One of each kind is on at a time, and a new purchase is sw
   players while it's on (hits, arrows, tridents, their pets, fire, harmful potions). It starts working
   `keep-inventory-delay-minutes` after it's switched on (default 5), so it can't be switched on in the middle
   of a fight.
-- The shop starts with a few prefixes, nine trails, eight auras (including coloured dust and potion swirls) and KeepInventory; they're only examples. In **Edit**
-  (Shop → Cosmetics → **Edit cosmetics**, or **Edit cosmetics** in Settings → Shop) the settings owner adds
-  new ones, changes names, prefix texts, trail particles and prices, takes things off sale (owners keep them)
-  or deletes them (everyone who paid gets their credits back). A player's profile has **Give for free** and **Take away** for
+- The shop starts with a few prefixes, every particle (250 credits each) and KeepInventory. In **Edit** (Shop →
+  Cosmetics → **Edit cosmetics**, or **Edit cosmetics** in Settings → Shop) the settings owner adds new
+  prefixes and profile cards, changes names, prefix texts and prices (**Price of every particle** sets them all
+  at once), takes things off sale (owners keep them) or deletes them (everyone who paid gets their credits back;
+  particles are taken off sale instead, since every Minecraft particle is always listed).
+- Upgrading from before 0.28.0, where trails and auras were separate items: at the first start each old trail
+  and aura becomes the particle it showed, kept in use as a trail or aura with the player's look. Someone who had
+  a trail and an aura of the same particle paid twice for what is now one, so the second payment goes back to them. A player's profile has **Give for free** and **Take away** for
   admins. Purchases are in the credit history and everything is in the Logs (**Cosmetics** filter).
 - `cosmetics-enabled=false` stops new purchases; what players already have keeps working.
 
@@ -744,8 +752,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.27.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.27.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.28.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.28.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 
