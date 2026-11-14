@@ -50,6 +50,7 @@ public final class Community {
     private final Market market;
     private final Cosmetics cosmetics;
     private final Groups groups;
+    private final ShopReminder shopReminder;
     /** Players their server reported as AFK. Cleared when they switch server or leave. */
     private final Set<UUID> afk = ConcurrentHashMap.newKeySet();
 
@@ -62,6 +63,7 @@ public final class Community {
         this.market = new Market(plugin, this);
         this.cosmetics = new Cosmetics(plugin, this);
         this.groups = new Groups(plugin);
+        this.shopReminder = new ShopReminder(plugin, this);
     }
 
     public void start() {
@@ -71,6 +73,7 @@ public final class Community {
                 .delay(TICK_SECONDS, TimeUnit.SECONDS).repeat(TICK_SECONDS, TimeUnit.SECONDS).schedule();
         market.start();
         cosmetics.start();
+        shopReminder.start();
     }
 
     public FadActions actions() {
@@ -144,6 +147,16 @@ public final class Community {
         afk.remove(player);
     }
 
+    boolean isAfk(UUID player) {
+        return afk.contains(player);
+    }
+
+    /** The player left the proxy. */
+    void left(UUID player) {
+        afk.remove(player);
+        shopReminder.left(player);
+    }
+
     /**
      * Every minute: playtime for everyone on a server, and credits for whoever has played long enough. On a server
      * where earning credits is off it's still playtime, but doesn't count toward a reward.
@@ -177,12 +190,15 @@ public final class Community {
             plugin.logger().error("Could not record playtime", e);
             return;
         }
-        if (plugin.messages().isEmpty("minecraft.fad.playtime-reward")) {
-            return;
-        }
+        boolean show = !plugin.messages().isEmpty("minecraft.fad.playtime-reward");
         for (PlaytimeReward reward : rewards) {
-            plugin.proxy().getPlayer(reward.uuid()).ifPresent(player -> player.sendActionBar(plugin.messages().minecraft(
-                    "minecraft.fad.playtime-reward", "amount", c.credits(reward.amount()), "balance", c.credits(reward.balance()))));
+            plugin.proxy().getPlayer(reward.uuid()).ifPresent(player -> {
+                if (show) {
+                    player.sendActionBar(plugin.messages().minecraft("minecraft.fad.playtime-reward",
+                            "amount", c.credits(reward.amount()), "balance", c.credits(reward.balance())));
+                }
+                shopReminder.earned(player);
+            });
         }
     }
 
@@ -218,6 +234,9 @@ public final class Community {
         if (amount > 0 && !plugin.messages().isEmpty("minecraft.fad.advancement-reward")) {
             player.sendMessage(plugin.messages().minecraft("minecraft.fad.advancement-reward",
                     "amount", c.credits(amount), "advancement", title));
+        }
+        if (amount > 0) {
+            shopReminder.earned(player);
         }
         if (c.fadDiscordAdvancements()) {
             String messageKey = amount > 0 ? "discord.fad.advancement" : "discord.fad.advancement-no-reward";

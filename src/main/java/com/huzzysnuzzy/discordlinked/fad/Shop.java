@@ -40,6 +40,8 @@ public final class Shop {
 
     public static final int CHEST_SLOTS = 27;
     private static final String CHEST = "chest";
+    /** The chest every order comes in. */
+    static final String CHEST_ID = CHEST;
     /** The server gives up delivering after 8 seconds, so by 12 nothing can still arrive and a refund is safe. */
     private static final long DELIVERY_TIMEOUT_SECONDS = 12;
 

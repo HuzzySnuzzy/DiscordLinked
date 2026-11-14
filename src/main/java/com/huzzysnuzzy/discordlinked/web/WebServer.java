@@ -103,7 +103,7 @@ public final class WebServer {
     /** Everything the community view (non-admins and off-duty admins) may call. */
     private static final Set<String> MEMBER_ROUTES = Set.of("GET /api/me", "GET /api/home", "GET /api/community",
             "GET /api/members", "GET /api/search", "GET /api/player", "GET /api/poll", "POST /api/duty",
-            "GET /api/shop", "POST /api/shop/checkout", "POST /api/shop/auto-micro", "GET /api/market", "POST /api/market/exchange",
+            "GET /api/shop", "POST /api/shop/checkout", "POST /api/shop/auto-micro", "POST /api/shop/reminders", "GET /api/market", "POST /api/market/exchange",
             "GET /api/leaderboard", "GET /api/cosmetics", "POST /api/cosmetics/buy", "POST /api/cosmetics/equip",
             "POST /api/cosmetics/style", "GET /api/groups", "POST /api/groups/create", "POST /api/groups/invite",
             "POST /api/groups/cancel-invite", "POST /api/groups/accept", "POST /api/groups/decline", "POST /api/groups/leave",
@@ -440,13 +440,25 @@ public final class WebServer {
      * with which view) is checked when the link is used.
      */
     public String createLoginLink(long discordId, String name, String avatarUrl) {
+        return createLoginLink(discordId, name, avatarUrl, null);
+    }
+
+    /** A one-time login link; {@code page} ("shop", or null for the home page) is where it lands. */
+    public String createLoginLink(long discordId, String name, String avatarUrl, String page) {
         String base = publicUrl;
         if (base == null) {
             return null;
         }
         String avatar = avatarUrl == null ? DiscordOAuth.avatarUrl(discordId, null) : avatarUrl;
         String token = sessions.newLoginLink(new DiscordOAuth.DiscordUser(discordId, name, avatar));
-        return base + "/login/link?t=" + token;
+        return base + "/login/link?t=" + token + (loginPage(page) ? "&to=" + page : "");
+    }
+
+    /** Where a /dla link may land after logging in: its {@code to} -> the page. Anything else lands on the home page. */
+    private static final Map<String, String> LOGIN_PAGES = Map.of("shop", "/#/shop");
+
+    private static boolean loginPage(String page) {
+        return page != null && LOGIN_PAGES.containsKey(page);
     }
 
     private static Optional<String> detectPublicIp() {
@@ -612,6 +624,7 @@ public final class WebServer {
             case "GET /api/shop" -> sendJson(ex, 200, shop(session));
             case "POST /api/shop/checkout" -> shopCheckout(ex, session);
             case "POST /api/shop/auto-micro" -> shopAutoMicro(ex, session);
+            case "POST /api/shop/reminders" -> shopReminders(ex, session);
             case "POST /api/shop/item" -> shopItem(ex, session);
             case "GET /api/market" -> sendJson(ex, 200, market(session));
             case "POST /api/market/exchange" -> marketExchange(ex, session);
@@ -711,6 +724,7 @@ public final class WebServer {
      */
     private void loginLinkPage(HttpExchange ex) throws IOException {
         String token = query(ex).get("t");
+        String to = query(ex).get("to");
         Sessions.LoginLink link = sessions.peekLoginLink(token);
         if (link == null) {
             sendMessagePage(ex, 410, "Link expired", "This login link was already used or has expired. "
@@ -722,6 +736,7 @@ public final class WebServer {
                 .replace("{{message}}", "This one-time link logs you into the website."
                         + "</p><form method=\"post\" action=\"/login/link\" class=\"inline-form\">"
                         + "<input type=\"hidden\" name=\"t\" value=\"" + escapeHtml(token) + "\">"
+                        + (loginPage(to) ? "<input type=\"hidden\" name=\"to\" value=\"" + to + "\">" : "")
                         + "<button class=\"btn\" type=\"submit\">Continue</button></form><p hidden>")
                 .replace("{{actions}}", "");
         send(ex, 200, CONTENT_TYPES.get("html"), html.getBytes(StandardCharsets.UTF_8));
@@ -730,9 +745,12 @@ public final class WebServer {
     private void useLoginLink(HttpExchange ex) throws IOException {
         byte[] bytes = ex.getRequestBody().readNBytes(MAX_BODY_BYTES);
         String token = null;
+        String to = null;
         for (String part : new String(bytes, StandardCharsets.UTF_8).split("&")) {
             if (part.startsWith("t=")) {
                 token = URLDecoder.decode(part.substring(2), StandardCharsets.UTF_8);
+            } else if (part.startsWith("to=")) {
+                to = URLDecoder.decode(part.substring(3), StandardCharsets.UTF_8);
             }
         }
         Sessions.LoginLink link = sessions.consumeLoginLink(token);
@@ -752,7 +770,7 @@ public final class WebServer {
                 + (access == Access.ADMIN ? "" : " (community view)"), link.user().actor());
         ex.getResponseHeaders().add("Set-Cookie", cookie(SESSION_COOKIE, session.token,
                 Sessions.SESSION_LIFETIME.toSeconds()));
-        redirect(ex, "/");
+        redirect(ex, loginPage(to) ? LOGIN_PAGES.get(to) : "/");
     }
 
     private void startLogin(HttpExchange ex) throws IOException {
@@ -1406,6 +1424,7 @@ public final class WebServer {
         buyer.put("balance", account.map(CreditAccount::credits).orElse(0L))
                 .put("micro", account.map(CreditAccount::micro).orElse(0L))
                 .put("autoMicro", plugin.database().shopAutoMicro(uuid))
+                .put("reminders", plugin.config().shopReminderMinutes() > 0 ? plugin.database().shopReminders(uuid) : null)
                 .put("exchange", open ? microCurrency().put("rate", c.microPerCredit()) : null);
     }
 
@@ -1428,6 +1447,25 @@ public final class WebServer {
                 ? "What your " + c.creditsNamePlural().toLowerCase(java.util.Locale.ROOT) + " don't cover is paid with your "
                         + many + " (" + c.micro(c.microPerCredit()) + " = 1 " + c.creditsName() + ")."
                 : "You pay with " + c.creditsNamePlural().toLowerCase(java.util.Locale.ROOT) + " only."));
+    }
+
+    /** {@code {on}}: whether the player is reminded in game that they have credits to spend here. */
+    private void shopReminders(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        Optional<LinkedAccount> me = plugin.database().findByDiscordId(session.user.id());
+        if (me.isEmpty()) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        boolean on = body.getBoolean("on", false);
+        plugin.database().setShopReminders(me.get().uuid(), me.get().minecraftName(), on);
+        sendJson(ex, 200, DataObject.empty().put("ok", true).put("reminders", on).put("message", on
+                ? "You'll be reminded in game when you have " + plugin.config().creditsNamePlural().toLowerCase(java.util.Locale.ROOT)
+                        + " to spend here."
+                : "No more Shop reminders in game. Switch them back on here, or with /dla reminders on."));
     }
 
     private void shopCheckout(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {

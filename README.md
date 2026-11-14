@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.28.0.jar` there instead.
+   `DiscordLinkedBackend-0.29.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.28.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.29.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -680,6 +680,9 @@ In game / console (`discordlinked.admin`): `/dlink lookup <player>`, `/dlink unl
 now, or restart in 15 seconds to install a downloaded update, which in game also needs
 `discordlinked.update.restart`; see [Updates](#updates)).
 
+In game, for everyone: `/dla` (website login link), `/dla shop` (the same, opening the Shop) and
+`/dla reminders [on|off]` (Shop reminders).
+
 In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, and
 `/discordlinkedbackend reload` (or `/dlb reload`; op). Their permissions are under
@@ -694,6 +697,18 @@ A few seconds after joining, players see their credits (and microcredits, when s
 **[/dla]** reminder for the website. On the first join of the day the daily reward message already shows their
 credits, so the balance line is skipped unless there are microcredits to show. Change or turn off these lines
 (`minecraft.join.*`, empty = off) in `messages.properties`.
+
+Every hour of play (`shop-reminder-minutes`, Settings → Shop; 0 = never) players are reminded that they have
+credits to spend: *"You have 240 Credits to spend in the Shop: [Open the Shop] [Don't remind me]"*. Once one is
+due it comes right after the next credits they earn (for playing or an advancement); on a server where they
+don't earn credits, or while AFK, it comes on its own. The first is an hour after joining, since the join
+message already points to the website. Only linked players who can afford something are reminded: one of the
+cheapest Shop item in its chest, or a cosmetic on sale they don't have yet (counting their microcredits when they
+pay the rest with them), and only while the website is up and the Shop or the Cosmetics shop is open.
+**[Open the Shop]** runs `/dla shop`, a login link that opens the Shop. Players turn reminders off with
+**[Don't remind me]**, `/dla reminders off` (back on with `/dla reminders on`) or **Remind me in game** at the top
+of the Shop. Change the text, or leave `minecraft.fad.shop-reminder` empty to turn it off for everyone, in
+`messages.properties`.
 
 ## Updates
 
@@ -752,8 +767,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.28.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.28.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.29.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.29.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

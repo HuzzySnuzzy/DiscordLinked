@@ -81,7 +81,8 @@ public record PluginConfig(
         boolean geoipEnabled,
         String geoipToken,
         Updater.Policy updatePolicy,
-        Updater.Restart backendRestart
+        Updater.Restart backendRestart,
+        int shopReminderMinutes
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -161,8 +162,18 @@ public record PluginConfig(
                 Updater.Policy.of(props.getProperty("auto-update", ""), props.getProperty("auto-update-restart", ""),
                         props.getProperty("auto-update-restart-time", ""), props.getProperty("auto-update-repository", ""),
                         props.getProperty("auto-update-check-hours", "")),
-                Updater.Policy.parseRestart(props.getProperty("auto-update-backend-restart", ""))
+                Updater.Policy.parseRestart(props.getProperty("auto-update-backend-restart", "")),
+                Math.max(0, parseInt(props, "shop-reminder-minutes", 60))
         );
+    }
+
+    /** A whole number, or {@code fallback} when it's missing or isn't one. */
+    private static int parseInt(Properties props, String key, int fallback) {
+        try {
+            return Integer.parseInt(props.getProperty(key, "").trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private static long parseId(Properties props, String key) {

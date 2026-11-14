@@ -854,8 +854,11 @@ async function loadPlayer(uuid) {
       return;
     }
     if (changed) state.inventory = null;
+    // Redrawing the same player empties the activity log until it has loaded again; holding the page's height
+    // meanwhile stops the browser from scrolling up when the page is briefly shorter.
+    if (!changed) view.style.minHeight = `${view.offsetHeight}px`;
     render(renderPlayer);
-    loadPlayerLogs(true);
+    loadPlayerLogs(true).finally(() => { view.style.minHeight = ''; });
     if (currentRoute().inventory && state.player.player.online && changed) loadInventory();
   } catch (e) {
     if (!changed) toast(e.message);
@@ -1064,7 +1067,7 @@ function renderPlayer() {
     el('div', { class: 'grid' }, discord, minecraft, suspension),
     ...inventorySection(p),
     ...mcDataSection(p, state.player.mcData),
-    ...unlocksSection(p, state.player.cosmetics),
+    unlocksBlock(p, state.player.cosmetics),
     ...communitySection(p, state.player.community),
     ...notesSection, ...historySection, ...ipSection, ...activitySection);
 }
@@ -1095,7 +1098,37 @@ async function equipCosmetic(item, on, button, as) {
   } catch (e) {
     toast(e.message);
   }
-  refreshCurrentView();
+  refreshUnlocks();
+}
+
+/** The particle search under Unlocks, kept while that player's page is re-drawn. */
+let unlockQuery = '';
+let unlockQueryFor = null;
+
+/** Unlocks in a box of their own, so a switch or a menu there redraws only this part of the page (see refreshUnlocks). */
+function unlocksBlock(p, cosData) {
+  return el('div', { id: 'player-unlocks', class: 'section-block' }, unlocksSection(p, cosData));
+}
+
+/**
+ * After a change under Unlocks: loads the player again and redraws only Unlocks, so the rest of the page (and where
+ * it's scrolled to) stays as it is. Anywhere else it's a normal refresh.
+ */
+async function refreshUnlocks() {
+  const box = $('player-unlocks');
+  const route = currentRoute();
+  if (route.view !== 'player' || !box || !state.player || state.player.player.uuid !== route.uuid) {
+    refreshCurrentView();
+    return;
+  }
+  try {
+    const data = await api(`/api/player?uuid=${encodeURIComponent(route.uuid)}`);
+    if (currentRoute().uuid !== route.uuid || !box.isConnected) return;
+    state.player = { ...state.player, cosmetics: data.cosmetics, community: data.community };
+    keepFocus(box, () => box.replaceChildren(...unlocksSection(state.player.player, data.cosmetics)));
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function unlocksSection(p, cos) {
@@ -1105,40 +1138,85 @@ function unlocksSection(p, cos) {
   const groups = COSMETIC_KINDS.map(([kind, title]) => [title, cos.items.filter((item) => item.kind === kind)])
     .filter(([, items]) => items.length);
   const cur = state.player?.community?.currency || { one: 'credit', many: 'credits' };
+  const takeAway = (item) => cos.canGive && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
+    title: `Take ${item.name} away from ${p.minecraftName}?`,
+    text: item.paid ? `They paid ${credits(item.paid, cur)} for it and don't get that back.` : 'It was given to them.',
+    confirmLabel: 'Take it away', confirmClass: 'btn-danger',
+    onConfirm: async () => {
+      toast((await api('/api/cosmetics/revoke', { uuid: p.uuid, id: item.id })).message);
+      refreshUnlocks();
+    },
+  }) }, 'Take away');
+  const acquired = (item) => (item.paid ? `Bought for ${credits(item.paid, cur)} · ${shortDate(item.acquiredAt)}` : `Given · ${shortDate(item.acquiredAt)}`);
+  // A particle's trail and aura, each switched on separately and with its own look (picked here, saved at once).
+  const particleUse = (item, as, label, on, style, fallback) => {
+    let toggle;
+    if (self) {
+      const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `${item.name} as your ${as}` });
+      box.checked = on;
+      box.addEventListener('change', () => equipCosmetic(item, box.checked, box, as));
+      toggle = el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }));
+    } else {
+      toggle = el('span', { class: `badge ${on ? 'good' : ''}` }, on ? 'On' : 'Off');
+    }
+    const editor = self ? styleEditor(style, fallback, item.colorable, async (picked) => {
+      try {
+        toast((await api('/api/cosmetics/style', { id: item.id, as, style: picked })).message);
+      } catch (e) {
+        toast(e.message);
+      }
+      refreshUnlocks();
+    }) : styleText(style) && el('span', { class: 'muted' }, styleText(style));
+    return el('div', { class: `particle-use ${on ? 'on' : ''}` }, el('span', { class: 'particle-use-label' }, label), toggle, editor);
+  };
+  // Particles are cards in a grid: there can be a lot of them, each with a trail and an aura.
+  const particleCard = (item) => {
+    const inUse = item.asTrail || item.asAura;
+    // The badge sits on the preview, so switching a particle on or off never changes a card's height (which would
+    // move every card below it).
+    const preview = cosmeticPreview(item, { name: p.minecraftName, uuid: p.uuid });
+    if (inUse) preview.append(el('span', { class: 'badge good unlock-card-badge' }, [item.asTrail && 'Trail', item.asAura && 'Aura'].filter(Boolean).join(' & ')));
+    return el('div', { class: `unlock-card ${inUse ? 'on' : ''}`, 'data-key': item.id, 'data-name': item.name.toLowerCase() },
+      preview,
+      el('div', { class: 'unlock-text' }, el('div', { class: 'unlock-name' }, item.name), el('div', { class: 'muted' }, acquired(item))),
+      el('div', { class: 'particle-uses' },
+        particleUse(item, 'trail', 'Trail', item.asTrail, item.trailStyle, item.trailDefault),
+        particleUse(item, 'aura', 'Aura', item.asAura, item.auraStyle, item.auraDefault)),
+      cos.canGive && el('div', { class: 'unlock-card-foot' }, takeAway(item)));
+  };
+  const particleGrid = (items) => {
+    // Always in shop order: switching one on or off mustn't move cards around under the pointer.
+    if (unlockQueryFor !== p.uuid) {
+      unlockQuery = '';
+      unlockQueryFor = p.uuid;
+    }
+    const cards = items.map(particleCard);
+    const grid = el('div', { class: 'unlock-cards' }, cards);
+    if (items.length <= 6) return [grid];
+    const none = el('p', { class: 'muted unlock-none', hidden: true }, 'No particle with that name.');
+    const filter = () => {
+      const q = unlockQuery.trim().toLowerCase();
+      let shown = 0;
+      for (const card of cards) {
+        card.hidden = !!q && !card.dataset.name.includes(q);
+        if (!card.hidden) shown++;
+      }
+      none.hidden = shown > 0;
+    };
+    const search = el('input', { type: 'search', class: 'cos-search', placeholder: `Find one of ${items.length} particles`,
+      'aria-label': 'Find a particle', value: unlockQuery });
+    search.addEventListener('input', () => { unlockQuery = search.value; filter(); });
+    filter();
+    return [el('div', { class: 'unlock-tools' }, search), grid, none];
+  };
   const row = (item) => {
-    let sub = item.paid ? `Bought for ${credits(item.paid, cur)} · ${shortDate(item.acquiredAt)}` : `Given · ${shortDate(item.acquiredAt)}`;
+    let sub = acquired(item);
     if (item.kind === 'keepinv' && item.equipped) {
       sub = keepFrom > cos.now ? `Starts working at ${new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date(keepFrom))}`
         : 'Working: items and XP are kept on death';
     }
     let control;
-    let look = null;
-    if (item.kind === 'particle') {
-      // A trail and an aura, each switched on separately and with its own look (picked here, saved at once).
-      const use = (as, label, on, style, fallback) => {
-        let toggle;
-        if (self) {
-          const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `${item.name} as your ${as}` });
-          box.checked = on;
-          box.addEventListener('change', () => equipCosmetic(item, box.checked, box, as));
-          toggle = el('label', { class: 'switch' }, box, el('span', { class: 'switch-track' }));
-        } else {
-          toggle = el('span', { class: `badge ${on ? 'good' : ''}` }, on ? 'On' : 'Off');
-        }
-        const editor = self ? styleEditor(style, fallback, item.colorable, async (picked) => {
-          try {
-            toast((await api('/api/cosmetics/style', { id: item.id, as, style: picked })).message);
-          } catch (e) {
-            toast(e.message);
-          }
-          refreshCurrentView();
-        }) : styleText(style) && el('span', { class: 'muted' }, styleText(style));
-        return el('div', { class: `particle-use ${on ? 'on' : ''}` }, el('span', { class: 'particle-use-label' }, label), toggle, editor);
-      };
-      look = el('div', { class: 'particle-uses' },
-        use('trail', 'Trail', item.asTrail, item.trailStyle, item.trailDefault),
-        use('aura', 'Aura', item.asAura, item.auraStyle, item.auraDefault));
-    } else if (self) {
+    if (self) {
       const box = el('input', { type: 'checkbox', role: 'switch', 'aria-label': `Use ${item.name}` });
       box.checked = item.equipped;
       box.addEventListener('change', () => equipCosmetic(item, box.checked, box));
@@ -1146,21 +1224,11 @@ function unlocksSection(p, cos) {
     } else {
       control = el('span', { class: `badge ${item.equipped ? 'good' : ''}` }, item.equipped ? 'In use' : 'Off');
     }
-    const inUse = item.equipped || item.asTrail || item.asAura;
-    return el('div', { class: `unlock ${inUse ? 'on' : ''} ${item.kind === 'particle' ? 'unlock-particle' : ''}`, 'data-key': item.id },
+    return el('div', { class: `unlock ${item.equipped ? 'on' : ''}`, 'data-key': item.id },
       cosmeticPreview(item, { name: p.minecraftName, uuid: p.uuid }, true),
       el('div', { class: 'unlock-text' }, el('div', { class: 'unlock-name' }, item.name), el('div', { class: 'muted' }, sub)),
-      look,
       control,
-      cos.canGive && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => confirmDialog({
-        title: `Take ${item.name} away from ${p.minecraftName}?`,
-        text: item.paid ? `They paid ${credits(item.paid, cur)} for it and don't get that back.` : 'It was given to them.',
-        confirmLabel: 'Take it away', confirmClass: 'btn-danger',
-        onConfirm: async () => {
-          toast((await api('/api/cosmetics/revoke', { uuid: p.uuid, id: item.id })).message);
-          refreshCurrentView();
-        },
-      }) }, 'Take away'));
+      takeAway(item));
   };
   let give = null;
   if (cos.canGive) {
@@ -1176,7 +1244,7 @@ function unlocksSection(p, cos) {
         } catch (err) {
           toast(err.message);
         }
-        refreshCurrentView();
+        refreshUnlocks();
       } }, 'Give for free'));
   }
   if (!self && !cos.items.length && !give) return [];
@@ -1184,8 +1252,9 @@ function unlocksSection(p, cos) {
     el('h2', { class: 'section-title' }, self ? 'Your unlocks' : 'Unlocks',
       self && cos.open && el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics' }, 'Get more')),
     el('div', { class: 'card panel unlocks' },
-      groups.length ? groups.flatMap(([title, items]) => [el('div', { class: 'unlock-group' }, title), ...items.map(row)])
-        : el('p', { class: 'muted' }, self ? 'Nothing yet: prefixes, trails, auras, profile cards and KeepInventory are in the Shop.'
+      groups.length ? groups.flatMap(([title, items]) => [el('div', { class: 'unlock-group' }, title),
+        ...(items[0].kind === 'particle' ? particleGrid(items) : items.map(row))])
+        : el('p', { class: 'muted' }, self ? 'Nothing yet: prefixes, particles, profile cards and KeepInventory are in the Shop.'
           : 'No cosmetics yet.'),
       give),
   ];
@@ -3553,6 +3622,9 @@ function walletLine(b, currency) {
 /** The header's balance and "pay the rest with microcredits" switch, for the Items and Cosmetics tabs. */
 function renderWallet(b, currency) {
   $('shop-balance').replaceChildren(...walletLine(b, currency));
+  const remind = $('shop-remind');
+  remind.hidden = !b.linked || typeof b.reminders !== 'boolean';
+  if (!remind.hidden) $('shop-remind-box').checked = b.reminders;
   const wrap = $('shop-auto');
   wrap.hidden = !b.linked || !b.exchange;
   if (wrap.hidden) return;
@@ -3562,6 +3634,21 @@ function renderWallet(b, currency) {
   wrap.title = `When your ${currency.many.toLowerCase()} aren't enough, just enough ${b.exchange.many.toLowerCase()} are exchanged at `
     + `${b.exchange.rate.toLocaleString()} ${b.exchange.symbol} = 1 ${currency.one}.`;
 }
+
+$('shop-remind-box').addEventListener('change', async (e) => {
+  const box = e.currentTarget;
+  box.disabled = true;
+  try {
+    const result = await api('/api/shop/reminders', { on: box.checked });
+    for (const data of [shop.data, cos.data]) if (data?.buyer) data.buyer.reminders = result.reminders;
+    toast(result.message);
+  } catch (err) {
+    box.checked = !box.checked;
+    toast(err.message);
+  } finally {
+    box.disabled = false;
+  }
+});
 
 $('shop-auto-micro').addEventListener('change', async (e) => {
   const box = e.currentTarget;
@@ -4594,6 +4681,8 @@ function shopTabs() {
     .filter(([, open]) => open).map(([sub]) => sub);
 }
 
+let shopShownSub = null;
+
 function loadShopView() {
   const tabs = shopTabs();
   const wanted = currentRoute().sub || '';
@@ -4605,8 +4694,14 @@ function loadShopView() {
   $('shop-items').hidden = sub !== '';
   $('shop-cosmetics').hidden = sub !== 'cosmetics';
   $('shop-sell').hidden = sub !== 'sell';
-  $('shop-balance').replaceChildren();
-  $('shop-auto').hidden = true;
+  // Switching tabs clears the header until the new tab has loaded; a refresh of the same tab keeps it, so the page
+  // doesn't jump.
+  if (shopShownSub !== sub) {
+    $('shop-balance').replaceChildren();
+    $('shop-auto').hidden = true;
+    $('shop-remind').hidden = true;
+    shopShownSub = sub;
+  }
   if (sub === 'cosmetics') loadCosmetics();
   else if (sub === 'sell') loadMarket();
   else loadShop();
@@ -5004,7 +5099,7 @@ function renderPublicPlayer() {
     el('a', { class: 'back', href: '#/players' }, '← All players'),
     profileHeader(p, false),
     el('div', { class: 'grid' }, discord, server),
-    ...unlocksSection(p, state.player.cosmetics),
+    unlocksBlock(p, state.player.cosmetics),
     ...communitySection(p, state.player.community));
 }
 

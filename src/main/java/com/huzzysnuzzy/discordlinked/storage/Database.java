@@ -415,6 +415,7 @@ public final class Database implements AutoCloseable {
         }
         // Added in 0.27.0: whether a player pays what their credits don't cover with microcredits (Shop).
         addColumnIfMissing("fad_accounts", "shop_auto_micro", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("fad_accounts", "shop_reminders", "INTEGER NOT NULL DEFAULT 1");
         // Added in 0.26.0: resets of players' data (website: MC data), their delivery to the backend servers, and
         // what each server last said about each player's data.
         try (Statement st = connection.createStatement()) {
@@ -3777,6 +3778,30 @@ public final class Database implements AutoCloseable {
             ensureCreditAccount(uuid, name);
             try (PreparedStatement ps = connection.prepareStatement(
                     "UPDATE fad_accounts SET shop_auto_micro = ? WHERE minecraft_uuid = ?")) {
+                ps.setInt(1, on ? 1 : 0);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    /** Whether the player wants to be reminded in game about the Shop (on unless they turned it off). */
+    public synchronized boolean shopReminders(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT shop_reminders FROM fad_accounts WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return !rs.next() || rs.getInt(1) != 0;
+            }
+        }
+    }
+
+    public synchronized void setShopReminders(UUID uuid, String name, boolean on) throws SQLException {
+        transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET shop_reminders = ? WHERE minecraft_uuid = ?")) {
                 ps.setInt(1, on ? 1 : 0);
                 ps.setString(2, uuid.toString());
                 ps.executeUpdate();

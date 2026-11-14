@@ -273,7 +273,7 @@ final class FadBridge {
 
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
-        community.clearAfk(event.getPlayer().getUniqueId());
+        community.left(event.getPlayer().getUniqueId());
     }
 
     /** Plays an interaction's sound and particles at a player, for interactions started on Discord. */

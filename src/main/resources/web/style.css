@@ -1517,6 +1517,29 @@ html:has(.topbar :focus) { scroll-padding-top: 0; }
   .unlock { flex-wrap: wrap; }
   .unlock .cos-preview.small { width: 100%; }
 }
+#player-unlocks { display: contents; }
+/* Particles: a grid of cards, each with its trail and aura. */
+.unlock-tools { display: flex; gap: 10px; align-items: center; margin: 2px 4px 6px; }
+.unlock-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 10px; }
+.unlock-card {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 10px; border-radius: 16px;
+  border: 1px solid var(--glass-line); background: var(--glass-soft); transition: border-color .2s, background-color .2s;
+}
+.unlock-card[hidden] { display: none; }
+.unlock-card:hover { background: var(--glass-strong); }
+.unlock-card.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.unlock-card .cos-preview { width: 100%; height: 96px; }
+@media (max-width: 560px) { .unlock-card .cos-preview { height: 72px; } }
+.unlock-card-badge { position: absolute; top: 6px; right: 6px; z-index: 2; }
+.unlock-card .unlock-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unlock-card .particle-use { display: grid; grid-template-columns: 3.2em auto minmax(0, 1fr); gap: 8px; }
+.unlock-card .style-editor { justify-content: flex-start; min-width: 0; }
+.unlock-card .style-editor select { max-width: 100%; min-width: 0; flex: 1; }
+.unlock-card .style-color { flex-basis: 100%; }
+.unlock-card .style-color select { flex: 1; }
+.unlock-card-foot { display: flex; justify-content: flex-end; margin-top: auto; }
+.unlock-none { margin: 4px; }
+:root[data-theme="2049"] .unlock-card { border-radius: 2px; }
 
 /* ---- Dialogs ---- */
 dialog.wide { width: min(540px, calc(100vw - 32px)); }

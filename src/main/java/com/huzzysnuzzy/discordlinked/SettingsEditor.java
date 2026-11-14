@@ -129,9 +129,12 @@ public final class SettingsEditor {
             number("shop-price-percent", "Shop", "Price multiplier (%)",
                     "Every price times this: 100 = the built-in prices, 50 = half, 200 = double. "
                             + "Single items are changed on the Shop page.", 1, 100_000),
+            number("shop-reminder-minutes", "Shop", "Remind players about the Shop every … minutes",
+                    "In game, together with the credits they earn (or after this long without earning any), to linked "
+                            + "players who can afford something. Players can turn it off for themselves. 0 = never.", 0, 10_080),
 
             bool("cosmetics-enabled", "Shop", "Cosmetics shop open",
-                    "Players can buy prefixes, trails, auras, profile cards and KeepInventory. Off: nothing can be bought, "
+                    "Players can buy prefixes, particles (trails and auras), profile cards and KeepInventory. Off: nothing can be bought, "
                             + "but what players have keeps working. The items are made on the Shop page.", false),
             number("keep-inventory-delay-minutes", "Shop", "KeepInventory starts after (minutes)",
                     "So it can't be switched on in the middle of a fight. 0 = right away.", 0, 1440),
