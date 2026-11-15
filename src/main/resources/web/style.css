@@ -1531,6 +1531,8 @@ html:has(.topbar :focus) { scroll-padding-top: 0; }
 .homes-shared { margin-top: 10px; }
 .title-with-badge { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cos-tile[hidden] { display: none; }
+/* Shop, for the settings owner: items newer than the built-in price list (priced like similar items). */
+.shop-item.guessed::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 /* Tabs for the kinds of cosmetics (Shop -> Cosmetics) and unlocks: one kind at a time. */
 .cos-kinds { width: fit-content; max-width: 100%; margin-bottom: 14px; }
 .unlocks .cos-kinds { margin: 0 0 10px; }

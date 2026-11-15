@@ -1419,7 +1419,7 @@ async function loadPlayerLogs(reset) {
 // ---- Inventory viewer ----
 
 // Item icons come from the minecraft-textures package on jsDelivr, loaded by the admin's browser.
-const TEXTURES = 'https://cdn.jsdelivr.net/npm/minecraft-textures@26.2.1/dist/textures';
+const TEXTURES = 'https://cdn.jsdelivr.net/npm/minecraft-textures@26.3.0/dist/textures';
 const textureCache = {};
 
 const versionKey = (v) => v.split('.').map((n) => parseInt(n, 10) || 0);
@@ -3868,7 +3868,7 @@ function renderShopGrid() {
  */
 function shopItemNode(item, index) {
   const node = el('button', {
-    class: `slot shop-item ${item.disabled ? 'off' : ''} ${item.unavailable ? 'unavailable' : ''}`, type: 'button', tabindex: '-1',
+    class: `slot shop-item ${item.disabled ? 'off' : ''} ${item.unavailable ? 'unavailable' : ''} ${item.guessed ? 'guessed' : ''}`, type: 'button', tabindex: '-1',
     'aria-label': `${shopName(item.id)}, ${fromCents(item.price)} ${shop.data.currency.many} each`,
   }, shopIcon(item.id));
   node.addEventListener('focus', () => {
@@ -3938,6 +3938,7 @@ function showShopTooltip(anchor, item) {
   }
   if (item.disabled) lines.push(el('div', { class: 'tt-lore' }, 'Not for sale (only you see it)'));
   if (item.unavailable) lines.push(el('div', { class: 'tt-lore' }, "Not in your servers' Minecraft version"));
+  if (item.guessed) lines.push(el('div', { class: 'tt-lore' }, 'Newer than the built-in price list: priced like similar items'));
   if (d.manage && item.percent !== 100) lines.push(el('div', { class: 'tt-lore' }, `Priced at ${item.percent}%`));
   tooltip.replaceChildren(...lines);
   tooltip.hidden = false;

@@ -61,7 +61,14 @@ public final class Shop {
 
     private final DiscordLinked plugin;
     private final Community community;
-    private final Map<String, Item> catalog;
+    /** shop-items.json: the items of the Minecraft version it was made for. */
+    private final Map<String, Item> builtIn;
+    /** Items in that version that aren't sold on purpose (no survival way to get them, or they need extra data). */
+    private final Set<String> excluded;
+    /** The built-in items plus guesses for items only newer Minecraft versions have (see {@link #guess}). */
+    private volatile Map<String, Item> catalog;
+    /** Which items in the catalog are guesses. */
+    private volatile Set<String> guessed = Set.of();
     private final Map<String, Delivery> deliveries = new ConcurrentHashMap<>();
     private final Set<UUID> checkingOut = ConcurrentHashMap.newKeySet();
     /** Items each server knows (from its backend plugin), so items from newer Minecraft versions aren't offered. */
@@ -70,29 +77,115 @@ public final class Shop {
     Shop(DiscordLinked plugin, Community community) {
         this.plugin = plugin;
         this.community = community;
-        this.catalog = loadCatalog();
+        DataObject file = readCatalogFile();
+        DataArray items = file.getArray("items");
+        Map<String, Item> catalog = new LinkedHashMap<>();
+        for (int i = 0; i < items.length(); i++) {
+            DataObject item = items.getObject(i);
+            catalog.put(item.getString("id"), new Item(item.getString("id"), item.getString("tab"),
+                    item.getInt("stack"), item.getLong("price")));
+        }
+        this.builtIn = Collections.unmodifiableMap(catalog);
+        Set<String> skip = new java.util.HashSet<>();
+        DataArray excludedItems = file.optArray("excluded").orElse(DataArray.empty());
+        for (int i = 0; i < excludedItems.length(); i++) {
+            skip.add(excludedItems.getString(i));
+        }
+        this.excluded = Set.copyOf(skip);
+        this.catalog = builtIn;
     }
 
-    private static Map<String, Item> loadCatalog() {
+    private static DataObject readCatalogFile() {
         try (InputStream in = Shop.class.getResourceAsStream("/shop-items.json")) {
             if (in == null) {
                 throw new IllegalStateException("shop-items.json missing from the plugin jar");
             }
-            DataArray items = DataObject.fromJson(in).getArray("items");
-            Map<String, Item> catalog = new LinkedHashMap<>();
-            for (int i = 0; i < items.length(); i++) {
-                DataObject item = items.getObject(i);
-                catalog.put(item.getString("id"), new Item(item.getString("id"), item.getString("tab"),
-                        item.getInt("stack"), item.getLong("price")));
-            }
-            return Collections.unmodifiableMap(catalog);
+            return DataObject.fromJson(in);
         } catch (IOException e) {
             throw new IllegalStateException("Could not read shop-items.json", e);
         }
     }
 
+    /** Everything the shop can sell: the built-in items, plus guessed ones for newer Minecraft versions. */
     public Map<String, Item> catalog() {
         return catalog;
+    }
+
+    /** Whether an item's tab, stack size and price are guessed (it's newer than shop-items.json). */
+    public boolean guessed(String id) {
+        return guessed.contains(id);
+    }
+
+    /** Older Minecraft names of items the built-in list has under their new name (1.21.9 renamed the chain). */
+    private static final Map<String, String> RENAMED = Map.of("chain", "iron_chain");
+
+    /** Never guessed, whatever the version: not obtainable in survival, or only useful with data the shop can't set. */
+    private static final java.util.regex.Pattern NEVER = java.util.regex.Pattern.compile(
+            "_spawn_egg$|_map$|command_block|^test_|structure_|jigsaw|debug|barrier|^light$|knowledge_book|_potion$"
+                    + "|^potion$|enchanted_book|tipped_arrow|written_book|^infested_|^suspicious_|spawner|^vault$");
+
+    /**
+     * A guess for an item shop-items.json doesn't have (from a newer Minecraft version than it was made for): the
+     * catalog items whose names end the same way, the longest such ending first ("maple_log" -> the logs,
+     * "red_cushion_slab" -> "_cushion_slab", then "_slab"). Their most common tab and stack size, and their median
+     * price. Null when nothing is alike, or the item isn't sold on purpose.
+     */
+    Item guess(String id) {
+        if (excluded.contains(id) || NEVER.matcher(id).find()) {
+            return null;
+        }
+        // Items an older Minecraft calls something else: the same item.
+        String newName = RENAMED.get(id);
+        if (newName != null && builtIn.containsKey(newName)) {
+            Item item = builtIn.get(newName);
+            return new Item(id, item.tab(), item.stack(), item.cents());
+        }
+        String[] parts = id.split("_");
+        for (int k = 1; k < parts.length; k++) {
+            String ending = "_" + String.join("_", java.util.Arrays.copyOfRange(parts, k, parts.length));
+            List<Item> alike = builtIn.values().stream().filter(i -> i.id().endsWith(ending)).toList();
+            if (alike.isEmpty()) {
+                continue;
+            }
+            String tab = mostCommon(alike.stream().map(Item::tab).toList());
+            int stack = mostCommon(alike.stream().map(Item::stack).toList());
+            long[] prices = alike.stream().mapToLong(Item::cents).sorted().toArray();
+            return new Item(id, tab, stack, prices[prices.length / 2]);
+        }
+        return null;
+    }
+
+    private static <T> T mostCommon(List<T> values) {
+        Map<T, Integer> counts = new LinkedHashMap<>();
+        values.forEach(v -> counts.merge(v, 1, Integer::sum));
+        return counts.entrySet().stream().max(Map.Entry.comparingByValue()).orElseThrow().getKey();
+    }
+
+    /** The catalog again after a server said which items it has: built-in, then guesses for the rest. */
+    private synchronized void rebuildCatalog() {
+        Set<String> all = availableItems();
+        if (all == null) {
+            catalog = builtIn;
+            guessed = Set.of();
+            return;
+        }
+        Map<String, Item> merged = new LinkedHashMap<>(builtIn);
+        Set<String> guesses = new java.util.HashSet<>();
+        for (String id : new java.util.TreeSet<>(all)) {
+            if (!merged.containsKey(id)) {
+                Item item = guess(id);
+                if (item != null) {
+                    merged.put(id, item);
+                    guesses.add(id);
+                }
+            }
+        }
+        if (!guesses.isEmpty() && !guesses.equals(guessed)) {
+            plugin.logger().info("The shop has {} items newer than its built-in list (priced like similar items; the "
+                    + "settings owner can change them on the Shop page): {}", guesses.size(), String.join(", ", new java.util.TreeSet<>(guesses)));
+        }
+        catalog = Collections.unmodifiableMap(merged);
+        guessed = Set.copyOf(guesses);
     }
 
     public boolean open() {
@@ -117,6 +210,7 @@ public final class Shop {
 
     void serverItems(String server, Set<String> items) {
         serverItems.put(server, Set.copyOf(items));
+        rebuildCatalog();
     }
 
     /** One item's price in hundredths of a credit, after the global and the item's own percentage. */

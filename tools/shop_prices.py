@@ -3,7 +3,7 @@
 Builds src/main/resources/shop-items.json: every item the website shop sells, with its creative tab, stack
 size and price. Run it again after changing the tables below:
 
-    python3 tools/shop_prices.py path/to/minecraft-textures/dist/textures/manifest/26.2.id.json
+    python3 tools/shop_prices.py path/to/minecraft-textures/dist/textures/manifest/26.3.id.json
 
 How prices are set (in credits per item; the file stores hundredths of a credit):
 - The anchor is what players earn: by default 20 credits per hour of active play, plus 10-50 per advancement.
@@ -24,7 +24,7 @@ CRAFT = 1.08  # crafting premium on top of the ingredients
 
 COLORS = ['white', 'light_gray', 'gray', 'black', 'brown', 'red', 'orange', 'yellow', 'lime', 'green', 'cyan',
           'light_blue', 'blue', 'purple', 'magenta', 'pink']
-WOODS = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'pale_oak', 'bamboo',
+WOODS = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'pale_oak', 'poplar', 'bamboo',
          'crimson', 'warped']
 
 # ---- Gathered resources (credits per item) ----
@@ -109,6 +109,10 @@ for w in WOODS:
     RAW[f'{w}_sapling'] = .2
 RAW['crimson_hyphae'] = RAW['warped_hyphae'] = .3
 RAW['azalea_leaves'] = .06; RAW['flowering_azalea_leaves'] = .07
+# 26.3: poplar leaves come in autumn colours; plants of the poplar forest
+for c in ('orange', 'red', 'yellow'):
+    RAW[f'{c}_poplar_leaves'] = .05
+RAW['red_shrub'] = .12; RAW['shelf_mushroom'] = .15
 for name in ['music_disc_13', 'music_disc_cat', 'music_disc_blocks', 'music_disc_chirp', 'music_disc_far',
              'music_disc_mall', 'music_disc_mellohi', 'music_disc_stal', 'music_disc_strad', 'music_disc_ward',
              'music_disc_11', 'music_disc_wait']:
@@ -251,6 +255,7 @@ R = {
     'netherite_horse_armor': ([('diamond_horse_armor', 1), ('netherite_ingot', 1)], 1),
 }
 RAW['golden_dandelion'] = 3
+R['straw_bed'] = ([('wheat', 6), ('oak_planks', 3)], 1)
 
 # Not sold: no survival way to get them, or they only make sense with extra data the shop doesn't set.
 EXCLUDE = {
@@ -263,6 +268,8 @@ EXCLUDE = {
     'infested_cobblestone', 'infested_stone_bricks', 'infested_mossy_stone_bricks', 'infested_cracked_stone_bricks',
     'infested_chiseled_stone_bricks', 'infested_deepslate', 'firework_star',
 }
+# Explorer maps (26.3) only exist with the map data the shop doesn't set.
+EXCLUDE_PATTERN = re.compile(r'_map$')
 
 DROP_TABS = {'Spawn Eggs', 'Operator'}
 TABS = [(0, 'Building Blocks'), (462, 'Colored Blocks'), (660, 'Natural Blocks'), (879, 'Functional Blocks'),
@@ -300,7 +307,7 @@ def price(item, depth=0):
     """Credits per item, or None if it isn't sold."""
     if item in prices:
         return prices[item]
-    if depth > 30 or item in EXCLUDE:
+    if depth > 30 or item in EXCLUDE or EXCLUDE_PATTERN.search(item):
         return None
     value = rule(item, depth)
     prices[item] = value
@@ -372,7 +379,8 @@ def rule(item, depth):
                      'stained_glass': p('glass', depth) + dye / 8, 'stained_glass_pane': (p('glass', depth) + dye / 8) * 6 / 16,
                      'bed': p('wool', depth) * 3 + p('oak_planks', depth) * 3, 'banner': p('wool', depth) * 6 + p('stick', depth),
                      'candle': p('candle', depth) + dye, 'shulker_box': p('shulker_box', depth) + dye,
-                     'bundle': p('string', depth) + p('leather', depth) + dye, 'harness': p('leather', depth) * 3 + p('glass', depth) * 2 + dye}
+                     'bundle': p('string', depth) + p('leather', depth) + dye, 'harness': p('leather', depth) * 3 + p('glass', depth) * 2 + dye,
+                     'cushion': p('wool', depth) * 2 + p('string', depth)}
             if rest in table:
                 return table[rest] * (CRAFT if rest not in ('dye',) else 1)
     if item.endswith('_dye') and item[:-4] in DYES:
@@ -454,18 +462,23 @@ if __name__ == '__main__':
     out = []
     for index, item in enumerate(ITEMS):
         tab = [t for start, t in tab_start if start <= index][-1]
-        if tab in DROP_TABS or item in EXCLUDE:
+        if tab in DROP_TABS or item in EXCLUDE or EXCLUDE_PATTERN.search(item):
             continue
         value = price(item)
         if value is None or math.isinf(value):
             continue
         cents = max(1, round(value * 100))
         out.append({'id': item, 'tab': tab, 'stack': stack_size(item), 'price': cents})
-    unpriced = [i for i in ITEMS if i not in EXCLUDE and (price(i) is None or math.isinf(price(i)))
+    unpriced = [i for i in ITEMS if i not in EXCLUDE and not EXCLUDE_PATTERN.search(i) and (price(i) is None or math.isinf(price(i)))
                 and [t for s, t in tab_start if s <= ITEMS.index(i)][-1] not in DROP_TABS]
     if unpriced:
         print(f'{len(unpriced)} items have no price and are left out:', ' '.join(unpriced), file=sys.stderr)
     target = sys.argv[2] if len(sys.argv) > 2 else 'src/main/resources/shop-items.json'
+    # Everything in this version that isn't sold, so the plugin's guess for items from newer Minecraft versions
+    # (Shop.java) never offers these.
+    sold = {i['id'] for i in out}
+    excluded = sorted(i for i in ITEMS if i not in sold)
     with open(target, 'w') as f:
-        json.dump({'items': out}, f, separators=(',', ':'))
+        json.dump({'version': sys.argv[1].rsplit('/', 1)[-1].split('.id.json')[0], 'items': out, 'excluded': excluded},
+                  f, separators=(',', ':'))
     print(f'{len(out)} items written to {target}', file=sys.stderr)

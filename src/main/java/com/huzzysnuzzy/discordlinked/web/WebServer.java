@@ -1374,6 +1374,7 @@ public final class WebServer {
             if (manage) {
                 row.put("disabled", disabled).put("percent", override == null ? 100 : override.percent())
                         .put("unavailable", !exists)
+                        .put("guessed", shop.guessed(item.id()))
                         .put("sellDisabled", override != null && override.sellDisabled())
                         .put("sellPercent", override == null ? 100 : override.sellPercent())
                         .put("sell", plugin.community().market().normalPrice(item, override));
