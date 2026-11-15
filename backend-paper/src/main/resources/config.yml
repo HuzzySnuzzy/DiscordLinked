@@ -93,6 +93,10 @@ homes-command:
 delhome-command:
   name: delhome
   aliases: []
+# /spawn: to the spawn staff set with /dl setspawn (on any server), or this server's world spawn until then.
+spawn-command:
+  name: spawn
+  aliases: []
 
 # Cosmetics players buy on the website (Shop -> Cosmetics) and switch on or off on their profile there.
 cosmetics:

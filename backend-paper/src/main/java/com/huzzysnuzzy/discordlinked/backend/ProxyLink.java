@@ -375,7 +375,9 @@ final class ProxyLink implements PluginMessageListener {
                     }
                     // The chest's name ("Shop order", "Gift from ..."); older proxies don't send one.
                     String title = in.available() > 0 ? in.readUTF() : "Shop order";
-                    ShopDelivery.deliver(plugin, carrier, lines, title, receivedAt, outcome -> send(carrier, out -> {
+                    // How to deliver it (0.32.0); older proxies always mean a chest.
+                    String container = in.available() > 0 ? in.readUTF() : "chest";
+                    ShopDelivery.deliver(plugin, carrier, lines, title, container, receivedAt, outcome -> send(carrier, out -> {
                         out.writeUTF("SHOP_RESULT");
                         out.writeUTF(id);
                         out.writeUTF(outcome);
@@ -489,6 +491,23 @@ final class ProxyLink implements PluginMessageListener {
                     if (player != null) {
                         plugin.sidebar().hide(player);
                     }
+                }
+                // Where the player stands (for /dl setspawn on the proxy).
+                case "LOCATE" -> {
+                    String id = in.readUTF();
+                    carrier.getScheduler().run(plugin, task -> {
+                        org.bukkit.Location l = carrier.getLocation();
+                        send(carrier, out -> {
+                            out.writeUTF("LOCATED");
+                            out.writeUTF(id);
+                            out.writeUTF(l.getWorld().getName());
+                            out.writeDouble(l.getX());
+                            out.writeDouble(l.getY());
+                            out.writeDouble(l.getZ());
+                            out.writeFloat(l.getYaw());
+                            out.writeFloat(l.getPitch());
+                        });
+                    }, null);
                 }
                 // A player's home names, for tab completion.
                 case "HOME_NAMES" -> {

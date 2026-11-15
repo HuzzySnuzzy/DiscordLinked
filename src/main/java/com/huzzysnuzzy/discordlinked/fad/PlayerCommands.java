@@ -27,7 +27,9 @@ import java.util.stream.Stream;
 public final class PlayerCommands implements SimpleCommand {
 
     private static final List<String> SUBCOMMANDS = List.of("help", "balance", "top", "leaderboard", "group", "homes",
-            "interactions", "shop", "website", "reminders");
+            "spawn", "interactions", "shop", "website", "reminders", "setspawn");
+    /** Who may use /dl setspawn, besides members with the Discord admin role. */
+    public static final String SETSPAWN_PERMISSION = "discordlinked.setspawn";
     private static final List<String> GROUP_SUBCOMMANDS = List.of("info", "create", "invite", "accept", "decline",
             "leave", "name", "kick", "leader", "end");
     private static final List<String> ON_OFF = List.of("true", "false", "on", "off");
@@ -69,6 +71,14 @@ public final class PlayerCommands implements SimpleCommand {
             case "leaderboard", "lb", "sidebar" -> leaderboard(player, rest);
             case "group", "g" -> group(player, rest);
             case "homes" -> community.homes().list(player, server);
+            case "spawn" -> community.homes().goSpawn(player, server);
+            case "setspawn" -> {
+                if (!isStaff(player)) {
+                    say(player, "minecraft.spawn.no-permission");
+                } else {
+                    community.homes().setSpawn(player);
+                }
+            }
             case "interactions" -> {
                 if (rest.length == 0 || !ON_OFF.contains(rest[0].toLowerCase(Locale.ROOT))) {
                     say(player, "minecraft.dl.usage", "usage", "/dl interactions on|off");
@@ -103,6 +113,20 @@ public final class PlayerCommands implements SimpleCommand {
         });
     }
 
+    /** Staff: the Discord admin role (like the admin website), or the discordlinked.setspawn / admin permission. */
+    private boolean isStaff(Player player) throws SQLException {
+        if (player.hasPermission(SETSPAWN_PERMISSION)
+                || player.hasPermission(com.huzzysnuzzy.discordlinked.command.AdminCommand.PERMISSION)) {
+            return true;
+        }
+        Optional<LinkedAccount> account = plugin.database().findByUuid(player.getUniqueId());
+        if (account.isEmpty() || !plugin.bot().isReady()) {
+            return false;
+        }
+        var member = plugin.bot().checkMember(account.get().discordId());
+        return member != null && member.admin();
+    }
+
     private static boolean isOn(String word) {
         String w = word.toLowerCase(Locale.ROOT);
         return w.equals("true") || w.equals("on");
@@ -121,6 +145,7 @@ public final class PlayerCommands implements SimpleCommand {
             line(player, "/dl group", "Your group: create, invite, accept, leave, name… (/dl group help)");
         }
         line(player, "/dl interactions on|off", "Let others pick you for /hug and friends, or not");
+        line(player, "/dl spawn", "Go to the spawn (same as /spawn)");
         if (plugin.web() != null) {
             line(player, "/dl website", "A login link for the website (same as /dla)");
             line(player, "/dl shop", "The same, opening the Shop");
@@ -140,7 +165,16 @@ public final class PlayerCommands implements SimpleCommand {
             line(player, "/homes", "Your homes, and your group's");
             line(player, "/delhome <name>", "Remove a home");
         }
+        line(player, "/spawn", "Go to the spawn");
         line(player, "/interactions", "The interactions: /hug, /kiss, /pet… <player>");
+        try {
+            if (isStaff(player)) {
+                say(player, "minecraft.dl.help-staff");
+                line(player, "/dl setspawn", "Make where you stand the spawn (for /spawn, on every server)");
+            }
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not check whether {} is staff", player.getUsername(), e);
+        }
         if (!c.fadEnabled()) {
             say(player, "minecraft.fad.disabled");
         }

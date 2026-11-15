@@ -296,6 +296,12 @@ public final class BackendServers {
         return status == null || !status.folia();
     }
 
+    /** Whether this server can deliver Shop orders in a shulker box or straight into the inventory (0.32.0+). */
+    public boolean deliversContainers(String server) {
+        Entry entry = server == null ? null : entries.get(key(server));
+        return entry != null && PLUGIN.equals(entry.pluginName) && atLeast(entry.pluginVersion, new int[] {0, 32, 0});
+    }
+
     /** Whether homes are on anywhere (so the Shop offers extra homes). */
     public boolean homesAnywhere() {
         return entries.values().stream().anyMatch(entry -> entry.homes);

@@ -14,8 +14,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Puts a website Shop order in a player's inventory: one chest holding the bought stacks. The proxy has already
- * taken the credits and gives them back unless this answers "ok".
+ * Puts a website Shop order in a player's inventory: one chest (or shulker box) holding the bought stacks, or the
+ * stacks themselves ("direct": what doesn't fit is dropped at the player's feet). The proxy has already taken the
+ * credits and gives them back unless this answers "ok" (or "ok:dropped:N" when N stacks were dropped).
  */
 final class ShopDelivery {
 
@@ -28,9 +29,9 @@ final class ShopDelivery {
     private ShopDelivery() {
     }
 
-    /** Runs on the player's own thread; {@code reply} gets "ok" or why not. */
-    static void deliver(DiscordLinkedBackend plugin, Player player, List<Line> lines, String title, long receivedAt,
-                        java.util.function.Consumer<String> reply) {
+    /** Runs on the player's own thread; {@code reply} gets "ok" or why not. {@code container}: chest, shulker or direct. */
+    static void deliver(DiscordLinkedBackend plugin, Player player, List<Line> lines, String title, String container,
+                        long receivedAt, java.util.function.Consumer<String> reply) {
         player.getScheduler().run(plugin, task -> {
             if (System.currentTimeMillis() - receivedAt > DEADLINE_MILLIS) {
                 reply.accept("expired");
@@ -49,14 +50,24 @@ final class ShopDelivery {
                 }
                 stacks.add(new ItemStack(material, line.amount()));
             }
+            if (container.equals("direct")) {
+                // Into the inventory; what doesn't fit is dropped where they stand.
+                java.util.Map<Integer, ItemStack> left = player.getInventory().addItem(stacks.toArray(ItemStack[]::new));
+                for (ItemStack stack : left.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), stack);
+                }
+                reply.accept(left.isEmpty() ? "ok" : "ok:dropped:" + left.size());
+                return;
+            }
             if (player.getInventory().firstEmpty() == -1) {
                 reply.accept("full");
                 return;
             }
-            ItemStack chest = new ItemStack(Material.CHEST);
+            boolean shulker = container.equals("shulker");
+            ItemStack chest = new ItemStack(shulker ? Material.SHULKER_BOX : Material.CHEST);
             chest.editMeta(BlockStateMeta.class, meta -> {
-                Chest state = (Chest) meta.getBlockState();
-                Inventory inventory = state.getBlockInventory();
+                org.bukkit.block.Container state = (org.bukkit.block.Container) meta.getBlockState();
+                Inventory inventory = state instanceof Chest c ? c.getBlockInventory() : state.getInventory();
                 for (int slot = 0; slot < stacks.size() && slot < inventory.getSize(); slot++) {
                     inventory.setItem(slot, stacks.get(slot));
                 }

@@ -191,6 +191,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         register(map, new FadCommands.HomeCommand(this, settings.homeCommand, "HOME_GO", "Go to a home", "[name]"));
         register(map, new FadCommands.HomeCommand(this, settings.homesCommand, "HOME_LIST", "List your homes", ""));
         register(map, new FadCommands.HomeCommand(this, settings.delHomeCommand, "HOME_DEL", "Remove a home", "<name>"));
+        register(map, new FadCommands.HomeCommand(this, settings.spawnCommand, "SPAWN_GO", "Go to the spawn", ""));
     }
 
     private void register(CommandMap map, Command command) {

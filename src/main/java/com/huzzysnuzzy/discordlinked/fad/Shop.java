@@ -48,6 +48,31 @@ public final class Shop {
     public record Item(String id, String tab, int stack, long cents) {
     }
 
+    /**
+     * How an order is delivered: in a chest or a shulker box (bought with it, so it's added to the price), or
+     * straight into the inventory (what doesn't fit is dropped at the player's feet).
+     */
+    public enum Container {
+        CHEST("chest", "in a chest"), SHULKER("shulker", "in a shulker box"), DIRECT("direct", "into their inventory");
+
+        public final String id;
+        final String described;
+
+        Container(String id, String described) {
+            this.id = id;
+            this.described = described;
+        }
+
+        public static Container of(String id) {
+            for (Container c : values()) {
+                if (c.id.equals(id)) {
+                    return c;
+                }
+            }
+            return CHEST;
+        }
+    }
+
     /** One chest slot of an order. */
     public record Line(String id, int amount) {
     }
@@ -225,6 +250,21 @@ public final class Shop {
         return chest == null ? 100 : unitCents(chest, overrides.get(CHEST));
     }
 
+    /** A shulker box to deliver in (always sold for orders, like the chest). */
+    public long shulkerCents(Map<String, ShopOverride> overrides) {
+        Item box = builtIn.get("shulker_box");
+        return box == null ? 0 : unitCents(box, overrides.get("shulker_box"));
+    }
+
+    /** What the container adds to an order: its price, or nothing when it goes straight into the inventory. */
+    public long containerCents(Container container, Map<String, ShopOverride> overrides) {
+        return switch (container) {
+            case CHEST -> chestCents(overrides);
+            case SHULKER -> shulkerCents(overrides);
+            case DIRECT -> 0;
+        };
+    }
+
     /** Whole credits for an order: every stack plus the chest, rounded up. */
     public static long total(long cents) {
         return (cents + 99) / 100;
@@ -236,6 +276,11 @@ public final class Shop {
      * (a few seconds at most), so call it off the network threads.
      */
     public Result checkout(LinkedAccount buyer, UUID giftTo, List<Line> lines, String actor) throws SQLException {
+        return checkout(buyer, giftTo, lines, Container.CHEST, actor);
+    }
+
+    public Result checkout(LinkedAccount buyer, UUID giftTo, List<Line> lines, Container container, String actor)
+            throws SQLException {
         if (!open()) {
             return fail("The shop is closed.");
         }
@@ -246,7 +291,7 @@ public final class Shop {
             return fail("A chest only has " + CHEST_SLOTS + " slots.");
         }
         Map<String, ShopOverride> overrides = plugin.database().shopOverrides();
-        long cents = chestCents(overrides);
+        long cents = containerCents(container, overrides);
         for (Line line : lines) {
             Item item = catalog.get(line.id());
             ShopOverride override = overrides.get(line.id());
@@ -279,6 +324,11 @@ public final class Shop {
                     + ", which can't deliver orders" + (gift ? "." : ". Move to another server, or ask an admin to install "
                     + "DiscordLinkedBackend there."));
         }
+        if (container != Container.CHEST && !plugin.servers().deliversContainers(server)) {
+            return fail((gift ? receiverName + " is on " + server : "You're on " + server) + ", whose DiscordLinkedBackend "
+                    + "is too old to deliver " + (container == Container.SHULKER ? "in a shulker box" : "straight into an inventory")
+                    + " (it needs 0.32.0). Choose a chest, or update it.");
+        }
         Set<String> known = serverItems.get(server);
         if (known != null) {
             for (Line line : lines) {
@@ -302,26 +352,45 @@ public final class Shop {
             long balance = charge.balance();
             String exchanged = market.exchangedNote(charge);
             String title = gift ? "Gift from " + buyer.minecraftName() : "Shop order";
-            String outcome = deliver(connection.get(), receiverId, lines, title);
+            String outcome = deliver(connection.get(), receiverId, lines, title, container);
             String stacks = lines.size() + (lines.size() == 1 ? " stack" : " stacks");
-            if ("ok".equals(outcome)) {
+            if (outcome.equals("ok") || outcome.startsWith("ok:")) {
+                // "ok:dropped:N": straight into the inventory, N stacks didn't fit and lie at their feet.
+                int dropped = outcome.startsWith("ok:dropped:") ? Integer.parseInt(outcome.substring(11)) : 0;
+                String suffix = switch (container) {
+                    case CHEST -> "";
+                    case SHULKER -> "-shulker";
+                    case DIRECT -> "-direct";
+                };
                 plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.SHOP_PURCHASE,
-                        (gift ? "gifted " : "bought ") + summary + " in a chest for " + c.credits(cost) + exchanged
+                        (gift ? "gifted " : "bought ") + summary + " " + container.described + " for " + c.credits(cost) + exchanged
+                                + (dropped > 0 ? " (" + dropped + " dropped at their feet: no room)" : "")
                                 + ", now " + c.credits(balance), actor, server);
-                if (gift) {
-                    receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.gift-received",
-                            "from", buyer.minecraftName(), "stacks", stacks));
-                    online.ifPresent(player -> player.sendMessage(plugin.messages().minecraft("minecraft.shop.gift-sent",
-                            "to", receiverName, "stacks", stacks, "cost", c.credits(cost))));
-                    return new Result(true, "Delivered! " + receiverName + " got your gift." + exchanged, cost, balance);
+                if (dropped > 0) {
+                    receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.dropped",
+                            "count", String.valueOf(dropped)));
                 }
-                receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.delivered",
+                String droppedNote = dropped > 0 ? " " + dropped + (dropped == 1 ? " stack didn't" : " stacks didn't")
+                        + " fit and " + (dropped == 1 ? "was" : "were") + " dropped at " + (gift ? "their" : "your") + " feet." : "";
+                if (gift) {
+                    receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.gift-received" + suffix,
+                            "from", buyer.minecraftName(), "stacks", stacks));
+                    online.ifPresent(player -> player.sendMessage(plugin.messages().minecraft("minecraft.shop.gift-sent" + suffix,
+                            "to", receiverName, "stacks", stacks, "cost", c.credits(cost))));
+                    return new Result(true, "Delivered! " + receiverName + " got your gift." + droppedNote + exchanged, cost, balance);
+                }
+                receiver.get().sendMessage(plugin.messages().minecraft("minecraft.shop.delivered" + suffix,
                         "stacks", stacks, "cost", c.credits(cost)));
-                return new Result(true, "Delivered! The chest is in your inventory." + exchanged, cost, balance);
+                String where = switch (container) {
+                    case CHEST -> "The chest is in your inventory.";
+                    case SHULKER -> "The shulker box is in your inventory.";
+                    case DIRECT -> "It's in your inventory.";
+                };
+                return new Result(true, "Delivered! " + where + droppedNote + exchanged, cost, balance);
             }
             String whose = gift ? receiverName + "'s" : "your";
             String reason = switch (outcome) {
-                case "full" -> whose + " inventory has no free slot for the chest";
+                case "full" -> whose + " inventory has no free slot for the " + (container == Container.SHULKER ? "shulker box" : "chest");
                 case "timeout" -> "the server didn't answer";
                 case "offline" -> gift ? receiverName + " left the server" : "you left the server";
                 case "expired" -> "the server was too busy";
@@ -342,12 +411,12 @@ public final class Shop {
         }
     }
 
-    private String deliver(ServerConnection connection, UUID player, List<Line> lines, String title) {
+    private String deliver(ServerConnection connection, UUID player, List<Line> lines, String title, Container container) {
         String id = UUID.randomUUID().toString();
         CompletableFuture<String> outcome = new CompletableFuture<>();
         deliveries.put(id, new Delivery(player, outcome));
         try {
-            community.bridge().shop(connection, id, lines, title);
+            community.bridge().shop(connection, id, lines, title, container.id);
             return outcome.get(DELIVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             return "timeout";

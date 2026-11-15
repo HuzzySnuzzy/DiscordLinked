@@ -196,6 +196,18 @@ final class FadBridge {
                     later(() -> community.homes().delete(player, server, name));
                 }
                 case "HOME_LIST" -> later(() -> community.homes().list(player, server));
+                // DiscordLinkedBackend 0.32.0: /spawn, and where a player stands (for /dl setspawn).
+                case "SPAWN_GO" -> later(() -> community.homes().goSpawn(player, server));
+                case "LOCATED" -> {
+                    String id = in.readUTF();
+                    String world = in.readUTF();
+                    double x = in.readDouble();
+                    double y = in.readDouble();
+                    double z = in.readDouble();
+                    float yaw = in.readFloat();
+                    float pitch = in.readFloat();
+                    community.homes().located(player, server, id, world, x, y, z, yaw, pitch);
+                }
                 case "HOME_DONE" -> {
                     String id = in.readUTF();
                     String outcome = in.readUTF();
@@ -316,7 +328,8 @@ final class FadBridge {
      * Asks the receiving player's server to put a Shop order (as one chest named {@code title}) in their inventory.
      * The title comes last, so DiscordLinkedFAD 0.13 (which doesn't read it) still understands the message.
      */
-    void shop(ServerConnection connection, String id, java.util.List<Shop.Line> lines, String title) {
+    /** {@code container}: chest, shulker or direct (DiscordLinkedBackend 0.32.0+; older ones always use a chest). */
+    void shop(ServerConnection connection, String id, java.util.List<Shop.Line> lines, String title, String container) {
         send(connection, out -> {
             out.writeUTF("SHOP");
             out.writeUTF(id);
@@ -326,6 +339,7 @@ final class FadBridge {
                 out.writeInt(line.amount());
             }
             out.writeUTF(title);
+            out.writeUTF(container);
         });
     }
 
@@ -416,6 +430,14 @@ final class FadBridge {
         send(connection, out -> {
             out.writeUTF("SIDEBAR_OFF");
             out.writeUTF(player.toString());
+        });
+    }
+
+    /** Asks where the player stands (they answer LOCATED; DiscordLinkedBackend 0.32.0+). */
+    void locate(ServerConnection connection, String id) {
+        send(connection, out -> {
+            out.writeUTF("LOCATE");
+            out.writeUTF(id);
         });
     }
 

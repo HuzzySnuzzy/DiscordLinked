@@ -56,6 +56,7 @@ final class FadSettings {
     final CommandName homeCommand;
     final CommandName homesCommand;
     final CommandName delHomeCommand;
+    final CommandName spawnCommand;
     final int prefixPriority;
     final boolean prefixSpace;
     final int trailIntervalTicks;
@@ -87,6 +88,7 @@ final class FadSettings {
         homeCommand = commandName("home-command", logger);
         homesCommand = commandName("homes-command", logger);
         delHomeCommand = commandName("delhome-command", logger);
+        spawnCommand = commandName("spawn-command", logger);
         prefixPriority = integer("cosmetics.prefix-priority");
         prefixSpace = bool("cosmetics.prefix-space");
         trailIntervalTicks = Math.max(1, integer("cosmetics.trail-interval-ticks"));

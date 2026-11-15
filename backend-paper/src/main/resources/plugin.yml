@@ -26,6 +26,9 @@ permissions:
   discordlinkedfad.sell:
     description: Sell items for microcredits and exchange them (/sell, /sellhand, /worth, /exchange)
     default: true
+  discordlinked.spawn:
+    description: Use /spawn
+    default: true
   discordlinked.homes:
     description: Use homes (/sethome, /home, /homes, /delhome) where they're switched on
     default: true

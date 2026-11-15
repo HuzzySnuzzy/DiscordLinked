@@ -72,7 +72,7 @@ regions.
 Permissions: `discordlinkedfad.admin` (the reload command) and `discordlinkedfad.cooldown.bypass` are for ops by
 default; `discordlinkedfad.credits` (`/credits`, `/mct`), `discordlinkedfad.sell` (`/sell`, `/sellhand`, `/worth`,
 `/exchange`), `discordlinkedfad.interactions` (`/interactions`), `discordlinked.homes` (`/sethome`, `/home`,
-`/homes`, `/delhome`) and `discordlinkedfad.interact.<name>` (one per interaction) are for everyone. Spy, inventories and teleports are controlled from the website, so they need none.
+`/homes`, `/delhome`), `discordlinked.spawn` (`/spawn`) and `discordlinkedfad.interact.<name>` (one per interaction) are for everyone. Spy, inventories and teleports are controlled from the website, so they need none.
 
 The proxy and the backend plugin talk over Minecraft's plugin messaging channel, and the proxy drops any such
 message sent by a player's client, so players can't trigger it. As with any Velocity network, make sure your
@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.31.1.jar` there instead.
+   `DiscordLinkedBackend-0.32.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.31.1 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.32.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -300,9 +300,12 @@ the Discord join message shows it: ":green_circle: **Huzzeh** joined the server 
   slot), double-click gathers matching stacks, shift-click sends a slot back. Esc or clicking outside puts the
   held stack back. You can also press on an item and let go over a slot. On phones: tap to pick up and tap a
   slot to put down, or tap an item and use **+1** / **+64**.
-- **Check out** takes the credits and puts the order in the player's inventory as **one chest holding the
-  items** (named "Shop order"). They pay for the chest too. They must be online on a server with
-  DiscordLinkedBackend and have a free inventory slot; otherwise nothing is charged. Every order (and every refused
+- **Check out** takes the credits and puts the order in the player's inventory, the way picked next to it:
+  **in a chest** (named "Shop order"; the chest is added to the price, since they keep it), **in a shulker box**
+  (the shulker box is added the same way), or **into your inventory** (no container to pay for; whatever doesn't
+  fit is dropped at the player's feet). The browser remembers the choice. They must be online on a server with
+  DiscordLinkedBackend (0.32.0 or newer for a shulker box or straight in) and, for a chest or shulker box, have a
+  free inventory slot; otherwise nothing is charged. Every order (and every refused
   one) is in the Logs (**Shop orders** filter) and in the player's credit history.
 - Only items that exist in your servers' Minecraft version are offered. Things that can't be had in survival,
   or only make sense with extra data (spawn eggs, operator blocks, enchanted books, potions, maps) aren't sold.
@@ -439,6 +442,15 @@ own (turning it off gives back the one they had, so other plugins' sidebars come
 and servers without DiscordLinkedBackend can't show one, so there it's a boss bar with the top three and their
 place. Both numbers are in Settings → Community & credits; the texts are `minecraft.sidebar.*` in
 messages.properties.
+
+## Spawn
+
+`/spawn` takes a player to the network's spawn, on any server with DiscordLinkedBackend (moving them to the spawn's
+server first), with the same wait as `/home` (`home-warmup-seconds`; moving or getting hurt cancels it). Staff set
+it where they stand with `/dl setspawn` (Discord admin role, or the Velocity permission `discordlinked.setspawn`).
+Until it's set, `/spawn` goes to the spawn of the server's main world. `/dl spawn` does the same as `/spawn`. The
+command name is in DiscordLinkedBackend's config.yml (`spawn-command`), the permission is `discordlinked.spawn`
+(everyone), and the texts are `minecraft.spawn.*` in messages.properties. Setting it is in the Logs (**Homes**).
 
 ## Homes
 
@@ -744,6 +756,8 @@ the proxy, so they work even where DiscordLinkedBackend isn't installed):
 | `/dl group` | Your group (members, who's online, its microcredits) or your invitations, with **[Accept]** |
 | `/dl group create <name>`, `invite <player>`, `accept [group]`, `decline [group]`, `name <new name>`, `kick <player>`, `leader <player>`, `leave`, `end` | Everything the website's Groups page does; `/dl group help` lists them |
 | `/dl homes` | Your homes (like `/homes`) |
+| `/dl spawn` | To the [spawn](#spawn) (like `/spawn`) |
+| `/dl setspawn` | Staff: make where you stand the spawn |
 | `/dl interactions on\|off` | Let others pick you for interactions, or not |
 | `/dl website`, `/dl shop`, `/dl reminders on\|off` | The same as `/dla`, `/dla shop`, `/dla reminders` |
 
@@ -752,7 +766,7 @@ messages.properties.
 
 In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, `/sethome [name]`,
-`/home [name]`, `/homes`, `/delhome <name>` (see [Homes](#homes)), and
+`/home [name]`, `/homes`, `/delhome <name>` (see [Homes](#homes)), `/spawn` (see [Spawn](#spawn)), and
 `/discordlinkedbackend reload` (or `/dlb reload`; op). Their permissions are under
 [The backend plugin](#the-backend-plugin-discordlinkedbackend).
 
@@ -835,8 +849,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.31.1.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.31.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.32.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.32.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

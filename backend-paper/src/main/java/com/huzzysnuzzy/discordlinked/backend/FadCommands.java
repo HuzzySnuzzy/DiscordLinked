@@ -414,7 +414,7 @@ final class FadCommands {
             super(name.name(), description, ("/" + name.name() + " " + args).trim(), name.aliases());
             this.plugin = plugin;
             this.type = type;
-            setPermission("discordlinked.homes");
+            setPermission(type.equals("SPAWN_GO") ? "discordlinked.spawn" : "discordlinked.homes");
         }
 
         @Override
@@ -429,7 +429,7 @@ final class FadCommands {
             String name = args.length == 0 ? "" : args[0];
             switch (type) {
                 case "HOME_SET" -> plugin.link().homeSet(player, name);
-                case "HOME_LIST" -> plugin.link().home(player, type, null);
+                case "HOME_LIST", "SPAWN_GO" -> plugin.link().home(player, type, null);
                 default -> plugin.link().home(player, type, name);
             }
             return true;
@@ -437,7 +437,7 @@ final class FadCommands {
 
         @Override
         public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
-            if (args.length != 1 || !(sender instanceof Player player) || type.equals("HOME_LIST")) {
+            if (args.length != 1 || !(sender instanceof Player player) || type.equals("HOME_LIST") || type.equals("SPAWN_GO")) {
                 return List.of();
             }
             return type.equals("HOME_GO") ? plugin.homes().complete(player, args[0]) : plugin.homes().completeOwn(player, args[0]);

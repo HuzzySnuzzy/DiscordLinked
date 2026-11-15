@@ -1137,6 +1137,9 @@ body.member-view .tabs [data-mode="admin"], body:not(.member-view) .tabs [data-m
   .streak, .streak *, .streak::after { animation: none !important; }
 }
 #shop-gift { max-width: 220px; }
+#shop-box { max-width: 300px; border-radius: 999px; padding-left: 14px; min-height: 39px; }
+@media (max-width: 700px) { .shop-checkout #shop-box { flex: 1 1 100%; max-width: none; min-width: 0; width: 100%; } }
+.shop-box-note { font-size: 12px; }
 .streak.mini { display: inline-flex; flex-wrap: nowrap; margin: 4px 0 0; padding: 2px 9px; border-radius: 999px; font-size: 12px; gap: 5px; }
 .streak.mini.t7 { font-size: 12px; padding: 2px 10px; border-radius: 999px; }
 .pill.web { color: var(--link); }
@@ -2052,7 +2055,7 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   background-color: rgba(0, 0, 0, .5); border-color: var(--holo); outline-offset: 1px;
   box-shadow: 0 0 0 3px rgba(79, 227, 214, .22), 0 0 16px rgba(79, 227, 214, .3);
 }
-:root[data-theme="2049"] #shop-gift { border-radius: 2px; }
+:root[data-theme="2049"] #shop-gift, :root[data-theme="2049"] #shop-box { border-radius: 2px; }
 :root[data-theme="2049"] ::placeholder { color: #a8917a; }
 :root[data-theme="2049"] input { caret-color: var(--holo); }
 /* A crosshair in every search field. */

@@ -3848,6 +3848,7 @@ function fillShop() {
   }, shopIcon(icon), el('span', {}, tab))));
   renderShopGrid();
   renderGiftChoice();
+  renderBoxChoice();
   renderChest();
 }
 
@@ -4207,8 +4208,26 @@ function shopTotal() {
   const filled = shop.chest.filter(Boolean).concat(shop.cursor && !shop.drag ? [shop.cursor] : []);
   if (!filled.length) return { cents: 0, credits: 0, items: 0 };
   const items = filled.reduce((sum, slot) => sum + shop.byId.get(slot.id).price * slot.amount, 0);
-  const cents = items + shop.data.chestPrice;
-  return { cents, credits: Math.ceil(cents / 100), items, stacks: filled.length };
+  const box = boxPrice(shopBox());
+  const cents = items + box;
+  return { cents, credits: Math.ceil(cents / 100), items, box, stacks: filled.length };
+}
+
+/** How the order is delivered: in a chest or a shulker box (bought with it), or straight into the inventory. */
+const SHOP_BOXES = [['chest', 'In a chest'], ['shulker', 'In a shulker box'], ['direct', 'Into your inventory']];
+function shopBox() {
+  const v = $('shop-box').value;
+  return SHOP_BOXES.some(([k]) => k === v) ? v : 'chest';
+}
+function boxPrice(box) {
+  return box === 'chest' ? shop.data.chestPrice : box === 'shulker' ? (shop.data.shulkerPrice || 0) : 0;
+}
+function renderBoxChoice() {
+  const select = $('shop-box');
+  const chosen = select.value || stored('dl-shop-box') || 'chest';
+  select.replaceChildren(...SHOP_BOXES.map(([k, text]) => el('option', { value: k },
+    k === 'direct' ? text : `${text} (+${fromCents(boxPrice(k))})`)));
+  select.value = SHOP_BOXES.some(([k]) => k === chosen) ? chosen : 'chest';
 }
 
 /** "For me" or one of the players online right now (gifts only go to players who are on). */
@@ -4232,9 +4251,11 @@ function renderShopTotal() {
     ? el('div', { class: 'muted shop-holding' }, `In your hand: ${shop.cursor.amount} × ${shopName(shop.cursor.id)}`
       + (lastPointerType === 'mouse' ? ' (Esc puts it back)' : ' (tap a slot to put it down)'))
     : null;
+  const boxName = { chest: 'chest', shulker: 'shulker box' }[shopBox()];
   $('shop-total').replaceChildren(...[...(t.stacks
-    ? [el('span', { class: 'muted' }, `Items ${fromCents(t.items)} + chest ${fromCents(d.chestPrice)} = `),
-      el('strong', {}, credits(t.credits, d.currency)), t.cents % 100 && el('span', { class: 'muted' }, ' (rounded up)')]
+    ? [el('span', { class: 'muted' }, boxName ? `Items ${fromCents(t.items)} + ${boxName} ${fromCents(t.box)} = ` : `Items ${fromCents(t.items)} = `),
+      el('strong', {}, credits(t.credits, d.currency)), t.cents % 100 && el('span', { class: 'muted' }, ' (rounded up)'),
+      shopBox() === 'direct' && el('div', { class: 'muted shop-box-note' }, 'What doesn\'t fit in the inventory is dropped at their feet.')]
     : [el('span', { class: 'muted' }, 'The chest is empty.')]), held].filter(Boolean));
   const buy = $('shop-buy');
   const reason = !d.open ? 'The shop is closed' : !b.linked ? 'Link your Minecraft account first'
@@ -4261,6 +4282,7 @@ $('shop-grid').addEventListener('keydown', (e) => {
   items[Math.max(0, Math.min(items.length - 1, next))].focus();
 });
 $('shop-gift').addEventListener('change', renderShopTotal);
+$('shop-box').addEventListener('change', () => { remember('dl-shop-box', shopBox()); renderShopTotal(); });
 $('shop-clear').addEventListener('click', () => { shop.chest = shop.chest.map(() => null); renderChest(); });
 $('shop-buy').addEventListener('click', async () => {
   // Like closing an inventory: whatever is in your hand goes into the chest.
@@ -4273,7 +4295,7 @@ $('shop-buy').addEventListener('click', async () => {
   shop.busy = true;
   renderShopTotal();
   try {
-    const result = await api('/api/shop/checkout', { items, giftTo: $('shop-gift').value || '' });
+    const result = await api('/api/shop/checkout', { items, giftTo: $('shop-gift').value || '', container: shopBox() });
     shop.chest = shop.chest.map(() => null);
     toast(result.message);
   } catch (e) {

@@ -1419,6 +1419,7 @@ public final class WebServer {
                 .put("manage", manage)
                 .put("slots", Shop.CHEST_SLOTS)
                 .put("chestPrice", shop.chestCents(overrides))
+                .put("shulkerPrice", shop.shulkerCents(overrides))
                 .put("buyer", buyer)
                 .put("items", items);
     }
@@ -1504,7 +1505,8 @@ public final class WebServer {
             lines.add(new Shop.Line(id, slot.getInt("amount", 0)));
         }
         UUID giftTo = body.getString("giftTo", "").isEmpty() ? null : parseUuid(body.getString("giftTo", ""));
-        Shop.Result result = plugin.community().shop().checkout(me.get(), giftTo, lines, session.user.actor() + " (website)");
+        Shop.Result result = plugin.community().shop().checkout(me.get(), giftTo, lines,
+                Shop.Container.of(body.getString("container", "chest")), session.user.actor() + " (website)");
         sendJson(ex, result.ok() ? 200 : 409, DataObject.empty().put("ok", result.ok()).put("message", result.message())
                 .put("cost", result.cost()).put("balance", result.balance())
                 .put("error", result.ok() ? null : result.message()));

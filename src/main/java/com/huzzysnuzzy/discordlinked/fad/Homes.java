@@ -40,6 +40,12 @@ import java.util.regex.Pattern;
  */
 public final class Homes {
 
+    /** The network's spawn (/spawn, /dl setspawn) is stored as a home of this owner, which is no player. */
+    public static final UUID SPAWN_OWNER = new UUID(0, 0);
+    static final String SPAWN_NAME = "spawn";
+    /** How long /dl setspawn waits for the server to say where the player stands. */
+    private static final long LOCATE_SECONDS = 5;
+
     /** What /sethome and /home <name> take. */
     static final Pattern NAME = Pattern.compile("[A-Za-z0-9_-]{1,16}");
     static final String DEFAULT_NAME = "home";
@@ -53,6 +59,8 @@ public final class Homes {
     private final DiscordLinked plugin;
     private final Community community;
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
+    /** /dl setspawn waiting for the server's LOCATED. */
+    private final Map<String, java.util.concurrent.CompletableFuture<Home>> locating = new ConcurrentHashMap<>();
 
     Homes(DiscordLinked plugin, Community community) {
         this.plugin = plugin;
@@ -213,12 +221,94 @@ public final class Homes {
         switch (outcome) {
             case "ok" -> plugin.audit().log(player.getUniqueId(), player.getUsername(),
                     community.linkedDiscordId(player.getUniqueId()), EventTypes.HOME, "went to "
-                            + (home.owner().equals(player.getUniqueId()) ? "home " + home.name()
+                            + (home.owner().equals(SPAWN_OWNER) ? "spawn"
+                            : home.owner().equals(player.getUniqueId()) ? "home " + home.name()
                             : home.ownerName() + "'s home " + home.name()), null, home.server());
             case "ready" -> moveThenTeleport(player, home);
             case "no-world" -> say(player, "minecraft.home.no-world", "home", label(player, home), "world", home.world());
             case "cancelled" -> { }
             default -> say(player, "minecraft.home.failed", "home", label(player, home));
+        }
+    }
+
+    // ---- Spawn ----
+
+    /** The network's spawn, if staff set one. */
+    public Optional<Home> spawn() throws SQLException {
+        return plugin.database().homes(List.of(SPAWN_OWNER)).stream().findFirst();
+    }
+
+    /**
+     * /spawn: to the spawn staff set with /dl setspawn (moving servers if it's on another one), or, while none is set,
+     * to this server's own world spawn. The same wait as /home.
+     */
+    void goSpawn(Player player, String server) {
+        if (!config().fadEnabled()) {
+            say(player, "minecraft.fad.disabled");
+            return;
+        }
+        Home spawn;
+        try {
+            spawn = spawn().orElse(null);
+        } catch (SQLException e) {
+            plugin.logger().error("Could not look up the spawn", e);
+            say(player, "minecraft.command.database-error");
+            return;
+        }
+        if (spawn == null) {
+            // This server's own spawn: the server works out where that is (an empty world name).
+            spawn = new Home(SPAWN_OWNER, "", SPAWN_NAME, server, "", 0, 0, 0, 0, 0, java.time.Instant.now(), java.time.Instant.now());
+        } else if (plugin.proxy().getServer(spawn.server()).isEmpty()) {
+            say(player, "minecraft.spawn.gone-server", "server", spawn.server());
+            return;
+        }
+        boolean here = spawn.server().equalsIgnoreCase(server);
+        String id = UUID.randomUUID().toString();
+        pending.put(id, new Pending(player.getUniqueId(), spawn, System.currentTimeMillis()));
+        sweep();
+        Home target = spawn;
+        player.getCurrentServer().ifPresent(connection -> teleport(connection, id, player, target, here,
+                config().homeWarmupSeconds()));
+    }
+
+    /** /dl setspawn: asks the player's server where they stand, then makes that the spawn. Blocks up to 5 seconds. */
+    public void setSpawn(Player player) throws SQLException {
+        Optional<ServerConnection> connection = player.getCurrentServer();
+        String server = connection.map(c -> c.getServerInfo().getName()).orElse("");
+        if (connection.isEmpty() || !plugin.servers().deliversContainers(server)) {
+            say(player, "minecraft.spawn.needs-backend", "server", server);
+            return;
+        }
+        String id = UUID.randomUUID().toString();
+        java.util.concurrent.CompletableFuture<Home> where = new java.util.concurrent.CompletableFuture<>();
+        locating.put(id, where);
+        Home at;
+        try {
+            community.bridge().locate(connection.get(), id);
+            at = where.get(LOCATE_SECONDS, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException e) {
+            say(player, "minecraft.spawn.no-answer", "server", server);
+            return;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        } finally {
+            locating.remove(id);
+        }
+        plugin.database().setHome(SPAWN_OWNER, "Server", SPAWN_NAME, server, at.world(), at.x(), at.y(), at.z(),
+                at.yaw(), at.pitch(), 1);
+        say(player, "minecraft.spawn.set", "server", server, "world", at.world(), "coords", coords(at.x(), at.y(), at.z()));
+        plugin.audit().log(player.getUniqueId(), player.getUsername(), community.linkedDiscordId(player.getUniqueId()),
+                EventTypes.HOME, "set the spawn on " + server + " (" + at.world() + " " + coords(at.x(), at.y(), at.z()) + ")",
+                null, server);
+    }
+
+    /** The server's answer to /dl setspawn's LOCATE: where the player stands. */
+    void located(Player player, String server, String id, String world, double x, double y, double z, float yaw, float pitch) {
+        java.util.concurrent.CompletableFuture<Home> where = locating.get(id);
+        if (where != null) {
+            where.complete(new Home(player.getUniqueId(), player.getUsername(), SPAWN_NAME, server, world, x, y, z, yaw, pitch,
+                    java.time.Instant.now(), java.time.Instant.now()));
         }
     }
 
@@ -353,8 +443,11 @@ public final class Homes {
         return plugin.database().homes(others);
     }
 
-    /** "base" for their own, "Alex:base" for someone else's. */
+    /** "base" for their own, "Alex:base" for someone else's, "spawn" for the spawn. */
     private static String label(Player player, Home home) {
+        if (home.owner().equals(SPAWN_OWNER)) {
+            return SPAWN_NAME;
+        }
         return home.owner().equals(player.getUniqueId()) ? home.name() : home.ownerName() + ":" + home.name();
     }
 
@@ -403,7 +496,8 @@ public final class Homes {
     /** After the wait on their own server: move them to the home's server, then teleport them there. */
     private void moveThenTeleport(Player player, Home home) {
         Optional<RegisteredServer> target = plugin.proxy().getServer(home.server());
-        if (target.isEmpty() || !plugin.servers().homesEnabled(home.server())) {
+        boolean spawn = home.owner().equals(SPAWN_OWNER);
+        if (target.isEmpty() || !spawn && !plugin.servers().homesEnabled(home.server())) {
             say(player, "minecraft.home.off-there", "home", label(player, home), "server", home.server());
             return;
         }

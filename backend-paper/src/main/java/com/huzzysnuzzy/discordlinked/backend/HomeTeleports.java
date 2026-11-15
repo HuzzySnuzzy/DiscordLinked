@@ -110,12 +110,14 @@ final class HomeTeleports implements Listener {
             plugin.link().homeDone(player, request.id(), "ready");
             return;
         }
-        World world = Bukkit.getWorld(request.world());
+        // No world: this server's own spawn (/spawn while staff haven't set one).
+        World world = request.world().isEmpty() ? Bukkit.getWorlds().stream().findFirst().orElse(null) : Bukkit.getWorld(request.world());
         if (world == null) {
             plugin.link().homeDone(player, request.id(), "no-world");
             return;
         }
-        Location to = new Location(world, request.x(), request.y(), request.z(), request.yaw(), request.pitch());
+        Location to = request.world().isEmpty() ? world.getSpawnLocation()
+                : new Location(world, request.x(), request.y(), request.z(), request.yaw(), request.pitch());
         player.teleportAsync(to).whenComplete((ok, error) -> player.getScheduler().run(plugin, t -> {
             boolean arrived = error == null && Boolean.TRUE.equals(ok);
             if (arrived) {
