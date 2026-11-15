@@ -471,6 +471,25 @@ final class ProxyLink implements PluginMessageListener {
                         updater.fromProxy(mode, restart, time, repository, checkHours, latest);
                     }
                 }
+                // The on-screen leaderboard (/dl leaderboard true) as a sidebar, or taking it away.
+                case "SIDEBAR" -> {
+                    Player player = Bukkit.getPlayer(UUID.fromString(in.readUTF()));
+                    net.kyori.adventure.text.Component title = HomeTeleports.text(in.readUTF());
+                    int count = in.readInt();
+                    List<net.kyori.adventure.text.Component> lines = new ArrayList<>();
+                    for (int i = 0; i < count; i++) {
+                        lines.add(HomeTeleports.text(in.readUTF()));
+                    }
+                    if (player != null) {
+                        plugin.sidebar().show(player, title, lines);
+                    }
+                }
+                case "SIDEBAR_OFF" -> {
+                    Player player = Bukkit.getPlayer(UUID.fromString(in.readUTF()));
+                    if (player != null) {
+                        plugin.sidebar().hide(player);
+                    }
+                }
                 // A player's home names, for tab completion.
                 case "HOME_NAMES" -> {
                     UUID uuid = UUID.fromString(in.readUTF());

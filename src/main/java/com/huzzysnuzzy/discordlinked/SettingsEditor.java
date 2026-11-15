@@ -113,6 +113,11 @@ public final class SettingsEditor {
                     "The most a daily reward can be, however long the streak.", 0, 1_000_000),
             number("streak-announce-days", "Community & credits", "Show streaks in Discord from",
                     "Days. From this streak on, the join message in Discord shows it. 0 = never.", 0, 100_000),
+            number("sidebar-seconds", "Community & credits", "On-screen leaderboard: switch every … seconds",
+                    "Players switch it on with /dl leaderboard true. It shows the top players by credits (plus what "
+                            + "their microcredits are worth), then the most active players.", 3, 600),
+            number("sidebar-size", "Community & credits", "On-screen leaderboard: players shown",
+                    "Below them is the player's own place.", 1, 10),
             id("fad-channel-id", "Community & credits", "Interactions channel",
                     "Discord channel for interactions and advancements. Empty = the chat channel.", false),
             bool("fad-discord-interactions", "Community & credits", "Post interactions to Discord",

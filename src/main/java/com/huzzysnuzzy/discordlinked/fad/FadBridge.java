@@ -231,6 +231,7 @@ final class FadBridge {
         }
         community.cosmetics().joined(player, server);
         community.homes().joined(player, server);
+        community.sidebar().joined(player, server);
     }
 
     /**
@@ -397,6 +398,26 @@ final class FadBridge {
     }
 
     // ---- Helpers ----
+
+    /** The on-screen leaderboard as a sidebar (DiscordLinkedBackend 0.31.0+): a title and lines, as JSON components. */
+    void sidebar(ServerConnection connection, UUID player, String title, List<String> lines) {
+        send(connection, out -> {
+            out.writeUTF("SIDEBAR");
+            out.writeUTF(player.toString());
+            out.writeUTF(title);
+            out.writeInt(lines.size());
+            for (String line : lines) {
+                out.writeUTF(line);
+            }
+        });
+    }
+
+    void sidebarOff(ServerConnection connection, UUID player) {
+        send(connection, out -> {
+            out.writeUTF("SIDEBAR_OFF");
+            out.writeUTF(player.toString());
+        });
+    }
 
     /** A player's home names, for tab completion (their own, and "Name:home" for their group's). */
     void homeNames(ServerConnection connection, UUID player, List<String> names) {

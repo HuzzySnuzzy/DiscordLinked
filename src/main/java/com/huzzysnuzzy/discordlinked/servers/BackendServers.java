@@ -283,6 +283,19 @@ public final class BackendServers {
         return entry != null && entry.homes;
     }
 
+    /**
+     * Whether this server can show the on-screen leaderboard as a sidebar: DiscordLinkedBackend 0.31.0 or newer, not
+     * on Folia (which has no scoreboards). Elsewhere it's a boss bar.
+     */
+    public boolean sidebarCapable(String server) {
+        Entry entry = server == null ? null : entries.get(key(server));
+        if (entry == null || !PLUGIN.equals(entry.pluginName) || !atLeast(entry.pluginVersion, new int[] {0, 31, 0})) {
+            return false;
+        }
+        Status status = entry.status;
+        return status == null || !status.folia();
+    }
+
     /** Whether homes are on anywhere (so the Shop offers extra homes). */
     public boolean homesAnywhere() {
         return entries.values().stream().anyMatch(entry -> entry.homes);

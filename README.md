@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.30.0.jar` there instead.
+   `DiscordLinkedBackend-0.31.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.30.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.31.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -417,6 +417,22 @@ many there are); the browser remembers the one picked last, and `#/shop/cosmetic
   a trail and an aura of the same particle paid twice for what is now one, so the second payment goes back to them. A player's profile has **Give for free** and **Take away** for
   admins. Purchases are in the credit history and everything is in the Logs (**Cosmetics** filter).
 - `cosmetics-enabled=false` stops new purchases; what players already have keeps working.
+
+## On-screen leaderboard
+
+Players switch it on with `/dl leaderboard true` (off again with `false`; it's kept for their next visits). It
+shows, switching every `sidebar-seconds` (10):
+
+- **Top credits**: by credits plus what their microcredits are worth (while selling is open; whole credits at the
+  exchange rate, like an exchange gives). Microcredits in a group's pool count for nobody here.
+- **Most active**: by active (not AFK) playtime, in hours.
+
+The first `sidebar-size` players (5), the player highlighted if they're among them, and their own place below if
+they aren't. It's a sidebar on servers with DiscordLinkedBackend 0.31.0 or newer, on a scoreboard of the player's
+own (turning it off gives back the one they had, so other plugins' sidebars come back). Folia has no scoreboards,
+and servers without DiscordLinkedBackend can't show one, so there it's a boss bar with the top three and their
+place. Both numbers are in Settings → Community & credits; the texts are `minecraft.sidebar.*` in
+messages.properties.
 
 ## Homes
 
@@ -711,7 +727,22 @@ now, or restart in 15 seconds to install a downloaded update, which in game also
 `discordlinked.update.restart`; see [Updates](#updates)).
 
 In game, for everyone: `/dla` (website login link), `/dla shop` (the same, opening the Shop) and
-`/dla reminders [on|off]` (Shop reminders).
+`/dla reminders [on|off]` (Shop reminders), and `/dl`, the players' own commands, on every server (they run on
+the proxy, so they work even where DiscordLinkedBackend isn't installed):
+
+| Command | What |
+|---|---|
+| `/dl` or `/dl help` | Every command a player can use, also the servers' (`/sell`, `/sellhand`, `/home`…; only what's on), each clickable |
+| `/dl balance [player]`, `/dl top` | Credits and microcredits, the credits leaderboard in chat (like `/credits`) |
+| `/dl leaderboard true\|false` | The [on-screen leaderboard](#on-screen-leaderboard) (on its own: switches it) |
+| `/dl group` | Your group (members, who's online, its microcredits) or your invitations, with **[Accept]** |
+| `/dl group create <name>`, `invite <player>`, `accept [group]`, `decline [group]`, `name <new name>`, `kick <player>`, `leader <player>`, `leave`, `end` | Everything the website's Groups page does; `/dl group help` lists them |
+| `/dl homes` | Your homes (like `/homes`) |
+| `/dl interactions on\|off` | Let others pick you for interactions, or not |
+| `/dl website`, `/dl shop`, `/dl reminders on\|off` | The same as `/dla`, `/dla shop`, `/dla reminders` |
+
+Group invitations in game now say they can be accepted with `/dl group accept`. The texts are `minecraft.dl.*` in
+messages.properties.
 
 In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, `/sethome [name]`,
@@ -798,8 +829,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.30.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.30.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.31.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.31.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

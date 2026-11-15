@@ -58,6 +58,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
     private final SellPrices sellPrices = new SellPrices();
     private Cosmetics cosmetics;
     private final HomeTeleports homes = new HomeTeleports(this);
+    private final SidebarBoard sidebar = new SidebarBoard(this);
     private final Map<UUID, Long> lastInteraction = new ConcurrentHashMap<>();
     /** Interaction commands registered at startup; new ones in config.yml need a restart. */
     private final Set<String> registered = new HashSet<>();
@@ -91,6 +92,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         cosmetics = new Cosmetics(this);
         getServer().getPluginManager().registerEvents(cosmetics, this);
         getServer().getPluginManager().registerEvents(homes, this);
+        getServer().getPluginManager().registerEvents(sidebar, this);
         PluginCommand admin = getCommand("discordlinkedbackend");
         if (admin != null) {
             admin.setExecutor((sender, command, label, args) -> {
@@ -261,6 +263,10 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
 
     HomeTeleports homes() {
         return homes;
+    }
+
+    SidebarBoard sidebar() {
+        return sidebar;
     }
 
     boolean folia() {

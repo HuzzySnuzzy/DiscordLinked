@@ -437,6 +437,8 @@ public final class Database implements AutoCloseable {
         }
         addColumnIfMissing("fad_accounts", "home_slots", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("backend_servers", "homes_enabled", "INTEGER NOT NULL DEFAULT 0");
+        // Added in 0.31.0: whether a player has the on-screen leaderboard on (/dl leaderboard).
+        addColumnIfMissing("fad_accounts", "sidebar", "INTEGER NOT NULL DEFAULT 0");
         // Added in 0.26.0: resets of players' data (website: MC data), their delivery to the backend servers, and
         // what each server last said about each player's data.
         try (Statement st = connection.createStatement()) {
@@ -3075,6 +3077,50 @@ public final class Database implements AutoCloseable {
             ps.setInt(2, on ? 1 : 0);
             ps.executeUpdate();
         }
+    }
+
+    // ---- The on-screen leaderboard (0.31.0) ----
+
+    /** One player on an on-screen board: their name and the number it ranks by. */
+    public record BoardRow(UUID uuid, String name, long value) {
+    }
+
+    /**
+     * Everyone with an account, best first: by credits plus what their microcredits are worth
+     * ({@code microPerCredit} > 0; 0 = credits only), or by active playtime ({@code byPlaytime}).
+     */
+    public synchronized List<BoardRow> board(boolean byPlaytime, long microPerCredit) throws SQLException {
+        String value = byPlaytime ? "active_seconds" : microPerCredit > 0 ? "credits + micro / " + microPerCredit : "credits";
+        List<BoardRow> rows = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery("SELECT minecraft_uuid, minecraft_name, " + value + " AS v FROM fad_accounts "
+                     + "WHERE " + value + " > 0 ORDER BY v DESC, minecraft_name COLLATE NOCASE")) {
+            while (rs.next()) {
+                rows.add(new BoardRow(UUID.fromString(rs.getString(1)), rs.getString(2), rs.getLong(3)));
+            }
+        }
+        return rows;
+    }
+
+    public synchronized boolean sidebar(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT sidebar FROM fad_accounts WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getInt(1) != 0;
+            }
+        }
+    }
+
+    public synchronized void setSidebar(UUID uuid, String name, boolean on) throws SQLException {
+        transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            try (PreparedStatement ps = connection.prepareStatement("UPDATE fad_accounts SET sidebar = ? WHERE minecraft_uuid = ?")) {
+                ps.setInt(1, on ? 1 : 0);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            return null;
+        });
     }
 
     // ---- Homes (0.30.0) ----

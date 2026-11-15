@@ -105,7 +105,7 @@ public final class Groups {
         }
         audit(t.uuid(), t.minecraftName(), t.discordId(), "was invited to " + g.name() + " by " + me.minecraftName(), actor);
         tell(t.uuid(), "minecraft.group.invited", "group", g.name(), "player", me.minecraftName());
-        return Result.done("Invited " + t.minecraftName() + ". They accept on the website.");
+        return Result.done("Invited " + t.minecraftName() + ". They accept with /dl group accept or on the website.");
     }
 
     public Result cancelInvite(LinkedAccount me, UUID uuid) throws SQLException {

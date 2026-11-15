@@ -51,7 +51,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.30.0";
+    public static final String VERSION = "0.31.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -123,6 +123,10 @@ public final class DiscordLinked {
         proxy.getCommandManager().register(
                 proxy.getCommandManager().metaBuilder("dla").plugin(this).build(),
                 new PanelCommand(this));
+        // Players' own commands (help, groups, the on-screen leaderboard...), on every server.
+        proxy.getCommandManager().register(
+                proxy.getCommandManager().metaBuilder("dl").plugin(this).build(),
+                new com.huzzysnuzzy.discordlinked.fad.PlayerCommands(this));
         // Old logs and snapshots are cleaned up a minute after start, then hourly.
         proxy.getScheduler().buildTask(this, this::runMaintenance)
                 .delay(1, TimeUnit.MINUTES).repeat(1, TimeUnit.HOURS).schedule();

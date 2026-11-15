@@ -52,6 +52,7 @@ public final class Community {
     private final Groups groups;
     private final ShopReminder shopReminder;
     private final Homes homes;
+    private final Sidebar sidebar;
     /** Players their server reported as AFK. Cleared when they switch server or leave. */
     private final Set<UUID> afk = ConcurrentHashMap.newKeySet();
 
@@ -66,6 +67,7 @@ public final class Community {
         this.groups = new Groups(plugin);
         this.shopReminder = new ShopReminder(plugin, this);
         this.homes = new Homes(plugin, this);
+        this.sidebar = new Sidebar(plugin, this);
     }
 
     public void start() {
@@ -76,6 +78,7 @@ public final class Community {
         market.start();
         cosmetics.start();
         shopReminder.start();
+        sidebar.start();
     }
 
     public FadActions actions() {
@@ -121,6 +124,10 @@ public final class Community {
         return homes;
     }
 
+    public Sidebar sidebar() {
+        return sidebar;
+    }
+
     /** Servers whose backend plugin has said hello since the proxy started, with its version. */
     public Map<String, String> servers() {
         return plugin.servers().withPlugin();
@@ -161,6 +168,7 @@ public final class Community {
     void left(UUID player) {
         afk.remove(player);
         shopReminder.left(player);
+        sidebar.left(player);
     }
 
     /**
