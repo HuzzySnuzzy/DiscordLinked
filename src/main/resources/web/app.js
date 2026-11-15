@@ -106,9 +106,10 @@ function keepFocus(container, render) {
     const options = scope ? [...scope.querySelectorAll(a.tagName)] : [];
     const next = row === a ? scope : options.find((n) => label(n) === text) || options[index];
     next?.focus({ preventScroll: true });
-    if (typed && next && next.value === '') {
-      next.value = typed[0];
-      next.setSelectionRange(typed[1], typed[2]);
+    // A redrawn text box gets what was typed and the cursor back where it was, so typing carries on in the right place.
+    if (typed && next && next.matches('input[type=text], input[type=search], textarea')) {
+      if (next.value !== typed[0]) next.value = typed[0];
+      try { next.setSelectionRange(typed[1], typed[2]); } catch (e) { /* not a box with a cursor */ }
     }
   }
   return out;
@@ -1083,6 +1084,47 @@ const COSMETIC_KINDS = [
   ['keepinv', 'Quality of life', 'KeepInventory', ''],
 ];
 
+/** Each kind's part of the address (#/shop/cosmetics/particles) and the other way round. */
+const COSMETIC_SLUGS = { prefix: 'prefixes', particle: 'particles', card: 'cards', keepinv: 'quality-of-life' };
+const kindOfSlug = (slug) => Object.keys(COSMETIC_SLUGS).find((kind) => COSMETIC_SLUGS[kind] === slug);
+
+/** The kind last picked in the Cosmetics shop or under Unlocks (per browser; only a convenience). */
+function savedKind(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+function saveKind(key, kind) {
+  try { localStorage.setItem(key, kind); } catch (e) { /* storage blocked: it just isn't remembered */ }
+}
+
+/**
+ * A row of tabs, one per kind ([kind, title, count]), as links (so they can be opened in a new tab or bookmarked)
+ * that switch in place: no reload, no jump to the top.
+ */
+function kindTabs(kinds, current, label, hrefFor, onPick) {
+  return el('nav', { class: 'tabs cos-kinds', 'aria-label': label }, kinds.map(([kind, title, count]) => {
+    const a = el('a', { href: hrefFor(kind), 'data-kind': kind, 'data-key': `kind-${kind}` }, title,
+      count != null && el('span', { class: 'tab-count' }, count.toLocaleString()));
+    markCurrent(a, kind === current);
+    a.addEventListener('click', (e) => {
+      if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // a new tab or window: let the browser do it
+      e.preventDefault();
+      if (kind !== current) onPick(kind);
+    });
+    return a;
+  }));
+}
+
+/** After switching tabs: the tab row stays where it was on screen, so the pointer is still on it. */
+function keepTabsInPlace(container, render) {
+  const before = container.querySelector('.cos-kinds')?.getBoundingClientRect().top;
+  render();
+  const tabs = container.querySelector('.cos-kinds');
+  if (before == null || !tabs) return;
+  const after = tabs.getBoundingClientRect().top;
+  if (after !== before) window.scrollBy(0, after - before);
+  tabs.querySelector('a.active')?.focus({ preventScroll: true });
+}
+
 function keepInventoryText(delayMinutes) {
   return 'Keep your items and XP when you die. While it\'s on you can\'t hurt other players.'
     + (delayMinutes > 0 ? ` It starts working ${delayMinutes} minute${delayMinutes === 1 ? '' : 's'} after you switch it on.` : '');
@@ -1103,6 +1145,8 @@ async function equipCosmetic(item, on, button, as) {
 
 /** The particle search under Unlocks, kept while that player's page is re-drawn. */
 let unlockQuery = '';
+/** The kind of unlocks shown (a tab), for every player's page this visit. */
+let unlockKind = null;
 let unlockQueryFor = null;
 
 /** Unlocks in a box of their own, so a switch or a menu there redraws only this part of the page (see refreshUnlocks). */
@@ -1248,15 +1292,33 @@ function unlocksSection(p, cos) {
       } }, 'Give for free'));
   }
   if (!self && !cos.items.length && !give) return [];
+  // One kind at a time, picked with tabs (when there's more than one kind), so a long list of particles doesn't
+  // bury the rest.
+  const kinds = groups.map(([title, items]) => items[0].kind);
+  const wanted = [unlockKind, savedKind('dl-unlock-kind')].find((kind) => kinds.includes(kind));
+  const shown = wanted || kinds[0];
+  const list = (title, items) => (items[0].kind === 'particle' ? particleGrid(items) : items.map(row));
+  let body;
+  if (!groups.length) {
+    body = [el('p', { class: 'muted' }, self ? 'Nothing yet: prefixes, particles, profile cards and KeepInventory are in the Shop.'
+      : 'No cosmetics yet.')];
+  } else if (groups.length === 1) {
+    body = [el('div', { class: 'unlock-group' }, groups[0][0]), ...list(...groups[0])];
+  } else {
+    const [title, items] = groups.find(([, its]) => its[0].kind === shown);
+    body = [kindTabs(groups.map(([t, its]) => [its[0].kind, t, its.length]), shown, 'Kinds of unlocks',
+      () => playerHref(p.uuid), (kind) => {
+        unlockKind = kind;
+        saveKind('dl-unlock-kind', kind);
+        const box = $('player-unlocks');
+        if (box) keepTabsInPlace(box, () => box.replaceChildren(...unlocksSection(p, cos)));
+      }),
+    ...list(title, items)];
+  }
   return [
     el('h2', { class: 'section-title' }, self ? 'Your unlocks' : 'Unlocks',
       self && cos.open && el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics' }, 'Get more')),
-    el('div', { class: 'card panel unlocks' },
-      groups.length ? groups.flatMap(([title, items]) => [el('div', { class: 'unlock-group' }, title),
-        ...(items[0].kind === 'particle' ? particleGrid(items) : items.map(row))])
-        : el('p', { class: 'muted' }, self ? 'Nothing yet: prefixes, particles, profile cards and KeepInventory are in the Shop.'
-          : 'No cosmetics yet.'),
-      give),
+    el('div', { class: 'card panel unlocks' }, body, give),
   ];
 }
 
@@ -4465,19 +4527,54 @@ function renderCosmetics() {
         onclick: () => { cos.edit = !cos.edit; renderCosmetics(); } }, cos.edit ? 'Done editing' : 'Edit cosmetics')));
   }
   const editing = d.manage && cos.edit;
+  // One kind at a time, picked with tabs: #/shop/cosmetics/<kind>, else the one picked last, else the first.
+  const canAddKind = (kind, count) => editing && kind !== 'particle' && (kind !== 'keepinv' || !count);
+  const kinds = COSMETIC_KINDS.map(([kind, title]) => [kind, title, d.items.filter((item) => item.kind === kind).length])
+    .filter(([kind, , count]) => count || canAddKind(kind, count));
+  const has = (kind) => kinds.some(([k]) => k === kind);
+  const fromRoute = kindOfSlug(currentRoute().part);
+  cos.kind = [fromRoute, cos.kind, savedKind('dl-cos-kind')].find((kind) => kind && has(kind)) || kinds[0]?.[0];
+  if (kinds.length > 1) {
+    parts.push(kindTabs(kinds, cos.kind, 'Kinds of cosmetics', (kind) => `#/shop/cosmetics/${COSMETIC_SLUGS[kind]}`, (kind) => {
+      cos.kind = kind;
+      saveKind('dl-cos-kind', kind);
+      history.replaceState(null, '', `#/shop/cosmetics/${COSMETIC_SLUGS[kind]}`);
+      keepTabsInPlace($('shop-cosmetics'), renderCosmetics);
+    }));
+  }
+  if (!kinds.length && !editing) parts.push(el('p', { class: 'card panel muted' }, 'Nothing in the cosmetics shop yet.'));
   for (const [kind, title, one, help] of COSMETIC_KINDS) {
+    if (kind !== cos.kind) continue;
     let items = d.items.filter((item) => item.kind === kind);
-    const canAdd = editing && kind !== 'particle' && (kind !== 'keepinv' || !items.length);
+    const canAdd = canAddKind(kind, items.length);
     if (!items.length && !canAdd) continue;
     let tools = null;
+    let tiles = null;
+    let none = null;
     if (kind === 'particle') {
-      // Yours first, then the rest by name; a search narrows them down.
+      // Yours first, then the rest by name. The search hides the others in place: nothing is redrawn while typing,
+      // so the box keeps what's typed and where the cursor is.
       items.sort((a, b2) => (b2.owned - a.owned) || a.name.localeCompare(b2.name));
-      const query = (cos.particleQuery || '').trim().toLowerCase();
-      if (query) items = items.filter((i) => i.name.toLowerCase().includes(query) || i.value.includes(query.replace(/ /g, '_')));
+      tiles = items.map((item) => {
+        const tile = cosmeticTile(item);
+        tile.dataset.find = `${item.name.toLowerCase()} ${item.value}`;
+        return tile;
+      });
+      none = el('p', { class: 'muted', hidden: true }, 'No particle by that name.');
+      const filter = () => {
+        const query = (cos.particleQuery || '').trim().toLowerCase();
+        const words = [query, query.replace(/ /g, '_')];
+        let shown = 0;
+        for (const tile of tiles) {
+          tile.hidden = !!query && !words.some((w) => tile.dataset.find.includes(w));
+          if (!tile.hidden) shown++;
+        }
+        none.hidden = shown > 0;
+      };
       const search = el('input', { type: 'search', class: 'cos-search', placeholder: 'Find a particle…', 'aria-label': 'Find a particle',
         value: cos.particleQuery || '', 'data-key': 'particle-search' });
-      search.addEventListener('input', () => { cos.particleQuery = search.value; renderCosmetics(); });
+      search.addEventListener('input', () => { cos.particleQuery = search.value; filter(); });
+      filter();
       const price = editing && el('form', { class: 'cos-bulk', onsubmit: async (e) => {
         e.preventDefault();
         const input = e.currentTarget.querySelector('input');
@@ -4497,8 +4594,8 @@ function renderCosmetics() {
         canAdd && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => cosmeticDialog(null, kind) }, `New ${one}`)),
       help && el('p', { class: 'muted cos-help' }, help),
       tools,
-      items.length ? el('div', { class: 'cos-grid' }, items.map(cosmeticTile))
-        : el('p', { class: 'muted' }, kind === 'particle' && cos.particleQuery ? 'No particle by that name.' : 'None yet.')));
+      items.length ? el('div', { class: 'cos-grid' }, tiles || items.map(cosmeticTile)) : el('p', { class: 'muted' }, 'None yet.'),
+      none));
   }
   keepFocus($('shop-cosmetics'), () => $('shop-cosmetics').replaceChildren(...parts));
 }
@@ -5588,13 +5685,13 @@ document.addEventListener('pointerdown', (e) => {
 function currentRoute() {
   const match = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})(\/inventory)?$/);
   if (match) return { view: 'player', uuid: match[1].toLowerCase(), inventory: !!match[2] && isStaff() };
-  let [view = '', sub = ''] = location.hash.replace(/^#\/?/, '').split('/');
+  let [view = '', sub = '', part = ''] = location.hash.replace(/^#\/?/, '').split('/');
   // Pages from before 0.18 moved: the Linked list is part of Players, the Market is a Shop tab.
   if (view === 'linked') view = 'players';
   if (view === 'market') [view, sub] = ['shop', 'sell'];
   if ((view === 'settings' || view === 'messages' || view === 'mcdata') && !state.me.isOwner) return { view: homeView() };
   // Each view only exists in its own mode; anything else goes to that mode's home page.
-  if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view, sub };
+  if (isStaff() ? ADMIN_VIEWS.has(view) : MEMBER_VIEWS.has(view)) return { view, sub, part };
   return { view: homeView() };
 }
 

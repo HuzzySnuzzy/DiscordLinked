@@ -1518,6 +1518,14 @@ html:has(.topbar :focus) { scroll-padding-top: 0; }
   .unlock .cos-preview.small { width: 100%; }
 }
 #player-unlocks { display: contents; }
+.cos-tile[hidden] { display: none; }
+/* Tabs for the kinds of cosmetics (Shop -> Cosmetics) and unlocks: one kind at a time. */
+.cos-kinds { width: fit-content; max-width: 100%; margin-bottom: 14px; }
+.unlocks .cos-kinds { margin: 0 0 10px; }
+.cos-kinds a { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.tab-count { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--glass-soft); color: var(--muted); }
+.cos-kinds a.active .tab-count { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); }
+@media (max-width: 560px) { .cos-kinds { overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; } }
 /* Particles: a grid of cards, each with its trail and aura. */
 .unlock-tools { display: flex; gap: 10px; align-items: center; margin: 2px 4px 6px; }
 .unlock-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 10px; }

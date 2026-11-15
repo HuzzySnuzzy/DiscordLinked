@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.29.0.jar` there instead.
+   `DiscordLinkedBackend-0.29.1.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.29.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.29.1 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -371,6 +371,9 @@ its own leaderboard, made for people building farms and factories. Selling can b
 **Cosmetics.** Shop → **Cosmetics** on the website sells things that aren't items, for credits only. They're
 bought once and kept; players switch them on and off under **Your unlocks** on their own profile (click your
 name in the top bar). One of each kind is on at a time, and a new purchase is switched on straight away.
+Both show one kind at a time, picked with tabs (Prefixes, Particles, Profile cards, Quality of life, each with how
+many there are); the browser remembers the one picked last, and `#/shop/cosmetics/particles` (or `prefixes`,
+`cards`, `quality-of-life`) links straight to one.
 
 - **Prefixes** in front of the player's name in chat and the tab list, with `&` colour codes (`&b[Builder]`,
   `&6&l[Tycoon]`, hex as `&#ff88cc`). With **LuckPerms** on a server they're LuckPerms prefixes, so every chat
@@ -767,8 +770,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.29.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.29.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.29.1.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.29.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 
