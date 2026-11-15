@@ -57,6 +57,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
     private SpyService spy;
     private final SellPrices sellPrices = new SellPrices();
     private Cosmetics cosmetics;
+    private final HomeTeleports homes = new HomeTeleports(this);
     private final Map<UUID, Long> lastInteraction = new ConcurrentHashMap<>();
     /** Interaction commands registered at startup; new ones in config.yml need a restart. */
     private final Set<String> registered = new HashSet<>();
@@ -89,6 +90,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(new SellMenu.Events(this), this);
         cosmetics = new Cosmetics(this);
         getServer().getPluginManager().registerEvents(cosmetics, this);
+        getServer().getPluginManager().registerEvents(homes, this);
         PluginCommand admin = getCommand("discordlinkedbackend");
         if (admin != null) {
             admin.setExecutor((sender, command, label, args) -> {
@@ -183,6 +185,10 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         register(map, new FadCommands.WorthCommand(this, settings.worthCommand));
         register(map, new FadCommands.MicroTopCommand(this, settings.microTopCommand));
         register(map, new FadCommands.ExchangeCommand(this, settings.exchangeCommand));
+        register(map, new FadCommands.HomeCommand(this, settings.setHomeCommand, "HOME_SET", "Set a home where you stand", "[name]"));
+        register(map, new FadCommands.HomeCommand(this, settings.homeCommand, "HOME_GO", "Go to a home", "[name]"));
+        register(map, new FadCommands.HomeCommand(this, settings.homesCommand, "HOME_LIST", "List your homes", ""));
+        register(map, new FadCommands.HomeCommand(this, settings.delHomeCommand, "HOME_DEL", "Remove a home", "<name>"));
     }
 
     private void register(CommandMap map, Command command) {
@@ -251,6 +257,10 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
 
     Cosmetics cosmetics() {
         return cosmetics;
+    }
+
+    HomeTeleports homes() {
+        return homes;
     }
 
     boolean folia() {

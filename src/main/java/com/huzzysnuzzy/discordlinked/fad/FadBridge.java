@@ -2,6 +2,7 @@ package com.huzzysnuzzy.discordlinked.fad;
 
 import com.huzzysnuzzy.discordlinked.DiscordLinked;
 import com.huzzysnuzzy.discordlinked.servers.BackendServers;
+import com.huzzysnuzzy.discordlinked.storage.Home;
 import com.huzzysnuzzy.discordlinked.update.ProxyUpdater;
 import com.huzzysnuzzy.discordlinked.update.Updater;
 import com.velocitypowered.api.event.Subscribe;
@@ -175,6 +176,31 @@ final class FadBridge {
                         reply(connection, "ACK", id);
                     });
                 }
+                // DiscordLinkedBackend 0.30.0: homes. The proxy answers in chat (and HOME_TP for /home).
+                case "HOME_SET" -> {
+                    String name = in.readUTF();
+                    String world = in.readUTF();
+                    double x = in.readDouble();
+                    double y = in.readDouble();
+                    double z = in.readDouble();
+                    float yaw = in.readFloat();
+                    float pitch = in.readFloat();
+                    later(() -> community.homes().set(player, server, name, world, x, y, z, yaw, pitch));
+                }
+                case "HOME_GO" -> {
+                    String query = in.readUTF();
+                    later(() -> community.homes().go(player, server, query));
+                }
+                case "HOME_DEL" -> {
+                    String name = in.readUTF();
+                    later(() -> community.homes().delete(player, server, name));
+                }
+                case "HOME_LIST" -> later(() -> community.homes().list(player, server));
+                case "HOME_DONE" -> {
+                    String id = in.readUTF();
+                    String outcome = in.readUTF();
+                    later(() -> community.homes().done(player, id, outcome));
+                }
                 case "ADV" -> {
                     String key = in.readUTF();
                     String title = in.readUTF();
@@ -204,6 +230,7 @@ final class FadBridge {
                     .delay(2, TimeUnit.SECONDS).schedule();
         }
         community.cosmetics().joined(player, server);
+        community.homes().joined(player, server);
     }
 
     /**
@@ -370,6 +397,42 @@ final class FadBridge {
     }
 
     // ---- Helpers ----
+
+    /** A player's home names, for tab completion (their own, and "Name:home" for their group's). */
+    void homeNames(ServerConnection connection, UUID player, List<String> names) {
+        send(connection, out -> {
+            out.writeUTF("HOME_NAMES");
+            out.writeUTF(player.toString());
+            out.writeInt(names.size());
+            for (String name : names) {
+                out.writeUTF(name);
+            }
+        });
+    }
+
+    /**
+     * /home: wait {@code warmup} seconds (moving or being hurt stops it), then teleport to the home ({@code here}) or
+     * just answer "ready" so the proxy moves them to its server. The texts are JSON components.
+     */
+    void homeTeleport(ServerConnection connection, String id, int warmup, boolean here, Home home, String warmupText,
+                      String arrivedText, String movedText, String hurtText) {
+        send(connection, out -> {
+            out.writeUTF("HOME_TP");
+            out.writeUTF(id);
+            out.writeInt(warmup);
+            out.writeBoolean(here);
+            out.writeUTF(home.world());
+            out.writeDouble(home.x());
+            out.writeDouble(home.y());
+            out.writeDouble(home.z());
+            out.writeFloat(home.yaw());
+            out.writeFloat(home.pitch());
+            out.writeUTF(warmupText);
+            out.writeUTF(arrivedText);
+            out.writeUTF(movedText);
+            out.writeUTF(hurtText);
+        });
+    }
 
     private void later(Runnable task) {
         plugin.proxy().getScheduler().buildTask(plugin, () -> {

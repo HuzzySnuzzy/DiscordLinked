@@ -145,6 +145,8 @@ public final class AuditLog {
         /** A cosmetic bought, given, taken away or refunded; KeepInventory switched on or off. */
         public static final String COSMETIC = "COSMETIC";
         public static final String GROUP = "GROUP";
+        /** Homes: set, moved, removed, used, and extra homes bought or given (0.30.0). */
+        public static final String HOME = "HOME";
 
         private EventTypes() {
         }

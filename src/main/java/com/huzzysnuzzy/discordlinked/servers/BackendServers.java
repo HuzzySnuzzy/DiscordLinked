@@ -147,7 +147,7 @@ public final class BackendServers {
                          Integer maxPlayers, String minecraftVersion, String pluginName, String pluginVersion,
                          Boolean folia, Boolean spy, Double tps, Double mspt, Instant lastSeen, Boolean answered,
                          boolean creditsEnabled, boolean microEnabled, boolean maintenance,
-                         String maintenanceMessage, Update update) {
+                         String maintenanceMessage, Update update, boolean homesEnabled) {
 
         /** It runs DiscordLinkedFAD from before the merge, which should be replaced with DiscordLinkedBackend. */
         public boolean oldPlugin() {
@@ -163,6 +163,8 @@ public final class BackendServers {
         volatile String name;
         volatile boolean credits = true;
         volatile boolean micro = true;
+        /** Whether /sethome and /home work here: off until the settings owner switches it on. */
+        volatile boolean homes;
         volatile boolean maintenance;
         /** For players turned away during maintenance; "" = the default from messages.properties. */
         volatile String maintenanceMessage = "";
@@ -208,6 +210,7 @@ public final class BackendServers {
                 entry.credits = row.creditsEnabled();
                 entry.micro = row.microEnabled();
                 entry.maintenance = row.maintenance();
+                entry.homes = row.homesEnabled();
                 entry.maintenanceMessage = row.maintenanceMessage() == null ? "" : row.maintenanceMessage();
                 entry.pluginName = row.pluginName();
                 entry.pluginVersion = row.pluginVersion();
@@ -272,6 +275,17 @@ public final class BackendServers {
     public boolean microEnabled(String server) {
         Entry entry = entries.get(key(server));
         return entry == null || entry.micro;
+    }
+
+    /** Whether /sethome and /home work on this server. Unknown servers: no. */
+    public boolean homesEnabled(String server) {
+        Entry entry = server == null ? null : entries.get(key(server));
+        return entry != null && entry.homes;
+    }
+
+    /** Whether homes are on anywhere (so the Shop offers extra homes). */
+    public boolean homesAnywhere() {
+        return entries.values().stream().anyMatch(entry -> entry.homes);
     }
 
     /** Whether only admins can join this server right now (see {@link Maintenance}). Unknown servers aren't. */
@@ -653,6 +667,21 @@ public final class BackendServers {
         return changes;
     }
 
+    /** Switches /sethome and /home on or off on one server. Written to the audit log. Returns what changed. */
+    public synchronized List<String> setHomes(String server, boolean on, String actor) throws SQLException {
+        Entry entry = known(server);
+        List<String> changes = new ArrayList<>();
+        if (entry.homes == on) {
+            return changes;
+        }
+        changes.add("homes " + onOff(entry.homes) + " -> " + onOff(on));
+        plugin.database().setBackendHomes(entry.name, on);
+        entry.homes = on;
+        plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "server " + entry.name + ": "
+                + String.join(", ", changes), actor, entry.name);
+        return changes;
+    }
+
     /**
      * Turns maintenance mode on or off on one server and/or changes the message for players turned away
      * ({@code null} leaves each; a blank message means the default one). Written to the audit log. Turning it on
@@ -751,7 +780,7 @@ public final class BackendServers {
                 fresh && status.tps() >= 0 ? status.tps() : null, fresh && status.mspt() >= 0 ? status.mspt() : null,
                 entry.lastSeen == 0 ? null : Instant.ofEpochMilli(entry.lastSeen), registered ? entry.answered : null,
                 entry.credits, entry.micro, entry.maintenance, entry.maintenanceMessage,
-                current ? status.update() : null);
+                current ? status.update() : null, entry.homes);
     }
 
     /** Keys of the servers in Velocity's config right now; each has an entry (new ones are remembered). */

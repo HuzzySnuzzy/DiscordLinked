@@ -139,6 +139,17 @@ public final class SettingsEditor {
             number("keep-inventory-delay-minutes", "Shop", "KeepInventory starts after (minutes)",
                     "So it can't be switched on in the middle of a fight. 0 = right away.", 0, 1440),
 
+            number("homes-default", "Homes", "Homes for everyone",
+                    "How many homes every player has. Homes are switched on per server: Backend servers -> a server's "
+                            + "Settings -> Homes.", 0, 100),
+            number("homes-max", "Homes", "Most homes a player can have",
+                    "Bought ones included. Players already over it keep their homes but can't add more.", 1, 100),
+            number("home-price", "Homes", "Price of an extra home",
+                    "In the Shop (Cosmetics -> Quality of life). 0 = free.", 0, 1_000_000),
+            number("home-warmup-seconds", "Homes", "Wait before teleporting (seconds)",
+                    "/home waits this long; moving or getting hurt stops it, so it can't be used to escape a fight. "
+                            + "0 = right away.", 0, 60),
+
             bool("market-enabled", "Market", "Selling open",
                     "Players can sell items in game (/sell, /sellhand) for microcredits.", false),
             number("sell-price-percent", "Market", "Sell price (% of the Shop price)",

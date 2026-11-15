@@ -12,6 +12,7 @@ import com.huzzysnuzzy.discordlinked.fad.CardImages;
 import com.huzzysnuzzy.discordlinked.fad.Cosmetics;
 import com.huzzysnuzzy.discordlinked.fad.FadActions;
 import com.huzzysnuzzy.discordlinked.fad.Groups;
+import com.huzzysnuzzy.discordlinked.fad.Homes;
 import com.huzzysnuzzy.discordlinked.fad.Market;
 import com.huzzysnuzzy.discordlinked.fad.ParticleStyle;
 import com.huzzysnuzzy.discordlinked.fad.Shop;
@@ -36,6 +37,7 @@ import com.huzzysnuzzy.discordlinked.storage.MicroBoardRow;
 import com.huzzysnuzzy.discordlinked.storage.PlayerGroup;
 import com.huzzysnuzzy.discordlinked.storage.GroupInvite;
 import com.huzzysnuzzy.discordlinked.storage.GroupLogEntry;
+import com.huzzysnuzzy.discordlinked.storage.Home;
 import com.huzzysnuzzy.discordlinked.storage.OwnedCosmetic;
 import com.huzzysnuzzy.discordlinked.storage.PendingRestore;
 import com.huzzysnuzzy.discordlinked.storage.PlayerIp;
@@ -107,12 +109,13 @@ public final class WebServer {
             "GET /api/leaderboard", "GET /api/cosmetics", "POST /api/cosmetics/buy", "POST /api/cosmetics/equip",
             "POST /api/cosmetics/style", "GET /api/groups", "POST /api/groups/create", "POST /api/groups/invite",
             "POST /api/groups/cancel-invite", "POST /api/groups/accept", "POST /api/groups/decline", "POST /api/groups/leave",
-            "POST /api/groups/remove", "POST /api/groups/leader", "POST /api/groups/rename", "POST /api/groups/end");
+            "POST /api/groups/remove", "POST /api/groups/leader", "POST /api/groups/rename", "POST /api/groups/end",
+            "POST /api/homes/buy", "POST /api/homes/remove");
     /** Log events the community view hears about, reduced to "this player changed" so nothing else leaks. */
     private static final Set<String> PRESENCE_EVENTS = Set.of(EventTypes.JOIN, EventTypes.LEAVE,
             EventTypes.SERVER_SWITCH, EventTypes.LINK, EventTypes.UNLINK, EventTypes.INTERACTION,
             EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST, EventTypes.SHOP_PURCHASE, EventTypes.SALE,
-            EventTypes.EXCHANGE, EventTypes.COSMETIC, EventTypes.GROUP);
+            EventTypes.EXCHANGE, EventTypes.COSMETIC, EventTypes.GROUP, EventTypes.HOME);
     private static final int MAX_NOTE_LENGTH = 2000;
     private static final long MAX_CREDIT_ADJUSTMENT = 1_000_000_000L;
     private static final int MAX_EXPORT_ROWS = 50_000;
@@ -152,11 +155,12 @@ public final class WebServer {
             Map.entry("deaths", Set.of(EventTypes.DEATH)),
             Map.entry("settings", Set.of(EventTypes.SETTINGS_CHANGE)),
             Map.entry("community", Set.of(EventTypes.INTERACTION, EventTypes.ADVANCEMENT, EventTypes.CREDITS_ADJUST,
-                    EventTypes.SHOP_PURCHASE, EventTypes.SALE, EventTypes.EXCHANGE, EventTypes.COSMETIC, EventTypes.GROUP)),
+                    EventTypes.SHOP_PURCHASE, EventTypes.SALE, EventTypes.EXCHANGE, EventTypes.COSMETIC, EventTypes.GROUP, EventTypes.HOME)),
             Map.entry("groups", Set.of(EventTypes.GROUP)),
             Map.entry("shop", Set.of(EventTypes.SHOP_PURCHASE, EventTypes.COSMETIC)),
             Map.entry("market", Set.of(EventTypes.SALE, EventTypes.EXCHANGE)),
-            Map.entry("cosmetics", Set.of(EventTypes.COSMETIC)));
+            Map.entry("cosmetics", Set.of(EventTypes.COSMETIC)),
+            Map.entry("homes", Set.of(EventTypes.HOME)));
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
             "html", "text/html; charset=utf-8",
@@ -588,6 +592,9 @@ public final class WebServer {
                 }
             }
             case "GET /api/player/inventory" -> inventory(ex, query(ex), session);
+            case "POST /api/homes/buy" -> homeBuy(ex, session);
+            case "POST /api/homes/remove" -> homeRemove(ex, session);
+            case "POST /api/homes/slots" -> homeSlots(ex, session);
             case "GET /api/mcdata", "GET /api/mcdata/preview", "POST /api/mcdata/reset", "POST /api/mcdata/undo" ->
                     mcData(ex, method, path, session);
             case "GET /api/player/snapshots" -> snapshots(ex, query(ex));
@@ -1078,7 +1085,8 @@ public final class WebServer {
                 .put("player", publicPlayerJson(uuid, ref.get().name(), linked).put("firstPlayed", firstPlayed(uuid))
                         .put("streak", streakJson(uuid)).put("client", clientJson(uuid)))
                 .put("community", community)
-                .put("cosmetics", playerCosmetics(uuid, session)));
+                .put("cosmetics", playerCosmetics(uuid, session))
+                .put("homes", playerHomes(uuid, session)));
     }
 
     /** The Home page of the community view: who's online where, the newest members and who was on recently. */
@@ -1171,7 +1179,8 @@ public final class WebServer {
         sendJson(ex, 200, DataObject.empty().put("player", player).put("suspensions", suspensions)
                 .put("notes", notes).put("ips", ips).put("community", playerCommunity(uuid, linked))
                 .put("mcData", mcSummaries(uuid))
-                .put("cosmetics", playerCosmetics(uuid, session)));
+                .put("cosmetics", playerCosmetics(uuid, session))
+                .put("homes", playerHomes(uuid, session)));
     }
 
     /**
@@ -1756,7 +1765,156 @@ public final class WebServer {
                 .put("particlePrice", cosmetics.catalog().stream().filter(c -> c.kind().equals(Cosmetics.PARTICLE))
                         .mapToLong(Cosmetic::price).max().orElse(Cosmetics.DEFAULT_PARTICLE_PRICE))
                 .put("buyer", buyer)
+                .put("homes", homesOffer(buyer))
                 .put("items", items);
+    }
+
+    /**
+     * The extra home in Shop -> Cosmetics -> Quality of life: its price, and for a linked buyer how many homes they
+     * have and may have. Null while homes aren't on on any server.
+     */
+    private DataObject homesOffer(DataObject buyer) throws SQLException {
+        Homes homes = plugin.community().homes();
+        if (!homes.open()) {
+            return null;
+        }
+        PluginConfig c = plugin.config();
+        DataObject offer = DataObject.empty().put("price", c.homePrice()).put("max", c.homesMax()).put("default", c.homesDefault());
+        String uuid = buyer.getString("uuid", "");
+        if (buyer.getBoolean("linked", false) && !uuid.isEmpty()) {
+            UUID id = UUID.fromString(uuid);
+            offer.put("limit", homes.limit(id)).put("count", plugin.database().homeCount(id));
+        }
+        return offer;
+    }
+
+    /**
+     * A player's homes, for their own page and for staff (null for anyone else): where each is, how many they may
+     * have, and on their own page their group's homes they can use too.
+     */
+    private DataObject playerHomes(UUID uuid, Sessions.Session session) throws SQLException {
+        LinkedAccount me = ownAccount(session);
+        boolean self = me != null && me.uuid().equals(uuid);
+        if (!self && !session.staff()) {
+            return null;
+        }
+        Homes homes = plugin.community().homes();
+        List<Home> own = plugin.database().homes(List.of(uuid));
+        if (!homes.open() && own.isEmpty()) {
+            return null;
+        }
+        PluginConfig c = plugin.config();
+        DataArray list = DataArray.empty();
+        for (Home h : own) {
+            list.add(homeJson(h));
+        }
+        DataArray shared = DataArray.empty();
+        if (self) {
+            var group = plugin.database().groupOf(uuid);
+            if (group.isPresent()) {
+                List<UUID> others = group.get().members().stream().map(PlayerGroup.Member::uuid).filter(u -> !u.equals(uuid)).toList();
+                for (Home h : plugin.database().homes(others)) {
+                    shared.add(homeJson(h).put("owner", h.ownerName()));
+                }
+            }
+        }
+        return DataObject.empty()
+                .put("self", self)
+                .put("canRemove", self || session.staff())
+                .put("canGive", session.staff() && isOwner(session))
+                .put("open", homes.open())
+                .put("limit", homes.limit(uuid))
+                .put("extra", plugin.database().homeSlots(uuid))
+                .put("default", c.homesDefault())
+                .put("max", c.homesMax())
+                .put("price", c.homePrice())
+                .put("homes", list)
+                .put("shared", shared);
+    }
+
+    private DataObject homeJson(Home h) {
+        return DataObject.empty().put("name", h.name()).put("server", h.server()).put("world", h.world())
+                .put("x", Math.floor(h.x())).put("y", Math.floor(h.y())).put("z", Math.floor(h.z()))
+                .put("serverOn", plugin.servers().homesEnabled(h.server()))
+                .put("createdAt", h.createdAt().toEpochMilli()).put("updatedAt", h.updatedAt().toEpochMilli());
+    }
+
+    /** Shop: one more home for the viewer's own Minecraft account. */
+    private void homeBuy(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        LinkedAccount me = ownAccount(session);
+        if (me == null) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        Cosmetics.Result result = plugin.community().homes().buySlot(me, session.user.actor());
+        sendJson(ex, result.ok() ? 200 : 409, result.ok()
+                ? DataObject.empty().put("ok", true).put("message", result.message()).put("balance", result.balance())
+                : error(result.message()));
+    }
+
+    /** {@code {name, uuid?}}: removes a home; their own, or anyone's for staff. */
+    private void homeRemove(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        String name = body.getString("name", "").trim();
+        LinkedAccount me = ownAccount(session);
+        UUID owner;
+        try {
+            owner = body.getString("uuid", "").isBlank() ? (me == null ? null : me.uuid()) : UUID.fromString(body.getString("uuid"));
+        } catch (IllegalArgumentException e) {
+            sendJson(ex, 400, error("Unknown player."));
+            return;
+        }
+        if (owner == null) {
+            sendJson(ex, 409, error("Link your Minecraft account first (/link in Discord)."));
+            return;
+        }
+        boolean self = me != null && me.uuid().equals(owner);
+        if (!self && !session.staff()) {
+            sendJson(ex, 403, error("You can only remove your own homes."));
+            return;
+        }
+        PlayerRef player = resolvePlayer(owner).orElse(new PlayerRef(owner, "?", null));
+        if (!plugin.community().homes().remove(owner, player.name(), player.discordId(), name, session.user.actor())) {
+            sendJson(ex, 404, error("No home called " + name + "."));
+            return;
+        }
+        sendJson(ex, 200, DataObject.empty().put("ok", true).put("message", "Home " + name + " removed."));
+    }
+
+    /** {@code {uuid, delta}}: the settings owner gives (or takes) extra homes. */
+    private void homeSlots(HttpExchange ex, Sessions.Session session) throws IOException, SQLException {
+        if (!session.staff() || !isOwner(session)) {
+            sendJson(ex, 403, error("Only the settings owner can give homes."));
+            return;
+        }
+        DataObject body = readJson(ex);
+        if (body == null) {
+            return;
+        }
+        UUID uuid;
+        try {
+            uuid = UUID.fromString(body.getString("uuid", ""));
+        } catch (IllegalArgumentException e) {
+            sendJson(ex, 400, error("Unknown player."));
+            return;
+        }
+        int delta = body.getInt("delta", 0);
+        if (delta == 0 || Math.abs(delta) > 100) {
+            sendJson(ex, 400, error("delta is a number from -100 to 100, not 0."));
+            return;
+        }
+        Optional<PlayerRef> found = resolvePlayer(uuid);
+        if (found.isEmpty()) {
+            sendJson(ex, 404, error("Unknown player."));
+            return;
+        }
+        PlayerRef player = found.get();
+        int limit = plugin.community().homes().giveSlots(uuid, player.name(), player.discordId(), delta, session.user.actor());
+        sendJson(ex, 200, DataObject.empty().put("ok", true).put("limit", limit)
+                .put("message", player.name() + " can have " + limit + " home" + (limit == 1 ? "" : "s") + " now."));
     }
 
     /** What a player has, for their own page (to switch things on and off) and for staff. Null for anyone else. */
@@ -2396,7 +2554,8 @@ public final class WebServer {
                     .put("creditsEnabled", s.creditsEnabled())
                     .put("microEnabled", s.microEnabled())
                     .put("maintenance", s.maintenance())
-                    .put("maintenanceMessage", s.maintenanceMessage()));
+                    .put("maintenanceMessage", s.maintenanceMessage())
+                    .put("homesEnabled", s.homesEnabled()));
         }
         return DataObject.empty().put("servers", servers).put("defaultServer", defaultServer)
                 .put("probe", plugin.servers().probing()).put("version", DiscordLinked.VERSION)
@@ -2500,6 +2659,13 @@ public final class WebServer {
                 String name = servers.name(requested);
                 servers.forget(requested, actor);
                 message = name + " is off the list.";
+            } else if (body.hasKey("homesEnabled")) {
+                boolean on = body.getBoolean("homesEnabled");
+                List<String> changed = servers.setHomes(requested, on, actor);
+                String name = servers.name(requested);
+                message = changed.isEmpty() ? "Nothing changed." : on
+                        ? "Homes on " + name + " are on: /sethome, /home, /homes and /delhome work there."
+                        : "Homes on " + name + " are off. Homes there are kept, but can't be used until they're on again.";
             } else if (body.hasKey("maintenance") || body.hasKey("maintenanceMessage")) {
                 if (!body.isNull("maintenance") && !(body.get("maintenance") instanceof Boolean)
                         || !body.isNull("maintenanceMessage") && !(body.get("maintenanceMessage") instanceof String)) {
@@ -2543,7 +2709,7 @@ public final class WebServer {
             sendJson(ex, 400, error(e.getMessage()));
             return;
         } catch (ParsingException e) {
-            sendJson(ex, 400, error("creditsEnabled, microEnabled, maintenance and forget are true or false, "
+            sendJson(ex, 400, error("creditsEnabled, microEnabled, homesEnabled, maintenance and forget are true or false, "
                     + "maintenanceMessage is text."));
             return;
         }

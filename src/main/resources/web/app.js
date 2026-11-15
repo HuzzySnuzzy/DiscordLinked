@@ -37,6 +37,7 @@ const EVENT_LABELS = {
   EXCHANGE: ['Exchanged', 'info'],
   COSMETIC: ['Cosmetic', ''],
   GROUP: ['Group', 'info'],
+  HOME: ['Home', 'info'],
 };
 
 // ---- Helpers ----
@@ -1069,6 +1070,7 @@ function renderPlayer() {
     ...inventorySection(p),
     ...mcDataSection(p, state.player.mcData),
     unlocksBlock(p, state.player.cosmetics),
+    homesBlock(p, state.player.homes),
     ...communitySection(p, state.player.community),
     ...notesSection, ...historySection, ...ipSection, ...activitySection);
 }
@@ -1141,6 +1143,79 @@ async function equipCosmetic(item, on, button, as) {
     toast(e.message);
   }
   refreshUnlocks();
+}
+
+// ---- Homes (/sethome, /home): a player's homes on their page ----
+
+function homesBlock(p, homes) {
+  return el('div', { id: 'player-homes', class: 'section-block' }, homesSection(p, homes));
+}
+
+/** Loads the player again and redraws only Homes (like refreshUnlocks), so the page doesn't move. */
+async function refreshHomes() {
+  const box = $('player-homes');
+  const route = currentRoute();
+  if (route.view !== 'player' || !box || !state.player) {
+    refreshCurrentView();
+    return;
+  }
+  try {
+    const data = await api(`/api/player?uuid=${encodeURIComponent(route.uuid)}`);
+    if (currentRoute().uuid !== route.uuid || !box.isConnected) return;
+    state.player = { ...state.player, homes: data.homes };
+    keepFocus(box, () => box.replaceChildren(...homesSection(state.player.player, data.homes)));
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function homesSection(p, h) {
+  if (!h) return [];
+  const where = (home) => `${home.server} · ${home.world} · ${home.x}, ${home.y}, ${home.z}`;
+  const row = (home, shared) => {
+    const label = shared ? `${home.owner}:${home.name}` : home.name;
+    return el('div', { class: 'home-row', 'data-key': `home:${label}` },
+      el('span', { class: 'home-icon', 'aria-hidden': 'true' }, '🏠'),
+      el('div', { class: 'home-text' },
+        el('div', { class: 'home-name' }, label,
+          !home.serverOn && el('span', { class: 'badge warn', title: 'Homes are switched off on that server' }, `Off on ${home.server}`)),
+        el('div', { class: 'muted home-where' }, where(home), ' · ', `set ${shortDate(home.updatedAt)}`)),
+      !shared && h.canRemove && el('button', { class: 'btn btn-ghost btn-small', type: 'button', 'aria-label': `Remove home ${home.name}`,
+        onclick: () => confirmDialog({
+          title: `Remove the home ${home.name}?`,
+          text: h.self ? 'You can set it again in game with /sethome.' : `${p.minecraftName} can set it again in game with /sethome.`,
+          confirmLabel: 'Remove', confirmClass: 'btn-danger',
+          onConfirm: async () => {
+            toast((await api('/api/homes/remove', { uuid: p.uuid, name: home.name })).message);
+            refreshHomes();
+          },
+        }) }, 'Remove'));
+  };
+  const give = (delta, text) => el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: async (e) => {
+    e.currentTarget.disabled = true;
+    try {
+      toast((await api('/api/homes/slots', { uuid: p.uuid, delta })).message);
+    } catch (err) {
+      toast(err.message);
+    }
+    refreshHomes();
+  } }, text);
+  const summary = `${h.homes.length} of ${h.limit}` + (h.extra ? ` (${h.extra} extra)` : '');
+  return [
+    el('h2', { class: 'section-title' },
+      el('span', { class: 'title-with-badge' }, h.self ? 'Your homes' : 'Homes',
+        el('span', { class: 'badge', title: `Everyone has ${h.default}, up to ${h.max} with bought ones` }, summary)),
+      el('div', { class: 'actions' },
+        h.canGive && h.limit < h.max && give(1, 'Give a home'),
+        h.canGive && h.extra > 0 && give(-1, 'Take one away'),
+        h.self && h.open && h.limit < h.max && el('a', { class: 'btn btn-ghost btn-small', href: '#/shop/cosmetics/quality-of-life' }, 'Get more'))),
+    el('div', { class: 'card panel homes' },
+      h.homes.length ? h.homes.map((home) => row(home, false))
+        : el('p', { class: 'muted' }, h.self ? 'No homes yet. In game, stand where you want one and use /sethome (or /sethome <name>).'
+          : 'No homes yet.'),
+      h.shared.length > 0 && el('div', { class: 'unlock-group homes-shared' }, 'Your group\'s homes · /home Name:home'),
+      h.shared.map((home) => row(home, true))),
+  ];
 }
 
 /** The particle search under Unlocks, kept while that player's page is re-drawn. */
@@ -1804,7 +1879,7 @@ const stat = (label, value, title) => el('div', { class: 'stat', title },
 const FRAMES = { CHALLENGE: ['Challenge', 'info'], GOAL: ['Goal', 'good'], TASK: ['Task', ''] };
 const TRANSACTION_KINDS = { PLAYTIME: 'Active play', ADVANCEMENT: 'Advancement', ADMIN: 'Staff', SHOP: 'Shop', DAILY: 'Daily reward',
   SALE: 'Sold', EXCHANGE: 'Exchange', COSMETIC: 'Cosmetics', GROUP: 'Group', RESET: 'Reset (MC data)',
-  RESET_UNDO: 'Reset undone' };
+  RESET_UNDO: 'Reset undone', HOME: 'Extra home' };
 
 function creditsDialog(p, community) {
   const currency = community.currency;
@@ -2917,6 +2992,8 @@ function serverEntry(s, data) {
       + 'they can still pay on another server.', 'creditsEnabled'),
     toggle(`Earn ${microName}`, `Off: players here can't sell items (/sell, /sellhand). Exchanging ${microName} for ${creditsName} `
       + 'still works everywhere.', 'microEnabled'),
+    toggle('Homes', '/sethome, /home, /homes and /delhome work here (how many homes players have is under Homes above). Off: '
+      + 'homes saved here are kept, but can\'t be used until it\'s on again.', 'homesEnabled'),
     !s.registered && el('div', { class: 'setting' },
       el('div', { class: 'setting-text' },
         el('div', { class: 'setting-label' }, 'Remove from the list'),
@@ -2951,6 +3028,7 @@ function serverEntry(s, data) {
           s.maintenance && el('span', { class: 'badge warn', title: 'Only admins can join it' }, 'Maintenance'),
           !s.creditsEnabled && el('span', { class: 'badge warn', title: `Players here don't earn ${creditsName}` }, `${creditsName} off`),
           !s.microEnabled && el('span', { class: 'badge warn', title: `Players here can't sell for ${microName}` }, `${microName} off`),
+          s.homesEnabled && el('span', { class: 'badge info', title: '/sethome and /home work here' }, 'Homes'),
           plugin.badge && el('span', { class: 'badge warn' }, plugin.badge)),
         facts.length > 0 && el('div', { class: 'setting-help' }, facts),
         el('div', { class: 'setting-help' }, plugin.line),
@@ -4529,8 +4607,10 @@ function renderCosmetics() {
   const editing = d.manage && cos.edit;
   // One kind at a time, picked with tabs: #/shop/cosmetics/<kind>, else the one picked last, else the first.
   const canAddKind = (kind, count) => editing && kind !== 'particle' && (kind !== 'keepinv' || !count);
-  const kinds = COSMETIC_KINDS.map(([kind, title]) => [kind, title, d.items.filter((item) => item.kind === kind).length])
-    .filter(([kind, , count]) => count || canAddKind(kind, count));
+  const countOf = (kind) => d.items.filter((item) => item.kind === kind).length;
+  // Quality of life also has the extra home (while homes are on somewhere).
+  const kinds = COSMETIC_KINDS.map(([kind, title]) => [kind, title, countOf(kind) + (kind === 'keepinv' && d.homes ? 1 : 0)])
+    .filter(([kind, , count]) => count || canAddKind(kind, countOf(kind)));
   const has = (kind) => kinds.some(([k]) => k === kind);
   const fromRoute = kindOfSlug(currentRoute().part);
   cos.kind = [fromRoute, cos.kind, savedKind('dl-cos-kind')].find((kind) => kind && has(kind)) || kinds[0]?.[0];
@@ -4547,7 +4627,8 @@ function renderCosmetics() {
     if (kind !== cos.kind) continue;
     let items = d.items.filter((item) => item.kind === kind);
     const canAdd = canAddKind(kind, items.length);
-    if (!items.length && !canAdd) continue;
+    const homeOffer = kind === 'keepinv' && d.homes ? homeTile(d) : null;
+    if (!items.length && !canAdd && !homeOffer) continue;
     let tools = null;
     let tiles = null;
     let none = null;
@@ -4594,7 +4675,8 @@ function renderCosmetics() {
         canAdd && el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => cosmeticDialog(null, kind) }, `New ${one}`)),
       help && el('p', { class: 'muted cos-help' }, help),
       tools,
-      items.length ? el('div', { class: 'cos-grid' }, tiles || items.map(cosmeticTile)) : el('p', { class: 'muted' }, 'None yet.'),
+      items.length || homeOffer ? el('div', { class: 'cos-grid' }, homeOffer, tiles || items.map(cosmeticTile))
+        : el('p', { class: 'muted' }, 'None yet.'),
       none));
   }
   keepFocus($('shop-cosmetics'), () => $('shop-cosmetics').replaceChildren(...parts));
@@ -4637,6 +4719,47 @@ function cosmeticTile(item) {
       editing && el('div', { class: 'muted cos-meta' }, `${credits(item.price, d.currency)} · ${item.owners} ${item.owners === 1 ? 'player has' : 'players have'} it`
         + (item.forSale ? '' : ' · not for sale') + (item.kind === 'card' && !item.card ? ' · needs a picture' : ''))),
     action);
+}
+
+/** Quality of life: one more home (/sethome), bought as many times as homes-max allows. */
+function homeTile(d) {
+  const h = d.homes;
+  const b = d.buyer;
+  const atMax = h.limit != null && h.limit >= h.max;
+  const short = b.linked && !atMax && spendable(b) < h.price;
+  let action;
+  if (!b.linked) action = null;
+  else if (atMax) action = el('span', { class: 'badge' }, 'At the most');
+  else {
+    action = el('button', { class: 'btn btn-small', type: 'button', disabled: short,
+      title: short ? needMore(h.price - spendable(b), d.currency) : microPart(b, h.price).trim() || null,
+      onclick: () => buyHome() }, h.price ? `Buy · ${credits(h.price, d.currency)}` : 'Get for free');
+  }
+  return el('div', { class: 'card cos-tile', 'data-key': 'extra-home' },
+    el('div', { class: 'cos-preview home', 'aria-hidden': 'true' }, el('span', {}, '🏠'), el('span', {}, '/home')),
+    el('div', { class: 'cos-info' },
+      el('div', { class: 'cos-name' }, 'Extra home', h.limit != null && el('span', { class: 'badge' }, `You have ${h.limit}`)),
+      el('p', { class: 'muted cos-desc' }, `One more place to save with /sethome and go back to with /home, on the servers where homes `
+        + `are on. Everyone has ${h.default}; up to ${h.max} in all.`
+        + (h.limit != null ? ` You've set ${h.count} of your ${h.limit}.` : ''))),
+    action);
+}
+
+function buyHome() {
+  const d = cos.data;
+  const h = d.homes;
+  confirmDialog({
+    title: 'Buy an extra home?',
+    text: [`${credits(h.price, d.currency)}. You have ${credits(d.buyer.balance, d.currency)}.`
+      + (microPart(d.buyer, h.price) ? ` The rest is paid with ${micro((h.price - d.buyer.balance) * d.buyer.exchange.rate, d.buyer.exchange)}.` : ''),
+    `You'll be able to have ${h.limit + 1} homes. Set it in game with /sethome <name>.`],
+    confirmLabel: h.price ? `Buy for ${credits(h.price, d.currency)}${microPart(d.buyer, h.price)}` : 'Get it',
+    onConfirm: async () => {
+      const result = await api('/api/homes/buy', {});
+      toast(result.message);
+      await loadCosmetics();
+    },
+  });
 }
 
 function buyCosmetic(item) {
@@ -5197,6 +5320,7 @@ function renderPublicPlayer() {
     profileHeader(p, false),
     el('div', { class: 'grid' }, discord, server),
     unlocksBlock(p, state.player.cosmetics),
+    homesBlock(p, state.player.homes),
     ...communitySection(p, state.player.community));
 }
 
@@ -5262,11 +5386,11 @@ $('duty-switch').addEventListener('change', async (e) => {
 // Which log events change which page.
 const STATUS_EVENTS = new Set(['JOIN', 'LEAVE', 'SERVER_SWITCH', 'LINK', 'UNLINK', 'SUSPEND', 'SUSPEND_EDIT',
   'UNSUSPEND', 'KICK', 'NOTE', 'DEATH', 'INVENTORY_RESTORE', 'DENIED_UNLINKED', 'DENIED_SUSPENDED', 'ADVANCEMENT',
-  'CREDITS_ADJUST', 'COSMETIC', 'MCDATA_RESET']);
+  'CREDITS_ADJUST', 'COSMETIC', 'MCDATA_RESET', 'HOME']);
 const COMMUNITY_EVENTS = new Set(['INTERACTION', 'ADVANCEMENT', 'CREDITS_ADJUST', 'SHOP_PURCHASE', 'SALE', 'EXCHANGE',
   'COSMETIC', 'GROUP', 'JOIN', 'LEAVE']);
 const SHOP_EVENTS = new Set(['SHOP_PURCHASE', 'CREDITS_ADJUST', 'SALE', 'EXCHANGE', 'COSMETIC', 'ADVANCEMENT', 'JOIN',
-  'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE']);
+  'LEAVE', 'SERVER_SWITCH', 'SETTINGS_CHANGE', 'HOME']);
 const pendingRefresh = {};
 
 /** Coalesces bursts of events into one refresh. */

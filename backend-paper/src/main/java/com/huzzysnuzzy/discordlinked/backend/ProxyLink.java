@@ -264,6 +264,42 @@ final class ProxyLink implements PluginMessageListener {
         });
     }
 
+    // ---- Homes (0.30.0): decided on the proxy, which answers in chat ----
+
+    /** /sethome [name] where the player stands. */
+    void homeSet(Player player, String name) {
+        org.bukkit.Location l = player.getLocation();
+        send(player, out -> {
+            out.writeUTF("HOME_SET");
+            out.writeUTF(clip(name, 32));
+            out.writeUTF(l.getWorld().getName());
+            out.writeDouble(l.getX());
+            out.writeDouble(l.getY());
+            out.writeDouble(l.getZ());
+            out.writeFloat(l.getYaw());
+            out.writeFloat(l.getPitch());
+        });
+    }
+
+    /** /home [name], /delhome name, /homes. */
+    void home(Player player, String type, String name) {
+        send(player, out -> {
+            out.writeUTF(type);
+            if (name != null) {
+                out.writeUTF(clip(name, 64));
+            }
+        });
+    }
+
+    /** How a /home the proxy sent went: ok, ready (waited; move them), cancelled, no-world or failed. */
+    void homeDone(Player player, String id, String outcome) {
+        send(player, out -> {
+            out.writeUTF("HOME_DONE");
+            out.writeUTF(id);
+            out.writeUTF(outcome);
+        });
+    }
+
     /** A sale waiting for the proxy to say what it paid. */
     private record PendingSale(UUID player, Map<String, Integer> lines, ScheduledTask timeout) {
     }
@@ -434,6 +470,24 @@ final class ProxyLink implements PluginMessageListener {
                     if (updater != null) {
                         updater.fromProxy(mode, restart, time, repository, checkHours, latest);
                     }
+                }
+                // A player's home names, for tab completion.
+                case "HOME_NAMES" -> {
+                    UUID uuid = UUID.fromString(in.readUTF());
+                    int count = in.readInt();
+                    List<String> names = new ArrayList<>();
+                    for (int i = 0; i < count; i++) {
+                        names.add(in.readUTF());
+                    }
+                    plugin.homes().names(uuid, names);
+                }
+                // /home: wait, then teleport (or say "ready" to be moved to the home's server).
+                case "HOME_TP" -> {
+                    HomeTeleports.Request request = new HomeTeleports.Request(in.readUTF(), in.readInt(), in.readBoolean(),
+                            in.readUTF(), in.readDouble(), in.readDouble(), in.readDouble(), in.readFloat(), in.readFloat(),
+                            HomeTeleports.text(in.readUTF()), HomeTeleports.text(in.readUTF()),
+                            HomeTeleports.text(in.readUTF()), HomeTeleports.text(in.readUTF()));
+                    plugin.homes().start(carrier, request);
                 }
                 // Someone on Discord picked this player: play the effects where they are.
                 case "FX" -> {

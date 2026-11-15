@@ -51,6 +51,7 @@ public final class Community {
     private final Cosmetics cosmetics;
     private final Groups groups;
     private final ShopReminder shopReminder;
+    private final Homes homes;
     /** Players their server reported as AFK. Cleared when they switch server or leave. */
     private final Set<UUID> afk = ConcurrentHashMap.newKeySet();
 
@@ -64,6 +65,7 @@ public final class Community {
         this.cosmetics = new Cosmetics(plugin, this);
         this.groups = new Groups(plugin);
         this.shopReminder = new ShopReminder(plugin, this);
+        this.homes = new Homes(plugin, this);
     }
 
     public void start() {
@@ -113,6 +115,10 @@ public final class Community {
 
     public Cosmetics cosmetics() {
         return cosmetics;
+    }
+
+    public Homes homes() {
+        return homes;
     }
 
     /** Servers whose backend plugin has said hello since the proxy started, with its version. */

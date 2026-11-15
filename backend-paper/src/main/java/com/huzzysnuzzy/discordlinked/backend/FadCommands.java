@@ -401,6 +401,49 @@ final class FadCommands {
         }
     }
 
+    /**
+     * /sethome, /home, /homes and /delhome: the proxy decides (and answers in chat), so homes are the same on every
+     * server. {@code type} is the message: HOME_SET, HOME_GO, HOME_LIST or HOME_DEL.
+     */
+    static final class HomeCommand extends Command {
+
+        private final DiscordLinkedBackend plugin;
+        private final String type;
+
+        HomeCommand(DiscordLinkedBackend plugin, FadSettings.CommandName name, String type, String description, String args) {
+            super(name.name(), description, ("/" + name.name() + " " + args).trim(), name.aliases());
+            this.plugin = plugin;
+            this.type = type;
+            setPermission("discordlinked.homes");
+        }
+
+        @Override
+        public boolean execute(CommandSender sender, String label, String[] args) {
+            if (!testPermission(sender)) {
+                return true;
+            }
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(plugin.settings().message("player-only"));
+                return true;
+            }
+            String name = args.length == 0 ? "" : args[0];
+            switch (type) {
+                case "HOME_SET" -> plugin.link().homeSet(player, name);
+                case "HOME_LIST" -> plugin.link().home(player, type, null);
+                default -> plugin.link().home(player, type, name);
+            }
+            return true;
+        }
+
+        @Override
+        public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
+            if (args.length != 1 || !(sender instanceof Player player) || type.equals("HOME_LIST")) {
+                return List.of();
+            }
+            return type.equals("HOME_GO") ? plugin.homes().complete(player, args[0]) : plugin.homes().completeOwn(player, args[0]);
+        }
+    }
+
     /** /exchange <amount|all>: microcredits into credits. The proxy answers in chat. */
     static final class ExchangeCommand extends Command {
 

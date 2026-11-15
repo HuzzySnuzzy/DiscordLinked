@@ -82,7 +82,11 @@ public record PluginConfig(
         String geoipToken,
         Updater.Policy updatePolicy,
         Updater.Restart backendRestart,
-        int shopReminderMinutes
+        int shopReminderMinutes,
+        int homesDefault,
+        int homesMax,
+        int homePrice,
+        int homeWarmupSeconds
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -163,7 +167,11 @@ public record PluginConfig(
                         props.getProperty("auto-update-restart-time", ""), props.getProperty("auto-update-repository", ""),
                         props.getProperty("auto-update-check-hours", "")),
                 Updater.Policy.parseRestart(props.getProperty("auto-update-backend-restart", "")),
-                Math.max(0, parseInt(props, "shop-reminder-minutes", 60))
+                Math.max(0, parseInt(props, "shop-reminder-minutes", 60)),
+                Math.max(0, Math.min(100, parseInt(props, "homes-default", 1))),
+                Math.max(1, Math.min(100, parseInt(props, "homes-max", 25))),
+                Math.max(0, parseInt(props, "home-price", 500)),
+                Math.max(0, Math.min(60, parseInt(props, "home-warmup-seconds", 3)))
         );
     }
 

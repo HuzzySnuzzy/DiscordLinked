@@ -71,8 +71,8 @@ regions.
 
 Permissions: `discordlinkedfad.admin` (the reload command) and `discordlinkedfad.cooldown.bypass` are for ops by
 default; `discordlinkedfad.credits` (`/credits`, `/mct`), `discordlinkedfad.sell` (`/sell`, `/sellhand`, `/worth`,
-`/exchange`), `discordlinkedfad.interactions` (`/interactions`) and `discordlinkedfad.interact.<name>` (one per
-interaction) are for everyone. Spy, inventories and teleports are controlled from the website, so they need none.
+`/exchange`), `discordlinkedfad.interactions` (`/interactions`), `discordlinked.homes` (`/sethome`, `/home`,
+`/homes`, `/delhome`) and `discordlinkedfad.interact.<name>` (one per interaction) are for everyone. Spy, inventories and teleports are controlled from the website, so they need none.
 
 The proxy and the backend plugin talk over Minecraft's plugin messaging channel, and the proxy drops any such
 message sent by a player's client, so players can't trigger it. As with any Velocity network, make sure your
@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.29.1.jar` there instead.
+   `DiscordLinkedBackend-0.30.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.29.1 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.30.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -164,9 +164,11 @@ What a server's entry can say about its plugin:
   away pings for unknown host names. It shows up once a player joins (if it doesn't, the entry says Plugin not
   found).
 
-**Settings** next to a server opens its two switches (named after your currencies). They apply straight away,
-and every change is in the Logs (**Settings changes**, with the server's name):
+**Settings** next to a server opens its switches (earning is named after your currencies). They apply straight
+away, and every change is in the Logs (**Settings changes**, with the server's name):
 
+- **Homes** (off until you switch it on): `/sethome`, `/home`, `/homes` and `/delhome` work there. See
+  [Homes](#homes). Off: homes saved there are kept, but can't be used until it's on again.
 - **Earn credits** off: playing there still counts as playtime (for the Playtime stat and leaderboard), but pays
   no credits, and that time doesn't count toward the next playtime reward. Advancements made there are ignored
   completely (not recorded, paid or announced), so they still pay the first time the player makes them on a
@@ -415,6 +417,31 @@ many there are); the browser remembers the one picked last, and `#/shop/cosmetic
   a trail and an aura of the same particle paid twice for what is now one, so the second payment goes back to them. A player's profile has **Give for free** and **Take away** for
   admins. Purchases are in the credit history and everything is in the Logs (**Cosmetics** filter).
 - `cosmetics-enabled=false` stops new purchases; what players already have keeps working.
+
+## Homes
+
+Players save spots with `/sethome [name]` (just `/sethome` is "home") and go back with `/home [name]`; `/homes`
+lists them (click one to go there) and `/delhome <name>` removes one. Tab completion knows their homes.
+
+- **Per server**: homes only work on the servers where you switch them on (Settings → Backend servers → a
+  server's **Settings** → **Homes**). They're off everywhere until you do.
+- **How many**: everyone has `homes-default` (1). Players buy more in Shop → Cosmetics → **Quality of life** →
+  **Extra home** for `home-price` credits each (500; microcredits pay the rest if they have that on), up to
+  `homes-max` in all (25). The settings owner can **Give a home** or **Take one away** on a player's profile.
+  Lowering the numbers never removes homes: players just can't add more until they're under it.
+- **Groups share them**: players in the same [group](#community-interactions--credits) can use each other's
+  homes, as `/home Name:home` (or just `/home farm` when only one of them has a home called that, and they have
+  none). `/homes` lists the group's homes too. Only the owner can move or remove a home.
+- **Across servers**: a home remembers its server. `/home` to a home on another server moves the player there
+  first, if homes are on there.
+- **The wait**: `/home` waits `home-warmup-seconds` (3) before teleporting; moving or getting hurt cancels it, so
+  it can't be used to escape a fight. 0 = right away.
+- On the website, a player's profile lists their homes (where, and since when) with **Remove**; on their own
+  profile also their group's. Staff see everyone's. Everything is in the Logs (**Homes** filter): homes set,
+  moved, removed and used, and extra homes bought or given.
+- The messages are in the proxy's `messages.properties` (`minecraft.home.*`); the command names are in
+  DiscordLinkedBackend's config.yml (rename them if another plugin already has `/home`).
+- Settings → **Homes** has the four numbers; they're also in config.properties.
 
 ## Website
 
@@ -687,7 +714,8 @@ In game, for everyone: `/dla` (website login link), `/dla shop` (the same, openi
 `/dla reminders [on|off]` (Shop reminders).
 
 In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
-`/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, and
+`/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, `/sethome [name]`,
+`/home [name]`, `/homes`, `/delhome <name>` (see [Homes](#homes)), and
 `/discordlinkedbackend reload` (or `/dlb reload`; op). Their permissions are under
 [The backend plugin](#the-backend-plugin-discordlinkedbackend).
 
@@ -770,8 +798,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.29.1.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.29.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.30.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.30.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

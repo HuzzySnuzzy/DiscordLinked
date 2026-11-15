@@ -77,6 +77,23 @@ exchange-command:
   name: exchange
   aliases: []
 
+# Homes: /sethome [name], /home [name], /homes and /delhome <name>. They only work on servers where the settings
+# owner switched homes on (website: Settings -> Backend servers -> this server's settings -> Homes). How many homes
+# players have, what an extra one costs and the wait before teleporting are set on the website too, and so are
+# the messages (the proxy's messages.properties). If another plugin already has /home, rename these.
+sethome-command:
+  name: sethome
+  aliases: []
+home-command:
+  name: home
+  aliases: []
+homes-command:
+  name: homes
+  aliases: []
+delhome-command:
+  name: delhome
+  aliases: []
+
 # Cosmetics players buy on the website (Shop -> Cosmetics) and switch on or off on their profile there.
 cosmetics:
   # Prefixes. With LuckPerms they're added as a temporary LuckPerms prefix (never saved) with this priority, so

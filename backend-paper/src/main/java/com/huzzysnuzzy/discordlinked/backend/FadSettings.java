@@ -52,6 +52,10 @@ final class FadSettings {
     final CommandName worthCommand;
     final CommandName microTopCommand;
     final CommandName exchangeCommand;
+    final CommandName setHomeCommand;
+    final CommandName homeCommand;
+    final CommandName homesCommand;
+    final CommandName delHomeCommand;
     final int prefixPriority;
     final boolean prefixSpace;
     final int trailIntervalTicks;
@@ -79,6 +83,10 @@ final class FadSettings {
         worthCommand = commandName("worth-command", logger);
         microTopCommand = commandName("microcredit-top-command", logger);
         exchangeCommand = commandName("exchange-command", logger);
+        setHomeCommand = commandName("sethome-command", logger);
+        homeCommand = commandName("home-command", logger);
+        homesCommand = commandName("homes-command", logger);
+        delHomeCommand = commandName("delhome-command", logger);
         prefixPriority = integer("cosmetics.prefix-priority");
         prefixSpace = bool("cosmetics.prefix-space");
         trailIntervalTicks = Math.max(1, integer("cosmetics.trail-interval-ticks"));

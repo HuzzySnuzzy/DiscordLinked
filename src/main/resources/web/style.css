@@ -1492,6 +1492,8 @@ html:has(.topbar :focus) { scroll-padding-top: 0; }
 .cos-preview.keepinv { justify-content: center; font-size: 26px; background: linear-gradient(135deg, #1d5a42, #123327); }
 .cos-preview.keepinv span + span { font-size: 14px; font-weight: 700; }
 .cos-preview.keepinv.small { font-size: 20px; }
+.cos-preview.home { justify-content: center; font-size: 26px; background: linear-gradient(135deg, #3b4fb0, #1c2558); }
+.cos-preview.home span + span { font-size: 14px; font-weight: 700; font-family: var(--mono, monospace); }
 
 /* Minecraft colour codes. */
 .mc-text { text-shadow: 1px 1px 0 rgba(0, 0, 0, .45); }
@@ -1518,6 +1520,16 @@ html:has(.topbar :focus) { scroll-padding-top: 0; }
   .unlock .cos-preview.small { width: 100%; }
 }
 #player-unlocks { display: contents; }
+#player-homes { display: contents; }
+.homes { display: grid; gap: 4px; }
+.home-row { display: flex; align-items: center; gap: 12px; padding: 6px; border-radius: 14px; }
+.home-row:hover { background: var(--glass-soft); }
+.home-icon { font-size: 20px; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; background: var(--glass-soft); flex: none; }
+.home-text { flex: 1; min-width: 0; }
+.home-name { font-weight: 700; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; overflow-wrap: anywhere; }
+.home-where { font-size: 12px; overflow-wrap: anywhere; }
+.homes-shared { margin-top: 10px; }
+.title-with-badge { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cos-tile[hidden] { display: none; }
 /* Tabs for the kinds of cosmetics (Shop -> Cosmetics) and unlocks: one kind at a time. */
 .cos-kinds { width: fit-content; max-width: 100%; margin-bottom: 14px; }

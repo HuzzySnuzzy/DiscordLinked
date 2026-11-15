@@ -416,6 +416,27 @@ public final class Database implements AutoCloseable {
         // Added in 0.27.0: whether a player pays what their credits don't cover with microcredits (Shop).
         addColumnIfMissing("fad_accounts", "shop_auto_micro", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("fad_accounts", "shop_reminders", "INTEGER NOT NULL DEFAULT 1");
+        // Added in 0.30.0: homes (/sethome, /home), the extra homes each player bought, and the servers they work on.
+        try (Statement st = connection.createStatement()) {
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS homes (
+                        owner_uuid TEXT NOT NULL,
+                        owner_name TEXT NOT NULL,
+                        name       TEXT NOT NULL COLLATE NOCASE,
+                        server     TEXT NOT NULL,
+                        world      TEXT NOT NULL,
+                        x          REAL NOT NULL,
+                        y          REAL NOT NULL,
+                        z          REAL NOT NULL,
+                        yaw        REAL NOT NULL,
+                        pitch      REAL NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        PRIMARY KEY (owner_uuid, name)
+                    )""");
+        }
+        addColumnIfMissing("fad_accounts", "home_slots", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("backend_servers", "homes_enabled", "INTEGER NOT NULL DEFAULT 0");
         // Added in 0.26.0: resets of players' data (website: MC data), their delivery to the backend servers, and
         // what each server last said about each player's data.
         try (Statement st = connection.createStatement()) {
@@ -3006,7 +3027,7 @@ public final class Database implements AutoCloseable {
      */
     public record BackendServerRow(String name, boolean creditsEnabled, boolean microEnabled, String pluginName,
                                    String pluginVersion, String minecraftVersion, Instant lastSeen,
-                                   boolean maintenance, String maintenanceMessage) {
+                                   boolean maintenance, String maintenanceMessage, boolean homesEnabled) {
     }
 
     public synchronized List<BackendServerRow> backendServers() throws SQLException {
@@ -3019,7 +3040,7 @@ public final class Database implements AutoCloseable {
                 servers.add(new BackendServerRow(rs.getString("name"), rs.getInt("credits_enabled") != 0,
                         rs.getInt("micro_enabled") != 0, rs.getString("plugin_name"), rs.getString("plugin_version"),
                         rs.getString("mc_version"), lastSeen, rs.getInt("maintenance") != 0,
-                        rs.getString("maintenance_message")));
+                        rs.getString("maintenance_message"), rs.getInt("homes_enabled") != 0));
             }
         }
         return servers;
@@ -3043,6 +3064,171 @@ public final class Database implements AutoCloseable {
             ps.setInt(3, micro ? 1 : 0);
             ps.executeUpdate();
         }
+    }
+
+    /** Whether /sethome and /home work on a server. */
+    public synchronized void setBackendHomes(String name, boolean on) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO backend_servers (name, homes_enabled) VALUES (?, ?)
+                ON CONFLICT (name) DO UPDATE SET homes_enabled = excluded.homes_enabled""")) {
+            ps.setString(1, name);
+            ps.setInt(2, on ? 1 : 0);
+            ps.executeUpdate();
+        }
+    }
+
+    // ---- Homes (0.30.0) ----
+
+    /** What {@link #setHome} did. */
+    public enum HomeSet { NEW, MOVED, FULL }
+
+    private static Home readHome(ResultSet rs) throws SQLException {
+        return new Home(UUID.fromString(rs.getString("owner_uuid")), rs.getString("owner_name"), rs.getString("name"),
+                rs.getString("server"), rs.getString("world"), rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z"),
+                rs.getFloat("yaw"), rs.getFloat("pitch"), Instant.ofEpochMilli(rs.getLong("created_at")),
+                Instant.ofEpochMilli(rs.getLong("updated_at")));
+    }
+
+    /** The homes of these players, by owner then name. */
+    public synchronized List<Home> homes(Collection<UUID> owners) throws SQLException {
+        List<Home> homes = new ArrayList<>();
+        if (owners.isEmpty()) {
+            return homes;
+        }
+        String marks = String.join(",", java.util.Collections.nCopies(owners.size(), "?"));
+        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM homes WHERE owner_uuid IN (" + marks
+                + ") ORDER BY owner_name COLLATE NOCASE, name COLLATE NOCASE")) {
+            int i = 1;
+            for (UUID owner : owners) {
+                ps.setString(i++, owner.toString());
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    homes.add(readHome(rs));
+                }
+            }
+        }
+        return homes;
+    }
+
+    public synchronized int homeCount(UUID owner) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM homes WHERE owner_uuid = ?")) {
+            ps.setString(1, owner.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    /**
+     * Sets a home (moves it if they already have one by that name). A new one only if they have fewer than
+     * {@code limit} homes, checked in the same step, so two /sethome at once can't go over it.
+     */
+    public synchronized HomeSet setHome(UUID owner, String ownerName, String name, String server, String world,
+                                        double x, double y, double z, float yaw, float pitch, int limit) throws SQLException {
+        return transaction(() -> {
+            long now = System.currentTimeMillis();
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    UPDATE homes SET owner_name = ?, server = ?, world = ?, x = ?, y = ?, z = ?, yaw = ?, pitch = ?,
+                        updated_at = ? WHERE owner_uuid = ? AND name = ?""")) {
+                ps.setString(1, ownerName);
+                ps.setString(2, server);
+                ps.setString(3, world);
+                ps.setDouble(4, x);
+                ps.setDouble(5, y);
+                ps.setDouble(6, z);
+                ps.setFloat(7, yaw);
+                ps.setFloat(8, pitch);
+                ps.setLong(9, now);
+                ps.setString(10, owner.toString());
+                ps.setString(11, name);
+                if (ps.executeUpdate() > 0) {
+                    return HomeSet.MOVED;
+                }
+            }
+            if (homeCount(owner) >= limit) {
+                return HomeSet.FULL;
+            }
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    INSERT INTO homes (owner_uuid, owner_name, name, server, world, x, y, z, yaw, pitch, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""")) {
+                ps.setString(1, owner.toString());
+                ps.setString(2, ownerName);
+                ps.setString(3, name);
+                ps.setString(4, server);
+                ps.setString(5, world);
+                ps.setDouble(6, x);
+                ps.setDouble(7, y);
+                ps.setDouble(8, z);
+                ps.setFloat(9, yaw);
+                ps.setFloat(10, pitch);
+                ps.setLong(11, now);
+                ps.setLong(12, now);
+                ps.executeUpdate();
+            }
+            return HomeSet.NEW;
+        });
+    }
+
+    /** Removes one of a player's homes; false if they have none by that name. */
+    public synchronized boolean deleteHome(UUID owner, String name) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM homes WHERE owner_uuid = ? AND name = ?")) {
+            ps.setString(1, owner.toString());
+            ps.setString(2, name);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /** The extra homes a player bought (or was given), on top of everyone's. */
+    public synchronized int homeSlots(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT home_slots FROM fad_accounts WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    /**
+     * Buys one extra home: charged like a Shop purchase (microcredits pay the rest when {@code microPerCredit} > 0).
+     * {@code maxSlots} is the most extra homes there can be; at it: balance -2. Not enough: -1.
+     */
+    public synchronized Charge buyHomeSlot(UUID uuid, String name, long price, long microPerCredit, int maxSlots,
+                                           String detail, String actor) throws SQLException {
+        return transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            int slots = homeSlots(uuid);
+            if (slots >= maxSlots) {
+                return new Charge(-2, 0, 0);
+            }
+            long[] covered = coverWithMicro(uuid, name, price, microPerCredit, detail, actor);
+            if (covered == null) {
+                return new Charge(-1, 0, 0);
+            }
+            long balance = creditBalance(uuid) - price;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET credits = credits - ?, home_slots = home_slots + 1 WHERE minecraft_uuid = ?")) {
+                ps.setLong(1, price);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            insertCreditTransaction(uuid, -price, balance, "HOME", detail, actor, Instant.now());
+            return new Charge(balance, covered[0], covered[1]);
+        });
+    }
+
+    /** Gives (or takes, with a negative {@code delta}) extra homes for free; never below 0. Returns the new number. */
+    public synchronized int addHomeSlots(UUID uuid, String name, int delta) throws SQLException {
+        return transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET home_slots = MAX(0, home_slots + ?) WHERE minecraft_uuid = ?")) {
+                ps.setInt(1, delta);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            return homeSlots(uuid);
+        });
     }
 
     /** Maintenance mode for a server, and the message for players turned away (null = the default one). */
