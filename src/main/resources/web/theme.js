@@ -7,8 +7,18 @@
   try { theme = localStorage.getItem('dl-theme'); fx = localStorage.getItem('dl-fx'); } catch (e) { /* storage blocked */ }
   if (theme === 'light' || theme === 'dark' || theme === '2049') root.setAttribute('data-theme', theme);
   root.setAttribute('data-fx', fx === 'calm' ? 'calm' : 'full');
-  /* Effects stop while the tab is hidden (on every page, so the login and message pages too). */
-  document.addEventListener('visibilitychange', function () { root.toggleAttribute('data-hidden', document.hidden); });
+  /* Effects stop while the page is in the background: its tab hidden, or its window not the one in use (on every
+     page, so the login and message pages too). Nothing moves, so the GPU can rest. */
+  /* data-hidden: the tab can't be seen, so everything stops. data-idle: it can be seen but another window is in use,
+     so only the endless background effects stop (content still fades in, e.g. on a second screen). */
+  function background() {
+    root.toggleAttribute('data-hidden', document.hidden);
+    root.toggleAttribute('data-idle', document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus()));
+  }
+  document.addEventListener('visibilitychange', background);
+  window.addEventListener('blur', background);
+  window.addEventListener('focus', background);
+  if (document.hidden) background();
   var FONTS = ['orbitron-latin-wght-v1', 'oxanium-latin-wght-v1', 'share-tech-mono-latin-400-v1'];
   /* The 2049 fonts are only found once style.css is matched; asking for them now (before the stylesheet) means the
      first paint usually has them, instead of reflowing the bar when they swap in. */

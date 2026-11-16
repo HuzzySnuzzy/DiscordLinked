@@ -1868,8 +1868,14 @@ dialog.wide { width: min(540px, calc(100vw - 32px)); }
   transform: translateY(-30vh); animation: hud-roll 9s linear infinite; will-change: transform;
 }
 @keyframes hud-roll { 0% { transform: translateY(-30vh); } 70%, 100% { transform: translateY(130vh); } }
-/* A hidden tab moves nothing (theme.js sets data-hidden on every page). */
-:root[data-theme="2049"][data-hidden]::before, :root[data-theme="2049"][data-hidden]::after, :root[data-theme="2049"][data-hidden] *, :root[data-theme="2049"][data-hidden] *::before, :root[data-theme="2049"][data-hidden] *::after { animation-play-state: paused !important; }
+/* A page in the background moves nothing, in every theme (theme.js): a hidden tab stops everything; a visible one
+   whose window isn't in use stops the endless background effects (the colour field, the 2049 rain, grain and sweep,
+   pulsing dots, streak badges), while content still fades in normally. */
+:root[data-hidden]::before, :root[data-hidden]::after, :root[data-hidden] *, :root[data-hidden] *::before, :root[data-hidden] *::after { animation-play-state: paused !important; }
+:root[data-idle]::before, :root[data-idle]::after, :root[data-idle] .liquid i, :root[data-idle] .liquid::before, :root[data-idle] .liquid::after,
+:root[data-idle] body::before, :root[data-idle] body::after, :root[data-idle] .topbar::after, :root[data-idle] .live-dot,
+:root[data-idle] .live-indicator::before, :root[data-idle] .streak, :root[data-idle] .streak *, :root[data-idle] .streak::after,
+:root[data-idle] .brand-text, :root[data-idle] h1 { animation-play-state: paused !important; }
 
 /* ---------- Surfaces: smoked panels with corner brackets ---------- */
 /* No blur anywhere (fields, ghost buttons, badges, backdrops, the spy veil included). */

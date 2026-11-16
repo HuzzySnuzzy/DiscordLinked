@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.32.0.jar` there instead.
+   `DiscordLinkedBackend-0.32.1.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.32.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.32.1 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -497,7 +497,10 @@ while they're logged in.
   dark mode (the default), **Light** and **Dark** choose one, and **2049** is a futuristic amber-and-teal HUD theme
   inspired by Blade Runner 2049: haze, rain, film grain and corner brackets, with a boot sequence the first time in a
   browser tab, glitching titles, scan beams on page changes and projected dialogs. Its **Effects** switch has **Full**
-  and **Calm** (much less movement, easier on older devices); when the device asks for reduced motion nothing moves.
+  and **Calm** (much less movement, easier on older devices); when the device asks for reduced motion nothing moves. In every theme the
+  animations stop while the website's tab is hidden, and the endless background effects (the colour field, the 2049
+  rain, grain and sweep, glowing badges) stop while its window isn't the one in use, so it doesn't keep the GPU busy
+  in the background.
   The 2049 theme uses the fonts Orbitron, Oxanium and Share Tech Mono (SIL Open Font License 1.1, licences in
   `src/main/resources/web/fonts/`), served by the plugin itself; the other themes don't download them (only Orbitron, for the menu's "2049" label,
   when the theme button is pointed at or focused).
@@ -849,8 +852,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.32.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.32.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.32.1.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.32.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

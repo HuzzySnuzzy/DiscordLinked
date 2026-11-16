@@ -4498,6 +4498,7 @@ const previewObserver = 'IntersectionObserver' in window ? new IntersectionObser
   for (const entry of entries) entry.target.previewVisible = entry.isIntersecting;
 }, { rootMargin: '100px' }) : null;
 function tickParticlePreviews() {
+  if (document.documentElement.hasAttribute('data-idle')) return; // in the background: nothing moves
   const tick = Math.floor(performance.now() / 50);
   for (const preview of particlePreviews) {
     if (!preview.root.isConnected) {
