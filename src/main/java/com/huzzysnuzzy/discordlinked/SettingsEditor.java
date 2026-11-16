@@ -153,8 +153,12 @@ public final class SettingsEditor {
                             + "Settings -> Homes.", 0, 100),
             number("homes-max", "Homes", "Most homes a player can have",
                     "Bought ones included. Players already over it keep their homes but can't add more.", 1, 100),
-            number("home-price", "Homes", "Price of an extra home",
-                    "In the Shop (Cosmetics -> Quality of life). 0 = free.", 0, 1_000_000),
+            number("home-price", "Homes", "Price of the first extra home",
+                    "In the Shop (Cosmetics -> Quality of life); the ones after cost more (below). 0 = free.", 0, 1_000_000),
+            number("home-price-growth", "Homes", "Each extra home costs more (%)",
+                    "Every extra home costs this % of the one before: 200 = double each time (500, 1,000, 2,000, "
+                            + "4,000…), 150 = half again, 100 = always the same. Homes given on a profile count too.",
+                    100, 1000),
             number("home-warmup-seconds", "Homes", "Wait before teleporting (seconds)",
                     "/home waits this long; moving or getting hurt stops it, so it can't be used to escape a fight. "
                             + "0 = right away.", 0, 60),

@@ -3253,15 +3253,19 @@ public final class Database implements AutoCloseable {
 
     /**
      * Buys one extra home: charged like a Shop purchase (microcredits pay the rest when {@code microPerCredit} > 0).
-     * {@code maxSlots} is the most extra homes there can be; at it: balance -2. Not enough: -1.
+     * {@code maxSlots} is the most extra homes there can be; at it: balance -2. Not enough: -1. {@code price} is for
+     * when they have {@code expectedSlots} extra homes; if that changed meanwhile (the price with it): -3.
      */
-    public synchronized Charge buyHomeSlot(UUID uuid, String name, long price, long microPerCredit, int maxSlots,
-                                           String detail, String actor) throws SQLException {
+    public synchronized Charge buyHomeSlot(UUID uuid, String name, long price, int expectedSlots, long microPerCredit,
+                                           int maxSlots, String detail, String actor) throws SQLException {
         return transaction(() -> {
             ensureCreditAccount(uuid, name);
             int slots = homeSlots(uuid);
             if (slots >= maxSlots) {
                 return new Charge(-2, 0, 0);
+            }
+            if (slots != expectedSlots) {
+                return new Charge(-3, 0, 0);
             }
             long[] covered = coverWithMicro(uuid, name, price, microPerCredit, detail, actor);
             if (covered == null) {

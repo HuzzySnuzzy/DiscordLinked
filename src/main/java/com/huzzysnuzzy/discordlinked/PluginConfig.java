@@ -92,7 +92,8 @@ public record PluginConfig(
         boolean spawnParticles,
         boolean teleportEffects,
         String afkPrefix,
-        int tpaExpireSeconds
+        int tpaExpireSeconds,
+        int homePriceGrowth
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -183,7 +184,8 @@ public record PluginConfig(
                 !"false".equalsIgnoreCase(props.getProperty("spawn-particles", "true").trim()),
                 !"false".equalsIgnoreCase(props.getProperty("teleport-effects", "true").trim()),
                 afkPrefix(props.getProperty("afk-prefix", "&7[AFK]")),
-                Math.max(10, Math.min(600, parseInt(props, "tpa-expire-seconds", 60)))
+                Math.max(10, Math.min(600, parseInt(props, "tpa-expire-seconds", 60))),
+                Math.max(100, Math.min(1000, parseInt(props, "home-price-growth", 200)))
         );
     }
 

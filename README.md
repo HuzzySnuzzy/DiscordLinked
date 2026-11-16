@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.35.0.jar` there instead.
+   `DiscordLinkedBackend-0.35.1.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.35.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.35.1 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -503,8 +503,10 @@ lists them (click one to go there) and `/delhome <name>` removes one. Tab comple
 - **Per server**: homes only work on the servers where you switch them on (Settings → Backend servers → a
   server's **Settings** → **Homes**). They're off everywhere until you do.
 - **How many**: everyone has `homes-default` (1). Players buy more in Shop → Cosmetics → **Quality of life** →
-  **Extra home** for `home-price` credits each (500; microcredits pay the rest if they have that on), up to
-  `homes-max` in all (25). The settings owner can **Give a home** or **Take one away** on a player's profile.
+  **Extra home** (microcredits pay the rest if they have that on), up to `homes-max` in all (25). Each one costs
+  more: the first `home-price` (500), then `home-price-growth` % of the one before (200: double each time, so 500,
+  1,000, 2,000, 4,000…; 100 = always the same). Homes given on a profile count too. The Shop shows each player
+  their next price and the one after. The settings owner can **Give a home** or **Take one away** on a player's profile.
   Lowering the numbers never removes homes: players just can't add more until they're under it.
 - **Groups share them**: players in the same [group](#community-interactions--credits) can use each other's
   homes, as `/home Name:home` (or just `/home farm` when only one of them has a home called that, and they have
@@ -897,8 +899,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.35.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.35.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.35.1.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.35.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

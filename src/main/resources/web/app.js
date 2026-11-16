@@ -4844,8 +4844,18 @@ function homeTile(d) {
       el('div', { class: 'cos-name' }, 'Extra home', h.limit != null && el('span', { class: 'badge' }, `You have ${h.limit}`)),
       el('p', { class: 'muted cos-desc' }, `One more place to save with /sethome and go back to with /home, on the servers where homes `
         + `are on. Everyone has ${h.default}; up to ${h.max} in all.`
-        + (h.limit != null ? ` You've set ${h.count} of your ${h.limit}.` : ''))),
+        + (h.limit != null ? ` You've set ${h.count} of your ${h.limit}.` : '')),
+      homeGrowthText(h, d.currency) && el('p', { class: 'muted cos-meta' }, homeGrowthText(h, d.currency))),
     action);
+}
+
+/** "Each one costs twice the one before: the next after this, 2,000 Credits." (nothing when the price never changes) */
+function homeGrowthText(h, currency) {
+  if (!h.growth || h.growth <= 100 || !h.basePrice) return '';
+  const each = h.growth === 200 ? 'twice' : h.growth === 300 ? 'three times' : `${h.growth}% of`;
+  const atMax = h.limit != null && h.limit >= h.max;
+  return `Each one costs ${each} the one before.`
+    + (h.afterPrice != null && !atMax && h.limit + 1 < h.max ? ` The one after this: ${credits(h.afterPrice, currency)}.` : '');
 }
 
 function buyHome() {

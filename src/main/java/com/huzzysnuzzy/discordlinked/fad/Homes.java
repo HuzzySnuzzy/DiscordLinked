@@ -523,7 +523,7 @@ public final class Homes {
         Component link = plugin.messages().minecraft("minecraft.home.buy-link")
                 .clickEvent(ClickEvent.runCommand("/dla shop"))
                 .hoverEvent(HoverEvent.showText(plugin.messages().minecraft("minecraft.home.buy-hover",
-                        "price", config().credits(config().homePrice()))));
+                        "price", config().credits(nextPriceOrBase(player.getUniqueId())))));
         player.sendMessage(plugin.messages().minecraft("minecraft.home.full-buy", Placeholder.component("link", link),
                 "count", String.valueOf(count), "limit", String.valueOf(limit)));
     }
@@ -629,20 +629,51 @@ public final class Homes {
         }
         Market market = community.market();
         String detail = "Bought an extra home";
-        Database.Charge charge = plugin.database().buyHomeSlot(buyer.uuid(), buyer.minecraftName(), c.homePrice(),
+        int extra = plugin.database().homeSlots(buyer.uuid());
+        long price = priceFor(extra);
+        Database.Charge charge = plugin.database().buyHomeSlot(buyer.uuid(), buyer.minecraftName(), price, extra,
                 market.shopRate(buyer.uuid()), maxSlots, detail, actor);
         if (charge.balance() == -2) {
             return Cosmetics.Result.fail("You already have the most homes anyone can have (" + c.homesMax() + ").");
         }
+        if (charge.balance() == -3) {
+            return Cosmetics.Result.fail("Your number of homes just changed, and the price with it. Have a look and try again.");
+        }
         if (!charge.ok()) {
-            return Cosmetics.Result.fail(market.shortOf(buyer.uuid(), "an extra home", c.homePrice()));
+            return Cosmetics.Result.fail(market.shortOf(buyer.uuid(), "an extra home", price));
         }
         int limit = limit(buyer.uuid());
         String exchanged = market.exchangedNote(charge);
         plugin.audit().log(buyer.uuid(), buyer.minecraftName(), buyer.discordId(), EventTypes.HOME, "bought an extra home for "
-                + c.credits(c.homePrice()) + exchanged + ", now " + limit + " homes", actor);
+                + c.credits(price) + exchanged + ", now " + limit + " homes", actor);
         return new Cosmetics.Result(true, "You can have " + limit + " homes now." + (exchanged.isEmpty() ? "" : " " + exchanged.trim()),
                 charge.balance());
+    }
+
+    /** The most an extra home can cost, however many there are. */
+    static final long MAX_HOME_PRICE = 1_000_000_000_000L;
+
+    /**
+     * What an extra home costs a player who has {@code extra} extra homes already: home-price, times
+     * home-price-growth % for each of them (200: 500, 1,000, 2,000…).
+     */
+    public long priceFor(int extra) {
+        PluginConfig c = config();
+        double price = c.homePrice() * Math.pow(c.homePriceGrowth() / 100.0, Math.max(0, extra));
+        return price >= MAX_HOME_PRICE ? MAX_HOME_PRICE : Math.round(price);
+    }
+
+    /** What this player's next extra home costs. */
+    public long nextPrice(UUID uuid) throws SQLException {
+        return priceFor(plugin.database().homeSlots(uuid));
+    }
+
+    private long nextPriceOrBase(UUID uuid) {
+        try {
+            return nextPrice(uuid);
+        } catch (SQLException e) {
+            return config().homePrice();
+        }
     }
 
     /** Staff give (or take) extra homes for free. Returns how many homes the player may have now. */

@@ -1784,11 +1784,14 @@ public final class WebServer {
             return null;
         }
         PluginConfig c = plugin.config();
-        DataObject offer = DataObject.empty().put("price", c.homePrice()).put("max", c.homesMax()).put("default", c.homesDefault());
+        DataObject offer = DataObject.empty().put("price", c.homePrice()).put("max", c.homesMax()).put("default", c.homesDefault())
+                .put("basePrice", c.homePrice()).put("growth", c.homePriceGrowth());
         String uuid = buyer.getString("uuid", "");
         if (buyer.getBoolean("linked", false) && !uuid.isEmpty()) {
             UUID id = UUID.fromString(uuid);
-            offer.put("limit", homes.limit(id)).put("count", plugin.database().homeCount(id));
+            int extra = plugin.database().homeSlots(id);
+            offer.put("limit", homes.limit(id)).put("count", plugin.database().homeCount(id))
+                    .put("price", homes.priceFor(extra)).put("afterPrice", homes.priceFor(extra + 1));
         }
         return offer;
     }
@@ -1832,7 +1835,7 @@ public final class WebServer {
                 .put("extra", plugin.database().homeSlots(uuid))
                 .put("default", c.homesDefault())
                 .put("max", c.homesMax())
-                .put("price", c.homePrice())
+                .put("price", homes.nextPrice(uuid))
                 .put("homes", list)
                 .put("shared", shared);
     }
