@@ -107,6 +107,13 @@ cosmetics:
   prefix-priority: 150
   # Add a space after the prefix.
   prefix-space: true
+  # Prefixes can use &-codes (&6, &#ff8800, &l) and/or MiniMessage (<gold>, <#ff8800>, <gradient:#ff88cc:#8855ff>,
+  # <rainbow>, <b>). Without LuckPerms this plugin shows them itself. With LuckPerms your chat/tab plugin shows them,
+  # so give them to LuckPerms the way it reads them:
+  #   as-is        as written on the website (for plugins that read both, like LPCF)
+  #   legacy       plain &-codes, with &#rrggbb for other colours (a gradient becomes a colour per letter)
+  #   minimessage  MiniMessage tags only
+  prefix-format: as-is
   # Trails (while walking) and auras (while standing still): how often they're drawn, in ticks (20 = a second;
   # lower = smoother spinning shapes, more particles), and how many particles a "cloud" shape has.
   trail-interval-ticks: 2

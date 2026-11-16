@@ -2,7 +2,6 @@ package com.huzzysnuzzy.discordlinked.backend;
 
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.GameMode;
@@ -69,8 +68,6 @@ final class Cosmetics implements Listener {
     /** Standing still this long (in ticks) before the aura shows. */
     private static final int STILL_TICKS = 10;
 
-    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.builder()
-            .character('&').hexColors().build();
     private static final long WARN_EVERY_MS = 3000;
 
     private final DiscordLinkedBackend plugin;
@@ -114,7 +111,8 @@ final class Cosmetics implements Listener {
 
     private void applyPrefix(Player player, String prefix) {
         UUID uuid = player.getUniqueId();
-        String text = prefix.isEmpty() || !plugin.settings().prefixSpace ? prefix : prefix + " ";
+        String text = prefix.isEmpty() ? "" : PrefixText.forLuckPerms(prefix, plugin.settings().prefixFormat)
+                + (plugin.settings().prefixSpace ? " " : "");
         if (luckPerms != null) {
             if (!luckPerms.set(uuid, text, plugin.settings().prefixPriority)) {
                 plugin.getLogger().warning("LuckPerms hasn't loaded " + player.getName() + " yet; their prefix shows "
@@ -129,7 +127,7 @@ final class Cosmetics implements Listener {
             originalNames.remove(uuid);
             return;
         }
-        Component name = LEGACY.deserialize(text).append(original);
+        Component name = PrefixText.render(prefix).append(Component.text(plugin.settings().prefixSpace ? " " : "")).append(original);
         player.displayName(name);
         player.playerListName(name);
     }

@@ -59,6 +59,8 @@ final class FadSettings {
     final CommandName spawnCommand;
     final int prefixPriority;
     final boolean prefixSpace;
+    /** How a prefix goes to LuckPerms: as-is, legacy (&-codes) or minimessage. */
+    final String prefixFormat;
     final int trailIntervalTicks;
     final int trailParticles;
     /** auto-update in config.yml: used until the proxy sends its settings for the backend servers. */
@@ -91,6 +93,8 @@ final class FadSettings {
         spawnCommand = commandName("spawn-command", logger);
         prefixPriority = integer("cosmetics.prefix-priority");
         prefixSpace = bool("cosmetics.prefix-space");
+        String format = string("cosmetics.prefix-format").trim().toLowerCase(Locale.ROOT);
+        prefixFormat = format.equals("legacy") || format.equals("minimessage") ? format : "as-is";
         trailIntervalTicks = Math.max(1, integer("cosmetics.trail-interval-ticks"));
         trailParticles = Math.max(1, Math.min(10, integer("cosmetics.trail-particles")));
         updatePolicy = Updater.Policy.of(string("auto-update.mode"), string("auto-update.restart"),

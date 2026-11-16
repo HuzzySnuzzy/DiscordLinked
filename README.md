@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.32.1.jar` there instead.
+   `DiscordLinkedBackend-0.33.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.32.1 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.33.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -387,12 +387,18 @@ many there are); the browser remembers the one picked last, and `#/shop/cosmetic
 `cards`, `quality-of-life`) links straight to one.
 
 - **Prefixes** in front of the player's name in chat and the tab list, with `&` colour codes (`&b[Builder]`,
-  `&6&l[Tycoon]`, hex as `&#ff88cc`). With **LuckPerms** on a server they're LuckPerms prefixes, so every chat
-  and tab plugin that shows LuckPerms prefixes shows them. They're temporary (never saved in LuckPerms) and get
-  priority `cosmetics.prefix-priority` (DiscordLinkedBackend's config.yml, default 150). LuckPerms shows the
-  highest-priority prefix: put it above your rank prefixes to replace them while it's on, or below them to only
-  show it for players without one (or set up LuckPerms' prefix stacking to show both). Without LuckPerms the
-  prefix goes in front of the player's display name.
+  `&6&l[Tycoon]`, hex as `&#ff88cc`) and/or **MiniMessage** (`<gold>`, `<#ff88cc>`, `<gradient:#ff88cc:#8855ff>[Star]</gradient>`,
+  `<rainbow>`, `<b>`…; only tags that colour and style text, so no `<click>` or `<hover>`). Up to 32 characters
+  show; the website previews them as they look in game. With **LuckPerms** on a server they're LuckPerms prefixes,
+  so every chat and tab plugin that shows LuckPerms prefixes shows them. They're temporary (added while the player
+  is online, never saved in LuckPerms, so they don't appear in its web editor and are never left behind; check one
+  with `/lp user <name> info`) and get priority `cosmetics.prefix-priority` (DiscordLinkedBackend's config.yml,
+  default 150). LuckPerms shows the highest-priority prefix: put it above your rank prefixes to replace them while
+  it's on, or below them to only show it for players without one (or set up LuckPerms' prefix stacking to show
+  both). Chat plugins read prefixes differently, so `cosmetics.prefix-format` says how LuckPerms gets them: `as-is`
+  (as written; for plugins that read both, like LPCF), `legacy` (plain `&` codes with `&#rrggbb`; a gradient becomes
+  a colour per letter) or `minimessage`. Without LuckPerms DiscordLinkedBackend shows the prefix itself, in front of
+  the player's display name.
 - **Particles**: every Minecraft particle is in the shop, under its Minecraft name (Flame, Soul Fire Flame,
   Cherry Leaves, Totem of Undying, Smoke…; 97 of them, with a search). A particle is bought once and then used
   for free as the player's **trail** (behind them while they walk), their **aura** (around them while they stand
@@ -852,8 +858,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.32.1.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.32.1.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.33.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.33.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

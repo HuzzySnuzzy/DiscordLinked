@@ -81,6 +81,12 @@ public final class Cosmetics {
     public static final java.util.Set<String> COLORABLE = java.util.Set.of("dust", "entity_effect");
 
     private static final Pattern COLOR_CODES = Pattern.compile("&(#[0-9a-fA-F]{6}|[0-9a-fk-orA-FK-OR])");
+    /** MiniMessage tags (prefixes can use them as well as &-codes): <red>, </b>, <gradient:#f00:#00f>, <#ff88cc>. */
+    private static final Pattern MINI_TAGS = Pattern.compile("</?([a-zA-Z_#][a-zA-Z0-9_#:.-]*)>");
+    /** Tags that do something rather than colour or style text: never in a prefix. */
+    private static final java.util.Set<String> ACTION_TAGS = java.util.Set.of("click", "hover", "insert", "insertion",
+            "newline", "br", "key", "keybind", "lang", "tr", "translate", "lang_or", "tr_or", "translate_or", "score",
+            "selector", "sel", "nbt", "data", "font", "sprite", "head", "object");
     private static final long MAX_PRICE = 1_000_000_000L;
     private static final long PUSH_DELAY_MS = 1500;
 
@@ -259,7 +265,7 @@ public final class Cosmetics {
         return cardUrl(equipped(uuid).card());
     }
 
-    /** The prefix a player uses (with &amp; colour codes), or null. */
+    /** The prefix a player uses (with &amp; colour codes and/or MiniMessage tags), or null. */
     public String prefix(UUID uuid) {
         Cosmetic prefix = equipped(uuid).prefix();
         return prefix == null ? null : prefix.value();
@@ -415,10 +421,19 @@ public final class Cosmetics {
         String v = switch (k) {
             case PREFIX -> {
                 String text = value == null ? "" : value.strip();
-                String visible = COLOR_CODES.matcher(text).replaceAll("");
-                if (text.length() > 64 || visible.isBlank() || visible.length() > 32
+                java.util.regex.Matcher tags = MINI_TAGS.matcher(text);
+                while (tags.find()) {
+                    String tag = tags.group(1).split(":", 2)[0].toLowerCase(java.util.Locale.ROOT);
+                    if (ACTION_TAGS.contains(tag)) {
+                        throw new IllegalArgumentException("Prefixes can only colour and style text: <" + tag
+                                + "> isn't allowed.");
+                    }
+                }
+                String visible = MINI_TAGS.matcher(COLOR_CODES.matcher(text).replaceAll("")).replaceAll("");
+                if (text.length() > 256 || visible.isBlank() || visible.length() > 32
                         || text.chars().anyMatch(Character::isISOControl)) {
-                    throw new IllegalArgumentException("The prefix must show 1 to 32 characters (64 with colour codes).");
+                    throw new IllegalArgumentException("The prefix must show 1 to 32 characters (up to 256 with colour "
+                            + "codes and MiniMessage tags).");
                 }
                 yield text;
             }

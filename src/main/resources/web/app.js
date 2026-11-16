@@ -267,33 +267,104 @@ function statusPills(p, { lastServer = false } = {}) {
 const MC_COLORS = { 0: '#000000', 1: '#0000aa', 2: '#00aa00', 3: '#00aaaa', 4: '#aa0000', 5: '#aa00aa', 6: '#ffaa00',
   7: '#aaaaaa', 8: '#555555', 9: '#5555ff', a: '#55ff55', b: '#55ffff', c: '#ff5555', d: '#ff55ff', e: '#ffff55', f: '#ffffff' };
 
-/** Text with Minecraft &-codes (&6, &#ff8800, &l bold...) shown in colour, like in game. */
+/** MiniMessage colour names and the &-code each matches. */
+const MM_COLORS = { black: '0', dark_blue: '1', dark_green: '2', dark_aqua: '3', dark_red: '4', dark_purple: '5', gold: '6',
+  gray: '7', grey: '7', dark_gray: '8', dark_grey: '8', blue: '9', green: 'a', aqua: 'b', red: 'c', light_purple: 'd', yellow: 'e', white: 'f' };
+const MM_FORMATS = { b: 'l', bold: 'l', i: 'o', em: 'o', italic: 'o', u: 'n', underlined: 'n', st: 'm', strikethrough: 'm',
+  obf: 'k', obfuscated: 'k' };
+
+/** A colour from MiniMessage (#rrggbb or a name), or null. */
+function mmColor(value) {
+  const v = (value || '').toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(v)) return v;
+  return MC_COLORS[MM_COLORS[v]] || null;
+}
+
+function mixColors(a, b, t) {
+  const n = (c, i) => parseInt(c.slice(1 + i * 2, 3 + i * 2), 16);
+  return `#${[0, 1, 2].map((i) => Math.round(n(a, i) + (n(b, i) - n(a, i)) * t).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function hueColor(h) {
+  const f = (n) => {
+    const k = (n + h * 6) % 6;
+    return Math.round(255 * (1 - Math.max(0, Math.min(k, 4 - k, 1))));
+  };
+  return `#${[5, 3, 1].map((n) => f(n).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * Text with Minecraft &-codes (&6, &#ff8800, &l bold...) and/or MiniMessage (<red>, <#ff8800>, <gradient:a:b>,
+ * <rainbow>, <b>, <reset>...) shown in colour, like in game. Tags it doesn't know are shown as written.
+ */
 function mcText(text, extraClass = '') {
   const root = el('span', { class: `mc-text ${extraClass}` });
-  let color = null;
-  let formats = new Set();
+  // One state per open tag; the top one is current.
+  let stack = [{ color: null, formats: new Set(), fill: null }];
+  const top = () => stack[stack.length - 1];
+  const pieces = []; // { text, color, formats, fill }
+  const push = (changes, tag) => stack.push({ ...top(), formats: new Set(top().formats), ...changes, tag });
+  const add = (part) => { if (part) pieces.push({ text: part, color: top().color, formats: new Set(top().formats), fill: top().fill }); };
   let last = 0;
-  const add = (part) => {
-    if (!part) return;
-    const span = el('span', { class: [...formats].map((f) => `mc-${f}`).join(' ') || null }, part);
-    if (color) span.style.color = color;
-    root.append(span);
-  };
-  for (const match of text.matchAll(/&(#[0-9a-f]{6}|[0-9a-fk-or])/gi)) {
-    add(text.slice(last, match.index));
-    const code = match[1].toLowerCase();
-    if (code.startsWith('#') || MC_COLORS[code]) {
-      color = code.startsWith('#') ? code : MC_COLORS[code];
-      formats = new Set(); // like in game, a colour resets bold, italic...
-    } else if (code === 'r') {
-      color = null;
-      formats = new Set();
-    } else {
-      formats.add(code);
+  for (const m of text.matchAll(/&(#[0-9a-f]{6}|[0-9a-fk-or])|<(\/?)([a-z_#][a-z0-9_#:.-]*)>/gi)) {
+    add(text.slice(last, m.index));
+    last = m.index + m[0].length;
+    if (m[1]) { // &-code
+      const code = m[1].toLowerCase();
+      if (code.startsWith('#') || MC_COLORS[code]) stack = [...stack.slice(0, 1), { color: code.startsWith('#') ? code : MC_COLORS[code], formats: new Set(), fill: null }];
+      else if (code === 'r') stack = stack.slice(0, 1);
+      else top().formats.add(code);
+      continue;
     }
-    last = match.index + match[0].length;
+    const closing = m[2] === '/';
+    const [name, ...args] = m[3].toLowerCase().split(':');
+    if (closing) {
+      const at = stack.map((st) => st.tag).lastIndexOf(name === 'color' || name === 'c' || mmColor(name) ? stack[stack.length - 1].tag : name);
+      if (at > 0) stack = stack.slice(0, at);
+      continue;
+    }
+    if (name === 'reset') { stack = stack.slice(0, 1); continue; }
+    const color = mmColor(name) || ((name === 'color' || name === 'colour' || name === 'c') && mmColor(args[0]));
+    if (color) { push({ color, fill: null }, name); continue; }
+    if (MM_FORMATS[name]) { push({}, name); top().formats.add(MM_FORMATS[name]); continue; }
+    if (name === 'gradient' || name === 'transition') {
+      const stops = args.map(mmColor).filter(Boolean);
+      push({ fill: { kind: 'gradient', stops: stops.length >= 2 ? stops : ['#ffffff', '#000000'], count: 0 } }, name);
+      continue;
+    }
+    if (name === 'rainbow') { push({ fill: { kind: 'rainbow', count: 0 } }, name); continue; }
+    add(m[0]); // not a tag we know: as written
   }
   add(text.slice(last));
+  // Gradients and rainbows colour each character along their whole text.
+  for (const piece of pieces) if (piece.fill) piece.fill.count += [...piece.text].length;
+  const seen = new Map();
+  for (const piece of pieces) {
+    const cls = [...piece.formats].map((f) => `mc-${f}`).join(' ') || null;
+    if (!piece.fill) {
+      const span = el('span', { class: cls }, piece.text);
+      if (piece.color) span.style.color = piece.color;
+      root.append(span);
+      continue;
+    }
+    const f = piece.fill;
+    let i = seen.get(f) || 0;
+    for (const ch of piece.text) {
+      const t = f.count > 1 ? i / (f.count - 1) : 0;
+      let color;
+      if (f.kind === 'rainbow') color = hueColor(f.count ? i / f.count : 0);
+      else {
+        const span = (f.stops.length - 1) * t;
+        const k = Math.min(f.stops.length - 2, Math.floor(span));
+        color = mixColors(f.stops[k], f.stops[k + 1], span - k);
+      }
+      const span = el('span', { class: cls }, ch);
+      span.style.color = color;
+      root.append(span);
+      i++;
+    }
+    seen.set(f, i);
+  }
   return root;
 }
 
@@ -4832,14 +4903,16 @@ function cosmeticDialog(item, kind = item?.kind) {
   let picture = null;
   const box = $('cosmetic-value');
   if (kind === 'prefix') {
-    const input = el('input', { type: 'text', maxlength: '64', required: true, spellcheck: 'false', placeholder: '&6[Tycoon]', value: item?.value || '' });
+    const input = el('input', { type: 'text', maxlength: '256', required: true, spellcheck: 'false', placeholder: '&6[Tycoon] or <gradient:#ff88cc:#8855ff>[Tycoon]</gradient>', value: item?.value || '' });
     const preview = el('div', { class: 'cos-preview chat' });
     const update = () => preview.replaceChildren(el('span', {}, mcText(input.value || ''), ' ',
       el('span', { class: 'chat-name' }, d.buyer.name || 'Steve'), el('span', { class: 'chat-msg' }, ': hiii~')));
     input.addEventListener('input', update);
     update();
     box.replaceChildren(el('label', { class: 'reason' }, 'Prefix', input),
-      el('p', { class: 'muted' }, 'Colours with & codes: &6 gold, &b aqua, &d pink, &c red, &a green, &#ff8800 any colour; &l bold, &o italic.'),
+      el('p', { class: 'muted' }, 'Colours with & codes (&6 gold, &b aqua, &d pink, &#ff8800 any colour; &l bold, &o italic) or '
+        + 'MiniMessage (<gold>, <#ff8800>, <gradient:#ff88cc:#8855ff>…</gradient>, <rainbow>…</rainbow>, <b>, <i>). Up to 32 '
+        + 'characters show. How it looks in chat also depends on your chat plugin (DiscordLinkedBackend\'s cosmetics.prefix-format).'),
       preview);
     value = () => input.value;
   } else if (kind === 'particle') {
