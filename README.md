@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.33.0.jar` there instead.
+   `DiscordLinkedBackend-0.34.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.33.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.34.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -458,6 +458,15 @@ Until it's set, `/spawn` goes to the spawn of the server's main world. `/dl spaw
 command name is in DiscordLinkedBackend's config.yml (`spawn-command`), the permission is `discordlinked.spawn`
 (everyone), and the texts are `minecraft.spawn.*` in messages.properties. Setting it is in the Logs (**Homes**).
 
+- **Particles at the spawn** (`spawn-particles`, on): a slow swirl of purple sparks circling at different heights,
+  enchanting glyphs drawn into the middle and portal dust from the ground, where `/spawn` takes players (until one
+  is set, at each server's own spawn). It's only drawn while players are within 48 blocks. Needs
+  DiscordLinkedBackend 0.34.0 on the spawn's server.
+- **Teleport effects** (`teleport-effects`, on): while players wait for `/spawn` or `/home`, portal particles swirl
+  around them like an enderman's, more and more as the wait runs out; they leave in a puff of them and arrive with an
+  enderman's whoosh.
+- Both are switches in Settings → **Homes** (and config.properties).
+
 ## Homes
 
 Players save spots with `/sethome [name]` (just `/sethome` is "home") and go back with `/home [name]`; `/homes`
@@ -481,7 +490,8 @@ lists them (click one to go there) and `/delhome <name>` removes one. Tab comple
   moved, removed and used, and extra homes bought or given.
 - The messages are in the proxy's `messages.properties` (`minecraft.home.*`); the command names are in
   DiscordLinkedBackend's config.yml (rename them if another plugin already has `/home`).
-- Settings → **Homes** has the four numbers; they're also in config.properties.
+- Settings → **Homes** has the four numbers and the two [effects](#spawn) switches; they're also in
+  config.properties.
 
 ## Website
 
@@ -858,8 +868,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.33.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.33.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.34.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.34.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

@@ -51,7 +51,7 @@ import java.util.Optional;
 )
 public final class DiscordLinked {
 
-    public static final String VERSION = "0.33.0";
+    public static final String VERSION = "0.34.0";
 
     private final ProxyServer proxy;
     private final Logger logger;
@@ -310,6 +310,9 @@ public final class DiscordLinked {
         if (community != null) {
             // E.g. the KeepInventory delay changed, or community features were switched off.
             community.cosmetics().settingsChanged();
+            if (old.spawnParticles() != config.spawnParticles() || old.fadEnabled() != config.fadEnabled()) {
+                community.homes().refreshSpawnEffects();
+            }
         }
         if (community != null && (!old.updatePolicy().equals(config.updatePolicy())
                 || old.backendRestart() != config.backendRestart())) {

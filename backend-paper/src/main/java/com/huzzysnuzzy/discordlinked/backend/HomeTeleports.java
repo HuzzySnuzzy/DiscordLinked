@@ -5,6 +5,8 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Particle;
+import org.bukkit.SoundCategory;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -22,15 +24,21 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * The server's part of homes (decided on the proxy, see the proxy's Homes): the wait before /home teleports
  * (moving or getting hurt stops it), the teleport itself, and each player's home names for tab completion.
+ * While waiting, portal particles swirl around the player like an enderman's; on arrival there's an enderman's
+ * teleport sound (unless the proxy's teleport-effects is off).
  */
 final class HomeTeleports implements Listener {
 
     /** How far a player may drift (blocks) while waiting before it counts as moving. */
     private static final double MOVE_LIMIT = 0.6;
 
-    /** A /home the player is waiting for. Texts are what the proxy sent. */
+    /** The enderman's teleport sound, by key so it works on any version. */
+    static final String WOOSH = "entity.enderman.teleport";
+
+    /** A /home the player is waiting for. Texts are what the proxy sent; {@code effects}: particles and sound. */
     record Request(String id, int warmup, boolean here, String world, double x, double y, double z, float yaw,
-                   float pitch, Component warmupText, Component arrivedText, Component movedText, Component hurtText) {
+                   float pitch, Component warmupText, Component arrivedText, Component movedText, Component hurtText,
+                   boolean effects) {
     }
 
     private record Waiting(Request request, Location start, ScheduledTask task) {
@@ -97,6 +105,12 @@ final class HomeTeleports implements Listener {
                     waiting.remove(player.getUniqueId());
                     t.cancel();
                     finish(player, request);
+                    return;
+                }
+                if (request.effects()) {
+                    // More and more of them as the wait runs out.
+                    double done = 1 - (endsAt - System.currentTimeMillis()) / (request.warmup() * 1000.0);
+                    channel(player, 6 + (int) Math.round(Math.max(0, Math.min(1, done)) * 18));
                 }
             }, null, 5, 5);
             if (check != null) {
@@ -106,6 +120,9 @@ final class HomeTeleports implements Listener {
     }
 
     private void finish(Player player, Request request) {
+        if (request.effects()) {
+            burst(player); // where they leave from, for whoever stands there
+        }
         if (!request.here()) {
             plugin.link().homeDone(player, request.id(), "ready");
             return;
@@ -121,10 +138,28 @@ final class HomeTeleports implements Listener {
         player.teleportAsync(to).whenComplete((ok, error) -> player.getScheduler().run(plugin, t -> {
             boolean arrived = error == null && Boolean.TRUE.equals(ok);
             if (arrived) {
+                if (request.effects()) {
+                    Location at = player.getLocation();
+                    at.getWorld().playSound(at, WOOSH, SoundCategory.PLAYERS, 1f, 1f);
+                    burst(player);
+                }
                 player.sendMessage(request.arrivedText());
             }
             plugin.link().homeDone(player, request.id(), arrived ? "ok" : "failed");
         }, null));
+    }
+
+    /** Portal particles around a player who's waiting, like an enderman's. */
+    static void channel(Player player, int count) {
+        Location at = player.getLocation().add(0, player.getHeight() / 2, 0);
+        at.getWorld().spawnParticle(Particle.PORTAL, at, count, 0.3, player.getHeight() / 3, 0.3, 0.6);
+    }
+
+    /** A puff of portal particles where a player leaves or arrives. */
+    static void burst(Player player) {
+        Location at = player.getLocation().add(0, player.getHeight() / 2, 0);
+        at.getWorld().spawnParticle(Particle.PORTAL, at, 48, 0.3, player.getHeight() / 3, 0.3, 1.2);
+        at.getWorld().spawnParticle(Particle.REVERSE_PORTAL, at, 12, 0.3, player.getHeight() / 3, 0.3, 0.04);
     }
 
     /** Stops a wait; {@code why} is told to the player (null: quietly, e.g. a newer /home replaced it). */

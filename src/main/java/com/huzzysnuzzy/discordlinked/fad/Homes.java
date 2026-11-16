@@ -298,6 +298,7 @@ public final class Homes {
         plugin.database().setHome(SPAWN_OWNER, "Server", SPAWN_NAME, server, at.world(), at.x(), at.y(), at.z(),
                 at.yaw(), at.pitch(), 1);
         say(player, "minecraft.spawn.set", "server", server, "world", at.world(), "coords", coords(at.x(), at.y(), at.z()));
+        refreshSpawnEffects();
         plugin.audit().log(player.getUniqueId(), player.getUsername(), community.linkedDiscordId(player.getUniqueId()),
                 EventTypes.HOME, "set the spawn on " + server + " (" + at.world() + " " + coords(at.x(), at.y(), at.z()) + ")",
                 null, server);
@@ -312,10 +313,45 @@ public final class Homes {
         }
     }
 
+    // ---- Particles at the spawn ----
+
+    /**
+     * Tells every server with players on it where the spawn's particles go (after /dl setspawn, or spawn-particles
+     * changed). A server without players hears it when someone gets on.
+     */
+    public void refreshSpawnEffects() {
+        java.util.Set<String> told = new java.util.HashSet<>();
+        for (Player player : plugin.proxy().getAllPlayers()) {
+            player.getCurrentServer().filter(c -> told.add(c.getServerInfo().getName())).ifPresent(this::sendSpawnEffects);
+        }
+    }
+
+    /** The spawn's particles for this server: at the spawn if it's here, its own spawn while none is set, else off. */
+    private void sendSpawnEffects(ServerConnection connection) {
+        String server = connection.getServerInfo().getName();
+        Home spawn;
+        try {
+            spawn = spawn().orElse(null);
+        } catch (SQLException e) {
+            plugin.logger().warn("Could not look up the spawn", e);
+            return;
+        }
+        boolean on = config().fadEnabled() && config().spawnParticles()
+                && (spawn == null || spawn.server().equalsIgnoreCase(server));
+        if (on && spawn != null) {
+            community.bridge().spawnEffects(connection, true, spawn.world(), spawn.x(), spawn.y(), spawn.z());
+        } else {
+            community.bridge().spawnEffects(connection, on, "", 0, 0, 0);
+        }
+    }
+
     // ---- Names for tab completion ----
 
     /** A player got on a server: tell it their home names (for tab completion), once they've finished joining. */
     void joined(Player player, String server) {
+        plugin.proxy().getScheduler().buildTask(plugin, () -> player.getCurrentServer()
+                .filter(c -> c.getServerInfo().getName().equals(server))
+                .ifPresent(this::sendSpawnEffects)).delay(2, TimeUnit.SECONDS).schedule();
         if (!plugin.servers().homesEnabled(server)) {
             return;
         }
@@ -490,7 +526,8 @@ public final class Homes {
                 json.serialize(plugin.messages().minecraft("minecraft.home.warmup", tags)),
                 json.serialize(plugin.messages().minecraft("minecraft.home.arrived", tags)),
                 json.serialize(plugin.messages().minecraft("minecraft.home.cancel-moved", tags)),
-                json.serialize(plugin.messages().minecraft("minecraft.home.cancel-hurt", tags)));
+                json.serialize(plugin.messages().minecraft("minecraft.home.cancel-hurt", tags)),
+                config().teleportEffects());
     }
 
     /** After the wait on their own server: move them to the home's server, then teleport them there. */
@@ -577,6 +614,9 @@ public final class Homes {
         }
         plugin.audit().log(owner, ownerName, discordId, EventTypes.HOME, "removed home " + name + " (website)", actor);
         namesChanged(owner);
+        if (owner.equals(SPAWN_OWNER)) {
+            refreshSpawnEffects();
+        }
         return true;
     }
 }

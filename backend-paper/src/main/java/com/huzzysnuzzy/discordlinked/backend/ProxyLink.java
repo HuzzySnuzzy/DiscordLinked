@@ -524,8 +524,14 @@ final class ProxyLink implements PluginMessageListener {
                     HomeTeleports.Request request = new HomeTeleports.Request(in.readUTF(), in.readInt(), in.readBoolean(),
                             in.readUTF(), in.readDouble(), in.readDouble(), in.readDouble(), in.readFloat(), in.readFloat(),
                             HomeTeleports.text(in.readUTF()), HomeTeleports.text(in.readUTF()),
-                            HomeTeleports.text(in.readUTF()), HomeTeleports.text(in.readUTF()));
+                            HomeTeleports.text(in.readUTF()), HomeTeleports.text(in.readUTF()),
+                            in.available() > 0 ? in.readBoolean() : true); // proxies before 0.34.0 don't say
                     plugin.homes().start(carrier, request);
+                }
+                // Where the spawn is on this server, for its particles (off: not here, or switched off).
+                case "SPAWN_FX" -> {
+                    boolean on = in.readBoolean();
+                    plugin.spawnEffects().set(on, in.readUTF(), in.readDouble(), in.readDouble(), in.readDouble());
                 }
                 // Someone on Discord picked this player: play the effects where they are.
                 case "FX" -> {

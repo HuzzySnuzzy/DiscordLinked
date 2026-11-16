@@ -458,7 +458,7 @@ final class FadBridge {
      * just answer "ready" so the proxy moves them to its server. The texts are JSON components.
      */
     void homeTeleport(ServerConnection connection, String id, int warmup, boolean here, Home home, String warmupText,
-                      String arrivedText, String movedText, String hurtText) {
+                      String arrivedText, String movedText, String hurtText, boolean effects) {
         send(connection, out -> {
             out.writeUTF("HOME_TP");
             out.writeUTF(id);
@@ -474,6 +474,19 @@ final class FadBridge {
             out.writeUTF(arrivedText);
             out.writeUTF(movedText);
             out.writeUTF(hurtText);
+            out.writeBoolean(effects); // read by DiscordLinkedBackend 0.34.0+, ignored before
+        });
+    }
+
+    /** Where the spawn's particles go on this server ({@code world} empty: its own world spawn), or off. */
+    void spawnEffects(ServerConnection connection, boolean on, String world, double x, double y, double z) {
+        send(connection, out -> {
+            out.writeUTF("SPAWN_FX");
+            out.writeBoolean(on);
+            out.writeUTF(world);
+            out.writeDouble(x);
+            out.writeDouble(y);
+            out.writeDouble(z);
         });
     }
 

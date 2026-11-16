@@ -154,6 +154,13 @@ public final class SettingsEditor {
             number("home-warmup-seconds", "Homes", "Wait before teleporting (seconds)",
                     "/home waits this long; moving or getting hurt stops it, so it can't be used to escape a fight. "
                             + "0 = right away.", 0, 60),
+            bool("teleport-effects", "Homes", "Teleport effects",
+                    "Portal particles swirl around players while they wait for /home or /spawn, and they arrive "
+                            + "with an enderman's whoosh.", false),
+            bool("spawn-particles", "Homes", "Particles at the spawn",
+                    "A slow swirl of purple sparks and enchanting glyphs where /spawn takes players (the spot set "
+                            + "with /dl setspawn, or each server's own spawn until then). Only drawn while someone's near.",
+                    false),
 
             bool("market-enabled", "Market", "Selling open",
                     "Players can sell items in game (/sell, /sellhand) for microcredits.", false),

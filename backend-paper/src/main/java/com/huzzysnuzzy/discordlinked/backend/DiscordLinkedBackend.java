@@ -59,6 +59,7 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
     private Cosmetics cosmetics;
     private final HomeTeleports homes = new HomeTeleports(this);
     private final SidebarBoard sidebar = new SidebarBoard(this);
+    private final SpawnEffects spawnEffects = new SpawnEffects(this);
     private final Map<UUID, Long> lastInteraction = new ConcurrentHashMap<>();
     /** Interaction commands registered at startup; new ones in config.yml need a restart. */
     private final Set<String> registered = new HashSet<>();
@@ -264,6 +265,10 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
 
     HomeTeleports homes() {
         return homes;
+    }
+
+    SpawnEffects spawnEffects() {
+        return spawnEffects;
     }
 
     SidebarBoard sidebar() {

@@ -88,7 +88,9 @@ public record PluginConfig(
         int homePrice,
         int homeWarmupSeconds,
         int sidebarSeconds,
-        int sidebarSize
+        int sidebarSize,
+        boolean spawnParticles,
+        boolean teleportEffects
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -175,7 +177,9 @@ public record PluginConfig(
                 Math.max(0, parseInt(props, "home-price", 500)),
                 Math.max(0, Math.min(60, parseInt(props, "home-warmup-seconds", 3))),
                 Math.max(3, Math.min(600, parseInt(props, "sidebar-seconds", 10))),
-                Math.max(1, Math.min(10, parseInt(props, "sidebar-size", 5)))
+                Math.max(1, Math.min(10, parseInt(props, "sidebar-size", 5))),
+                !"false".equalsIgnoreCase(props.getProperty("spawn-particles", "true").trim()),
+                !"false".equalsIgnoreCase(props.getProperty("teleport-effects", "true").trim())
         );
     }
 
