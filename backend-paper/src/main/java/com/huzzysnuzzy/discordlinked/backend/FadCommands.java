@@ -444,6 +444,46 @@ final class FadCommands {
         }
     }
 
+    /**
+     * /tpa, /tpahere, /tpaccept, /tpdeny, /tpacancel and /tpatoggle: sent to the proxy, which decides (players can be
+     * on other servers). Tab completion: the players on this server.
+     */
+    static final class TpaCommand extends Command {
+
+        private final DiscordLinkedBackend plugin;
+        private final String type;
+
+        TpaCommand(DiscordLinkedBackend plugin, FadSettings.CommandName name, String type, String description, String args) {
+            super(name.name(), description, ("/" + name.name() + " " + args).trim(), name.aliases());
+            this.plugin = plugin;
+            this.type = type;
+            setPermission("discordlinked.tpa");
+        }
+
+        @Override
+        public boolean execute(CommandSender sender, String label, String[] args) {
+            if (!testPermission(sender)) {
+                return true;
+            }
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(plugin.settings().message("player-only"));
+                return true;
+            }
+            plugin.link().tpa(player, type, args.length == 0 ? "" : args[0]);
+            return true;
+        }
+
+        @Override
+        public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
+            if (args.length != 1 || type.equals("cancel") || type.equals("toggle")) {
+                return List.of();
+            }
+            String typed = args[0].toLowerCase(java.util.Locale.ROOT);
+            return org.bukkit.Bukkit.getOnlinePlayers().stream().filter(p -> p != sender).map(Player::getName)
+                    .filter(n -> n.toLowerCase(java.util.Locale.ROOT).startsWith(typed)).sorted().toList();
+        }
+    }
+
     /** /exchange <amount|all>: microcredits into credits. The proxy answers in chat. */
     static final class ExchangeCommand extends Command {
 

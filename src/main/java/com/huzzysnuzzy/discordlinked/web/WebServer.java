@@ -916,6 +916,7 @@ public final class WebServer {
                 .put("minecraftName", name)
                 .put("linked", linked != null)
                 .put("online", online.isPresent())
+                .put("afk", online.isPresent() && plugin.community().isAfk(uuid))
                 .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""))
                 .put("card", plugin.community().cosmetics().cardUrl(uuid))
                 .put("prefix", plugin.community().cosmetics().prefix(uuid));
@@ -1003,6 +1004,7 @@ public final class WebServer {
                     .put("minecraftName", online.map(Player::getUsername).orElse(k.name()))
                     .put("linked", false)
                     .put("online", online.isPresent())
+                    .put("afk", online.isPresent() && plugin.community().isAfk(k.uuid()))
                     .put("server", online.flatMap(Player::getCurrentServer).map(s -> s.getServerInfo().getName()).orElse(""))
                     .put("lastServer", lastServers.getOrDefault(k.uuid(), ""))
                     .put("lastSeen", k.lastPlayed() == null ? null : k.lastPlayed().toEpochMilli())
@@ -2558,7 +2560,8 @@ public final class WebServer {
                     .put("microEnabled", s.microEnabled())
                     .put("maintenance", s.maintenance())
                     .put("maintenanceMessage", s.maintenanceMessage())
-                    .put("homesEnabled", s.homesEnabled()));
+                    .put("homesEnabled", s.homesEnabled())
+                    .put("tpaEnabled", s.tpaEnabled()));
         }
         return DataObject.empty().put("servers", servers).put("defaultServer", defaultServer)
                 .put("probe", plugin.servers().probing()).put("version", DiscordLinked.VERSION)
@@ -2669,6 +2672,13 @@ public final class WebServer {
                 message = changed.isEmpty() ? "Nothing changed." : on
                         ? "Homes on " + name + " are on: /sethome, /home, /homes and /delhome work there."
                         : "Homes on " + name + " are off. Homes there are kept, but can't be used until they're on again.";
+            } else if (body.hasKey("tpaEnabled")) {
+                boolean on = body.getBoolean("tpaEnabled");
+                List<String> changed = servers.setTpa(requested, on, actor);
+                String name = servers.name(requested);
+                message = changed.isEmpty() ? "Nothing changed." : on
+                        ? "Teleport requests on " + name + " are on: /tpa, /tpahere and /tpaccept work there."
+                        : "Teleport requests on " + name + " are off.";
             } else if (body.hasKey("maintenance") || body.hasKey("maintenanceMessage")) {
                 if (!body.isNull("maintenance") && !(body.get("maintenance") instanceof Boolean)
                         || !body.isNull("maintenanceMessage") && !(body.get("maintenanceMessage") instanceof String)) {
@@ -2712,7 +2722,7 @@ public final class WebServer {
             sendJson(ex, 400, error(e.getMessage()));
             return;
         } catch (ParsingException e) {
-            sendJson(ex, 400, error("creditsEnabled, microEnabled, homesEnabled, maintenance and forget are true or false, "
+            sendJson(ex, 400, error("creditsEnabled, microEnabled, homesEnabled, tpaEnabled, maintenance and forget are true or false, "
                     + "maintenanceMessage is text."));
             return;
         }

@@ -72,7 +72,7 @@ regions.
 Permissions: `discordlinkedfad.admin` (the reload command) and `discordlinkedfad.cooldown.bypass` are for ops by
 default; `discordlinkedfad.credits` (`/credits`, `/mct`), `discordlinkedfad.sell` (`/sell`, `/sellhand`, `/worth`,
 `/exchange`), `discordlinkedfad.interactions` (`/interactions`), `discordlinked.homes` (`/sethome`, `/home`,
-`/homes`, `/delhome`), `discordlinked.spawn` (`/spawn`) and `discordlinkedfad.interact.<name>` (one per interaction) are for everyone. Spy, inventories and teleports are controlled from the website, so they need none.
+`/homes`, `/delhome`), `discordlinked.spawn` (`/spawn`), `discordlinked.tpa` (`/tpa` and friends) and `discordlinkedfad.interact.<name>` (one per interaction) are for everyone. Spy, inventories and teleports are controlled from the website, so they need none.
 
 The proxy and the backend plugin talk over Minecraft's plugin messaging channel, and the proxy drops any such
 message sent by a player's client, so players can't trigger it. As with any Velocity network, make sure your
@@ -84,7 +84,7 @@ Before 0.22.0 the Minecraft servers had two plugins, DiscordLinkedSpy and (optio
 DiscordLinkedBackend replaces both. On every Minecraft server:
 
 1. Stop the server. Delete `DiscordLinkedSpy-….jar` and `DiscordLinkedFAD-….jar` from `plugins/`, and put
-   `DiscordLinkedBackend-0.34.0.jar` there instead.
+   `DiscordLinkedBackend-0.35.0.jar` there instead.
 2. Start it. The first time, it copies `plugins/DiscordLinkedFAD/config.yml` (and anything else in that folder)
    into `plugins/DiscordLinkedBackend/`, and DiscordLinkedSpy's saved logout spots and any inventory snapshots that
    hadn't reached the proxy yet. The console lists what it copied. Nothing already in the new folder is
@@ -149,7 +149,7 @@ server's console.
 
 What a server's entry can say about its plugin:
 
-- **DiscordLinkedBackend 0.34.0 · last seen just now**: all good.
+- **DiscordLinkedBackend 0.35.0 · last seen just now**: all good.
 - **Plugin not found**: the server answers pings, but DiscordLinkedBackend didn't answer and has never reported in
   (a DiscordLinkedBackend 0.22.0 nobody has joined yet looks the same), or a player is on the server and it still
   hasn't reported in (it does within seconds of someone joining, on any Velocity build). See
@@ -399,6 +399,16 @@ many there are); the browser remembers the one picked last, and `#/shop/cosmetic
   (as written; for plugins that read both, like LPCF), `legacy` (plain `&` codes with `&#rrggbb`; a gradient becomes
   a colour per letter) or `minimessage`. Without LuckPerms DiscordLinkedBackend shows the prefix itself, in front of
   the player's display name.
+  - **In the tab list**: your tab plugin shows LuckPerms prefixes with a placeholder. With PlaceholderAPI (and its
+    LuckPerms expansion: `/papi ecloud download LuckPerms`, then `/papi reload`) that's `%luckperms_prefix%`; the
+    TAB plugin also has its own `%luckperms-prefix%`. For example in TAB's `groups.yml`:
+    `tabprefix: "%luckperms-prefix%"`. Whether a rank prefix or the bought one shows follows
+    `cosmetics.prefix-priority` as above.
+  - **AFK**: while a player's server counts them as AFK (DiscordLinkedBackend's `afk-minutes`), `afk-prefix`
+    (`&7[AFK]`; Settings → Shop → **AFK prefix**, empty = none) goes in front of their prefix, or on its own when they
+    have none, the same way: through LuckPerms (so `%luckperms_prefix%` shows it), or in front of their name. It
+    goes when they move, chat or use a command. The website shows them as **AFK** (instead of Online) on their
+    profile, the Players list and Moderate.
 - **Particles**: every Minecraft particle is in the shop, under its Minecraft name (Flame, Soul Fire Flame,
   Cherry Leaves, Totem of Undying, Smoke…; 97 of them, with a search). A particle is bought once and then used
   for free as the player's **trail** (behind them while they walk), their **aura** (around them while they stand
@@ -466,6 +476,24 @@ command name is in DiscordLinkedBackend's config.yml (`spawn-command`), the perm
   around them like an enderman's, more and more as the wait runs out; they leave in a puff of them and arrive with an
   enderman's whoosh.
 - Both are switches in Settings → **Homes** (and config.properties).
+
+## Teleport requests
+
+`/tpa <player>` asks to teleport to someone and `/tpahere <player>` asks them to come over. They get the request
+in chat with clickable **[Accept]** and **[Deny]** (or `/tpaccept [player]`, `/tpdeny [player]`; without a name, the
+newest request). `/tpacancel` takes yours back, and `/tpatoggle` stops requests to you (again: allows them).
+
+- **Per server**: switch them on under Settings → Backend servers → a server's **Settings** → **Teleport
+  requests**. They're off everywhere until you do, and both players' servers need them on.
+- **Across servers**: like `/home`, the player who goes is moved to the other one's server first.
+- **The wait** is `/home`'s (`home-warmup-seconds`; moving or getting hurt cancels it), with the
+  [teleport effects](#spawn). They go to where the other player stood when the request was accepted.
+- Requests run out after `tpa-expire-seconds` (60; Settings → Homes), and when either player leaves. Asking
+  someone else replaces your open request.
+- Accepted requests are in the Logs (**Homes**). The command names are in DiscordLinkedBackend's config.yml
+  (`tpa-command`… `tpatoggle-command`; `/tpyes`, `/tpno` and `/tptoggle` are aliases), the permission is
+  `discordlinked.tpa` (everyone) and the texts are `minecraft.tpa.*` in messages.properties. Needs
+  DiscordLinkedBackend 0.35.0.
 
 ## Homes
 
@@ -785,7 +813,8 @@ messages.properties.
 
 In game with DiscordLinkedBackend: every interaction (`/hug <player>`…), `/interactions [off|on]`,
 `/credits [player|top]`, `/sell`, `/sellhand [all]`, `/worth`, `/mct`, `/exchange <amount|all>`, `/sethome [name]`,
-`/home [name]`, `/homes`, `/delhome <name>` (see [Homes](#homes)), `/spawn` (see [Spawn](#spawn)), and
+`/home [name]`, `/homes`, `/delhome <name>` (see [Homes](#homes)), `/spawn` (see [Spawn](#spawn)), `/tpa`,
+`/tpahere`, `/tpaccept`, `/tpdeny`, `/tpacancel`, `/tpatoggle` (see [Teleport requests](#teleport-requests)), and
 `/discordlinkedbackend reload` (or `/dlb reload`; op). Their permissions are under
 [The backend plugin](#the-backend-plugin-discordlinkedbackend).
 
@@ -868,8 +897,8 @@ Requires Java 21.
 ./gradlew build        # Windows: gradlew.bat build
 ```
 
-The jars are `build/libs/DiscordLinked-0.34.0.jar` (Velocity) and
-`backend-paper/build/libs/DiscordLinkedBackend-0.34.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
+The jars are `build/libs/DiscordLinked-0.35.0.jar` (Velocity) and
+`backend-paper/build/libs/DiscordLinkedBackend-0.35.0.jar` (Paper/Folia). Every push also builds on GitHub Actions;
 download them from the run's **Artifacts** section, or from the [releases](https://github.com/HuzzySnuzzy/DiscordLinked/releases)
 for each new version (see [Updates](#updates)).
 

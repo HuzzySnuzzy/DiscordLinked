@@ -196,6 +196,12 @@ final class FadBridge {
                     later(() -> community.homes().delete(player, server, name));
                 }
                 case "HOME_LIST" -> later(() -> community.homes().list(player, server));
+                // DiscordLinkedBackend 0.35.0: /tpa, /tpahere, /tpaccept, /tpdeny, /tpacancel, /tpatoggle.
+                case "TPA" -> {
+                    String type = in.readUTF();
+                    String name = in.readUTF();
+                    later(() -> community.tpa().command(player, server, type, name));
+                }
                 // DiscordLinkedBackend 0.32.0: /spawn, and where a player stands (for /dl setspawn).
                 case "SPAWN_GO" -> later(() -> community.homes().goSpawn(player, server));
                 case "LOCATED" -> {

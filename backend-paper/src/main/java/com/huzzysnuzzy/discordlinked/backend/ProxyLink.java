@@ -291,6 +291,15 @@ final class ProxyLink implements PluginMessageListener {
         });
     }
 
+    /** /tpa and friends: tpa, tpahere, accept, deny, cancel or toggle, with the player named (if any). */
+    void tpa(Player player, String type, String name) {
+        send(player, out -> {
+            out.writeUTF("TPA");
+            out.writeUTF(type);
+            out.writeUTF(clip(name, 32));
+        });
+    }
+
     /** How a /home the proxy sent went: ok, ready (waited; move them), cancelled, no-world or failed. */
     void homeDone(Player player, String id, String outcome) {
         send(player, out -> {

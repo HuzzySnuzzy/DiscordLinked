@@ -29,6 +29,9 @@ permissions:
   discordlinked.spawn:
     description: Use /spawn
     default: true
+  discordlinked.tpa:
+    description: Use teleport requests (/tpa, /tpahere, /tpaccept, /tpdeny, /tpacancel, /tpatoggle) where they're switched on
+    default: true
   discordlinked.homes:
     description: Use homes (/sethome, /home, /homes, /delhome) where they're switched on
     default: true

@@ -419,24 +419,7 @@ public final class Cosmetics {
             throw new IllegalArgumentException("The price must be between 0 and " + MAX_PRICE + ".");
         }
         String v = switch (k) {
-            case PREFIX -> {
-                String text = value == null ? "" : value.strip();
-                java.util.regex.Matcher tags = MINI_TAGS.matcher(text);
-                while (tags.find()) {
-                    String tag = tags.group(1).split(":", 2)[0].toLowerCase(java.util.Locale.ROOT);
-                    if (ACTION_TAGS.contains(tag)) {
-                        throw new IllegalArgumentException("Prefixes can only colour and style text: <" + tag
-                                + "> isn't allowed.");
-                    }
-                }
-                String visible = MINI_TAGS.matcher(COLOR_CODES.matcher(text).replaceAll("")).replaceAll("");
-                if (text.length() > 256 || visible.isBlank() || visible.length() > 32
-                        || text.chars().anyMatch(Character::isISOControl)) {
-                    throw new IllegalArgumentException("The prefix must show 1 to 32 characters (up to 256 with colour "
-                            + "codes and MiniMessage tags).");
-                }
-                yield text;
-            }
+            case PREFIX -> checkPrefix(value);
             case PARTICLE -> old.value(); // the particle itself never changes
             case CARD -> old == null ? "" : old.value(); // the picture is uploaded separately
             default -> "";
@@ -589,6 +572,43 @@ public final class Cosmetics {
         };
     }
 
+    /**
+     * A prefix as it's saved: trimmed, showing 1 to 32 characters (256 with &-codes and MiniMessage tags), and only
+     * tags that colour and style text. Throws with what's wrong. Also used for afk-prefix.
+     */
+    public static String checkPrefix(String value) {
+        String text = value == null ? "" : value.strip();
+        java.util.regex.Matcher tags = MINI_TAGS.matcher(text);
+        while (tags.find()) {
+            String tag = tags.group(1).split(":", 2)[0].toLowerCase(java.util.Locale.ROOT);
+            if (ACTION_TAGS.contains(tag)) {
+                throw new IllegalArgumentException("Prefixes can only colour and style text: <" + tag
+                        + "> isn't allowed.");
+            }
+        }
+        String visible = MINI_TAGS.matcher(COLOR_CODES.matcher(text).replaceAll("")).replaceAll("");
+        if (text.length() > 256 || visible.isBlank() || visible.length() > 32
+                || text.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException("The prefix must show 1 to 32 characters (up to 256 with colour "
+                    + "codes and MiniMessage tags).");
+        }
+        return text;
+    }
+
+    /**
+     * The prefix a player shows in game: their bought one, with afk-prefix in front while their server counts them
+     * as AFK ("" for none).
+     */
+    String shownPrefix(UUID uuid, Equipped e) {
+        String prefix = e.prefix() == null ? "" : e.prefix().value();
+        String afk = config().afkPrefix();
+        if (!config().fadEnabled() || afk.isEmpty() || !community.isAfk(uuid)) {
+            return prefix;
+        }
+        // &r: the AFK colours stop before the bought prefix (which may not set its own).
+        return prefix.isEmpty() ? afk : afk + "&r " + prefix;
+    }
+
     // ---- Telling the Minecraft servers ----
 
     /** Sends a player's cosmetics to the server they're on, if they're online. */
@@ -599,7 +619,7 @@ public final class Cosmetics {
     private void push(ServerConnection connection) {
         UUID uuid = connection.getPlayer().getUniqueId();
         Equipped e = config().fadEnabled() ? equipped(uuid) : Equipped.NONE;
-        community.bridge().cosmetics(connection, uuid, e.prefix() == null ? "" : e.prefix().value(),
+        community.bridge().cosmetics(connection, uuid, shownPrefix(uuid, e),
                 e.trail() == null ? "" : e.trail().value(), e.trail() == null ? "" : e.trailStyle().encode(),
                 e.aura() == null ? "" : e.aura().value(), e.aura() == null ? "" : e.auraStyle().encode(),
                 config().fadEnabled() ? keepInventoryFrom(uuid) : 0);

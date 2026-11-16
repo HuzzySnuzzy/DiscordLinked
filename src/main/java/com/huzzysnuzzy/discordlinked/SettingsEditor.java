@@ -143,6 +143,10 @@ public final class SettingsEditor {
                             + "but what players have keeps working. The items are made on the Shop page.", false),
             number("keep-inventory-delay-minutes", "Shop", "KeepInventory starts after (minutes)",
                     "So it can't be switched on in the middle of a fight. 0 = right away.", 0, 1440),
+            new Field("afk-prefix", "Shop", "AFK prefix",
+                    "Shown in front of a player's prefix (or name) while they're AFK, e.g. &7[AFK] or "
+                            + "<gray>[AFK]</gray>. Same rules as prefixes. Empty = none. AFK is decided by "
+                            + "DiscordLinkedBackend's afk-minutes.", Type.TEXT, false, 0, 256, List.of()),
 
             number("homes-default", "Homes", "Homes for everyone",
                     "How many homes every player has. Homes are switched on per server: Backend servers -> a server's "
@@ -154,6 +158,9 @@ public final class SettingsEditor {
             number("home-warmup-seconds", "Homes", "Wait before teleporting (seconds)",
                     "/home waits this long; moving or getting hurt stops it, so it can't be used to escape a fight. "
                             + "0 = right away.", 0, 60),
+            number("tpa-expire-seconds", "Homes", "Teleport requests expire after (seconds)",
+                    "/tpa and /tpahere requests nobody answered go away after this long. Teleport requests are "
+                            + "switched on per server: Backend servers -> a server's Settings -> Teleport requests.", 10, 600),
             bool("teleport-effects", "Homes", "Teleport effects",
                     "Portal particles swirl around players while they wait for /home or /spawn, and they arrive "
                             + "with an enderman's whoosh.", false),
@@ -416,6 +423,13 @@ public final class SettingsEditor {
             }
             case TEXT -> {
                 // single line, checked above
+                if (field.key().equals("afk-prefix") && !value.isEmpty()) {
+                    try {
+                        return com.huzzysnuzzy.discordlinked.fad.Cosmetics.checkPrefix(value);
+                    } catch (IllegalArgumentException e) {
+                        throw new IllegalArgumentException(label + ": " + e.getMessage());
+                    }
+                }
             }
             case NAME -> {
                 if (value.isEmpty() || value.length() > field.max() || value.matches(".*[<>{}\\\\].*")) {

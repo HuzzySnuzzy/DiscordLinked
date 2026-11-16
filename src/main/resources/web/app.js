@@ -244,6 +244,8 @@ function playerName(p, extraClass = '') {
  * An offline player's pill has the server they were on last in its tooltip, and with lastServer in its text too (the
  * Players list, while it shows every server sorted by server).
  */
+const AFK_TITLE = 'Online, but away from the keyboard: hasn\'t moved, chatted or used a command for a while';
+
 function statusPills(p, { lastServer = false } = {}) {
   const pills = [];
   if (p.suspension) {
@@ -252,6 +254,8 @@ function statusPills(p, { lastServer = false } = {}) {
   if (p.discordOnly) {
     pills.push(el('span', { class: 'pill', title: `Uses the website without a linked Minecraft account. Last visit ${formatTime(p.lastSeen)}` },
       `Website only · ${timeAgo(p.lastSeen)}`));
+  } else if (p.online && p.afk) {
+    pills.push(el('span', { class: 'pill afk', title: AFK_TITLE }, p.server ? `AFK · ${p.server}` : 'AFK'));
   } else if (p.online) {
     pills.push(el('span', { class: 'pill online' }, p.server ? `Online · ${p.server}` : 'Online'));
   } else if (!p.suspension) {
@@ -1057,7 +1061,7 @@ function renderPlayer() {
       p.linked && [el('dt', {}, 'Linked'), el('dd', {}, formatTime(p.linkedAt))],
       p.firstPlayed && [el('dt', {}, 'First joined'), el('dd', {}, formatTime(p.firstPlayed))],
       el('dt', {}, 'Last seen'),
-      el('dd', {}, p.online ? 'Online now' : (p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never'))));
+      el('dd', {}, p.online ? (p.afk ? 'Online now · AFK' : 'Online now') : (p.lastSeen ? `${timeAgo(p.lastSeen)} (${formatTime(p.lastSeen)})` : 'Never'))));
 
   const minecraft = el('div', { class: 'card panel' },
     el('h2', {}, 'Minecraft'),
@@ -2520,6 +2524,7 @@ function moderateCard(p, canSpy) {
         el('div', { class: 'sub' }, p.linked ? discordLink(p, p.discordName) : 'Not linked'),
         el('div', { class: 'mod-meta' },
           el('span', { class: 'pill online' }, p.server || 'Connecting'),
+          p.afk && el('span', { class: 'pill afk', title: AFK_TITLE }, 'AFK'),
           el('span', { class: 'muted mono' }, `${p.ping} ms`),
           p.version && el('span', { class: 'muted', title: p.brand ? `Client: ${p.brand}` : null }, p.version)))),
     p.suspension && el('span', { class: 'pill suspended' }, `Suspended · ${formatRemaining(p.suspension.expiresAt)} left`),
@@ -3065,6 +3070,8 @@ function serverEntry(s, data) {
       + 'still works everywhere.', 'microEnabled'),
     toggle('Homes', '/sethome, /home, /homes and /delhome work here (how many homes players have is under Homes above). Off: '
       + 'homes saved here are kept, but can\'t be used until it\'s on again.', 'homesEnabled'),
+    toggle('Teleport requests', '/tpa and /tpahere work here: players ask to go to someone (or bring them over), even on '
+      + 'another server, and the other one accepts with /tpaccept. The same wait as /home. Both servers need it on.', 'tpaEnabled'),
     !s.registered && el('div', { class: 'setting' },
       el('div', { class: 'setting-text' },
         el('div', { class: 'setting-label' }, 'Remove from the list'),
@@ -3100,6 +3107,7 @@ function serverEntry(s, data) {
           !s.creditsEnabled && el('span', { class: 'badge warn', title: `Players here don't earn ${creditsName}` }, `${creditsName} off`),
           !s.microEnabled && el('span', { class: 'badge warn', title: `Players here can't sell for ${microName}` }, `${microName} off`),
           s.homesEnabled && el('span', { class: 'badge info', title: '/sethome and /home work here' }, 'Homes'),
+          s.tpaEnabled && el('span', { class: 'badge info', title: '/tpa and /tpahere work here' }, 'TPA'),
           plugin.badge && el('span', { class: 'badge warn' }, plugin.badge)),
         facts.length > 0 && el('div', { class: 'setting-help' }, facts),
         el('div', { class: 'setting-help' }, plugin.line),

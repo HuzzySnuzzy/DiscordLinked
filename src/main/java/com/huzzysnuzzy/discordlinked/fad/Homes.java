@@ -218,6 +218,15 @@ public final class Homes {
             return;
         }
         Home home = request.home();
+        if (toPlayer(home)) {
+            // /tpa: logged when it was accepted.
+            switch (outcome) {
+                case "ready" -> moveThenTeleport(player, home);
+                case "ok", "cancelled" -> { }
+                default -> say(player, "minecraft.tpa.failed", "player", home.ownerName());
+            }
+            return;
+        }
         switch (outcome) {
             case "ok" -> plugin.audit().log(player.getUniqueId(), player.getUsername(),
                     community.linkedDiscordId(player.getUniqueId()), EventTypes.HOME, "went to "
@@ -479,8 +488,11 @@ public final class Homes {
         return plugin.database().homes(others);
     }
 
-    /** "base" for their own, "Alex:base" for someone else's, "spawn" for the spawn. */
+    /** "base" for their own, "Alex:base" for someone else's, "spawn" for the spawn, "Alex" for /tpa to Alex. */
     private static String label(Player player, Home home) {
+        if (toPlayer(home)) {
+            return home.ownerName();
+        }
         if (home.owner().equals(SPAWN_OWNER)) {
             return SPAWN_NAME;
         }
@@ -522,9 +534,10 @@ public final class Homes {
         GsonComponentSerializer json = GsonComponentSerializer.gson();
         TagResolver tags = TagResolver.resolver(Placeholder.unparsed("home", label),
                 Placeholder.unparsed("seconds", String.valueOf(warmup)), Placeholder.unparsed("server", home.server()));
+        String texts = toPlayer(home) ? "minecraft.tpa." : "minecraft.home.";
         community.bridge().homeTeleport(connection, id, warmup, here, home,
-                json.serialize(plugin.messages().minecraft("minecraft.home.warmup", tags)),
-                json.serialize(plugin.messages().minecraft("minecraft.home.arrived", tags)),
+                json.serialize(plugin.messages().minecraft(texts + "warmup", tags)),
+                json.serialize(plugin.messages().minecraft(texts + "arrived", tags)),
                 json.serialize(plugin.messages().minecraft("minecraft.home.cancel-moved", tags)),
                 json.serialize(plugin.messages().minecraft("minecraft.home.cancel-hurt", tags)),
                 config().teleportEffects());
@@ -534,7 +547,11 @@ public final class Homes {
     private void moveThenTeleport(Player player, Home home) {
         Optional<RegisteredServer> target = plugin.proxy().getServer(home.server());
         boolean spawn = home.owner().equals(SPAWN_OWNER);
-        if (target.isEmpty() || !spawn && !plugin.servers().homesEnabled(home.server())) {
+        if (toPlayer(home) && (target.isEmpty() || !community.tpa().enabled(home.server()))) {
+            say(player, "minecraft.tpa.off-there", "player", home.ownerName(), "server", home.server());
+            return;
+        }
+        if (!toPlayer(home) && (target.isEmpty() || !spawn && !plugin.servers().homesEnabled(home.server()))) {
             say(player, "minecraft.home.off-there", "home", label(player, home), "server", home.server());
             return;
         }
@@ -554,6 +571,36 @@ public final class Homes {
                     }, () -> say(player, "minecraft.home.move-failed", "server", home.server())))
                     .delay(1500, TimeUnit.MILLISECONDS).schedule();
         });
+    }
+
+    // ---- For /tpa ----
+
+    /** A spot next to a player (/tpa) rather than a home: no name, the player as its owner. */
+    static boolean toPlayer(Home home) {
+        return home.name().isEmpty() && !home.owner().equals(SPAWN_OWNER);
+    }
+
+    /** Asks a player's server where they stand (DiscordLinkedBackend 0.32.0+). */
+    java.util.concurrent.CompletableFuture<Home> locate(ServerConnection connection) {
+        String id = UUID.randomUUID().toString();
+        java.util.concurrent.CompletableFuture<Home> where = new java.util.concurrent.CompletableFuture<>();
+        locating.put(id, where);
+        where.whenComplete((at, error) -> locating.remove(id));
+        community.bridge().locate(connection, id);
+        return where;
+    }
+
+    /** Takes a player to a spot, like /home: the same wait and effects, moving servers if it's on another one. */
+    void travel(Player player, Home spot) {
+        Optional<ServerConnection> connection = player.getCurrentServer();
+        if (connection.isEmpty()) {
+            return;
+        }
+        boolean here = spot.server().equalsIgnoreCase(connection.get().getServerInfo().getName());
+        String id = UUID.randomUUID().toString();
+        pending.put(id, new Pending(player.getUniqueId(), spot, System.currentTimeMillis()));
+        sweep();
+        teleport(connection.get(), id, player, spot, here, config().homeWarmupSeconds());
     }
 
     /** Forgets /home requests a server never answered (it restarted, or the player left). */

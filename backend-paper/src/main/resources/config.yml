@@ -97,6 +97,28 @@ delhome-command:
 spawn-command:
   name: spawn
   aliases: []
+# Teleport requests: /tpa <player> (go to them), /tpahere <player> (bring them to you), /tpaccept [player],
+# /tpdeny [player], /tpacancel (take yours back) and /tpatoggle (no requests to you, or allowed again). They work
+# across servers, only where the settings owner switched them on (website: Settings -> Backend servers -> this
+# server's settings -> Teleport requests). The proxy decides everything. Rename these if another plugin has them.
+tpa-command:
+  name: tpa
+  aliases: []
+tpahere-command:
+  name: tpahere
+  aliases: []
+tpaccept-command:
+  name: tpaccept
+  aliases: [tpyes]
+tpdeny-command:
+  name: tpdeny
+  aliases: [tpno]
+tpacancel-command:
+  name: tpacancel
+  aliases: []
+tpatoggle-command:
+  name: tpatoggle
+  aliases: [tptoggle]
 
 # Cosmetics players buy on the website (Shop -> Cosmetics) and switch on or off on their profile there.
 cosmetics:

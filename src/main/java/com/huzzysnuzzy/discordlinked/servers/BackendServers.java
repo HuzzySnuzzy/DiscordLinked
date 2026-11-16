@@ -147,7 +147,7 @@ public final class BackendServers {
                          Integer maxPlayers, String minecraftVersion, String pluginName, String pluginVersion,
                          Boolean folia, Boolean spy, Double tps, Double mspt, Instant lastSeen, Boolean answered,
                          boolean creditsEnabled, boolean microEnabled, boolean maintenance,
-                         String maintenanceMessage, Update update, boolean homesEnabled) {
+                         String maintenanceMessage, Update update, boolean homesEnabled, boolean tpaEnabled) {
 
         /** It runs DiscordLinkedFAD from before the merge, which should be replaced with DiscordLinkedBackend. */
         public boolean oldPlugin() {
@@ -165,6 +165,7 @@ public final class BackendServers {
         volatile boolean micro = true;
         /** Whether /sethome and /home work here: off until the settings owner switches it on. */
         volatile boolean homes;
+        volatile boolean tpa;
         volatile boolean maintenance;
         /** For players turned away during maintenance; "" = the default from messages.properties. */
         volatile String maintenanceMessage = "";
@@ -211,6 +212,7 @@ public final class BackendServers {
                 entry.micro = row.microEnabled();
                 entry.maintenance = row.maintenance();
                 entry.homes = row.homesEnabled();
+                entry.tpa = row.tpaEnabled();
                 entry.maintenanceMessage = row.maintenanceMessage() == null ? "" : row.maintenanceMessage();
                 entry.pluginName = row.pluginName();
                 entry.pluginVersion = row.pluginVersion();
@@ -303,6 +305,16 @@ public final class BackendServers {
     }
 
     /** Whether homes are on anywhere (so the Shop offers extra homes). */
+    /** Whether /tpa works on this server. Unknown servers: no. */
+    public boolean tpaEnabled(String server) {
+        Entry entry = server == null ? null : entries.get(key(server));
+        return entry != null && entry.tpa;
+    }
+
+    public boolean tpaAnywhere() {
+        return entries.values().stream().anyMatch(entry -> entry.tpa);
+    }
+
     public boolean homesAnywhere() {
         return entries.values().stream().anyMatch(entry -> entry.homes);
     }
@@ -701,6 +713,21 @@ public final class BackendServers {
         return changes;
     }
 
+    /** Switches /tpa on or off on one server. Written to the audit log. Returns what changed. */
+    public synchronized List<String> setTpa(String server, boolean on, String actor) throws SQLException {
+        Entry entry = known(server);
+        List<String> changes = new ArrayList<>();
+        if (entry.tpa == on) {
+            return changes;
+        }
+        changes.add("teleport requests " + onOff(entry.tpa) + " -> " + onOff(on));
+        plugin.database().setBackendTpa(entry.name, on);
+        entry.tpa = on;
+        plugin.audit().log(null, null, null, EventTypes.SETTINGS_CHANGE, "server " + entry.name + ": "
+                + String.join(", ", changes), actor, entry.name);
+        return changes;
+    }
+
     /**
      * Turns maintenance mode on or off on one server and/or changes the message for players turned away
      * ({@code null} leaves each; a blank message means the default one). Written to the audit log. Turning it on
@@ -799,7 +826,7 @@ public final class BackendServers {
                 fresh && status.tps() >= 0 ? status.tps() : null, fresh && status.mspt() >= 0 ? status.mspt() : null,
                 entry.lastSeen == 0 ? null : Instant.ofEpochMilli(entry.lastSeen), registered ? entry.answered : null,
                 entry.credits, entry.micro, entry.maintenance, entry.maintenanceMessage,
-                current ? status.update() : null, entry.homes);
+                current ? status.update() : null, entry.homes, entry.tpa);
     }
 
     /** Keys of the servers in Velocity's config right now; each has an entry (new ones are remembered). */

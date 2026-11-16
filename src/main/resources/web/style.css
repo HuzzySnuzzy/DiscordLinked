@@ -157,6 +157,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .pill.online { color: var(--success); }
+.pill.afk { color: var(--warning); }
 .pill.suspended { color: var(--danger); }
 .suspension-note { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 280px; }
 

@@ -57,6 +57,13 @@ final class FadSettings {
     final CommandName homesCommand;
     final CommandName delHomeCommand;
     final CommandName spawnCommand;
+    /** /tpa and friends (0.35.0). */
+    final CommandName tpaCommand;
+    final CommandName tpaHereCommand;
+    final CommandName tpAcceptCommand;
+    final CommandName tpDenyCommand;
+    final CommandName tpaCancelCommand;
+    final CommandName tpaToggleCommand;
     final int prefixPriority;
     final boolean prefixSpace;
     /** How a prefix goes to LuckPerms: as-is, legacy (&-codes) or minimessage. */
@@ -91,6 +98,12 @@ final class FadSettings {
         homesCommand = commandName("homes-command", logger);
         delHomeCommand = commandName("delhome-command", logger);
         spawnCommand = commandName("spawn-command", logger);
+        tpaCommand = commandName("tpa-command", logger);
+        tpaHereCommand = commandName("tpahere-command", logger);
+        tpAcceptCommand = commandName("tpaccept-command", logger);
+        tpDenyCommand = commandName("tpdeny-command", logger);
+        tpaCancelCommand = commandName("tpacancel-command", logger);
+        tpaToggleCommand = commandName("tpatoggle-command", logger);
         prefixPriority = integer("cosmetics.prefix-priority");
         prefixSpace = bool("cosmetics.prefix-space");
         String format = string("cosmetics.prefix-format").trim().toLowerCase(Locale.ROOT);

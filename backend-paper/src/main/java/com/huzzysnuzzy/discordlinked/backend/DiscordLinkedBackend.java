@@ -193,6 +193,12 @@ public final class DiscordLinkedBackend extends JavaPlugin implements Listener {
         register(map, new FadCommands.HomeCommand(this, settings.homesCommand, "HOME_LIST", "List your homes", ""));
         register(map, new FadCommands.HomeCommand(this, settings.delHomeCommand, "HOME_DEL", "Remove a home", "<name>"));
         register(map, new FadCommands.HomeCommand(this, settings.spawnCommand, "SPAWN_GO", "Go to the spawn", ""));
+        register(map, new FadCommands.TpaCommand(this, settings.tpaCommand, "tpa", "Ask to teleport to a player", "<player>"));
+        register(map, new FadCommands.TpaCommand(this, settings.tpaHereCommand, "tpahere", "Ask a player to teleport to you", "<player>"));
+        register(map, new FadCommands.TpaCommand(this, settings.tpAcceptCommand, "accept", "Accept a teleport request", "[player]"));
+        register(map, new FadCommands.TpaCommand(this, settings.tpDenyCommand, "deny", "Deny a teleport request", "[player]"));
+        register(map, new FadCommands.TpaCommand(this, settings.tpaCancelCommand, "cancel", "Take back your teleport request", ""));
+        register(map, new FadCommands.TpaCommand(this, settings.tpaToggleCommand, "toggle", "Stop or allow teleport requests to you", ""));
     }
 
     private void register(CommandMap map, Command command) {

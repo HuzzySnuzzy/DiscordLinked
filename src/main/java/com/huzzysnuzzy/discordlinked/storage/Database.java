@@ -437,6 +437,9 @@ public final class Database implements AutoCloseable {
         }
         addColumnIfMissing("fad_accounts", "home_slots", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("backend_servers", "homes_enabled", "INTEGER NOT NULL DEFAULT 0");
+        // 0.35.0: /tpa per server (off until switched on), and players who turned requests to them off.
+        addColumnIfMissing("backend_servers", "tpa_enabled", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("fad_accounts", "tpa_allowed", "INTEGER NOT NULL DEFAULT 1");
         // Added in 0.31.0: whether a player has the on-screen leaderboard on (/dl leaderboard).
         addColumnIfMissing("fad_accounts", "sidebar", "INTEGER NOT NULL DEFAULT 0");
         // Added in 0.26.0: resets of players' data (website: MC data), their delivery to the backend servers, and
@@ -3029,7 +3032,8 @@ public final class Database implements AutoCloseable {
      */
     public record BackendServerRow(String name, boolean creditsEnabled, boolean microEnabled, String pluginName,
                                    String pluginVersion, String minecraftVersion, Instant lastSeen,
-                                   boolean maintenance, String maintenanceMessage, boolean homesEnabled) {
+                                   boolean maintenance, String maintenanceMessage, boolean homesEnabled,
+                                   boolean tpaEnabled) {
     }
 
     public synchronized List<BackendServerRow> backendServers() throws SQLException {
@@ -3042,7 +3046,8 @@ public final class Database implements AutoCloseable {
                 servers.add(new BackendServerRow(rs.getString("name"), rs.getInt("credits_enabled") != 0,
                         rs.getInt("micro_enabled") != 0, rs.getString("plugin_name"), rs.getString("plugin_version"),
                         rs.getString("mc_version"), lastSeen, rs.getInt("maintenance") != 0,
-                        rs.getString("maintenance_message"), rs.getInt("homes_enabled") != 0));
+                        rs.getString("maintenance_message"), rs.getInt("homes_enabled") != 0,
+                        rs.getInt("tpa_enabled") != 0));
             }
         }
         return servers;
@@ -3073,6 +3078,17 @@ public final class Database implements AutoCloseable {
         try (PreparedStatement ps = connection.prepareStatement("""
                 INSERT INTO backend_servers (name, homes_enabled) VALUES (?, ?)
                 ON CONFLICT (name) DO UPDATE SET homes_enabled = excluded.homes_enabled""")) {
+            ps.setString(1, name);
+            ps.setInt(2, on ? 1 : 0);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Whether /tpa works on a server. */
+    public synchronized void setBackendTpa(String name, boolean on) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO backend_servers (name, tpa_enabled) VALUES (?, ?)
+                ON CONFLICT (name) DO UPDATE SET tpa_enabled = excluded.tpa_enabled""")) {
             ps.setString(1, name);
             ps.setInt(2, on ? 1 : 0);
             ps.executeUpdate();
@@ -4034,6 +4050,30 @@ public final class Database implements AutoCloseable {
             ensureCreditAccount(uuid, name);
             try (PreparedStatement ps = connection.prepareStatement(
                     "UPDATE fad_accounts SET shop_reminders = ? WHERE minecraft_uuid = ?")) {
+                ps.setInt(1, on ? 1 : 0);
+                ps.setString(2, uuid.toString());
+                ps.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    /** Whether others may send the player teleport requests (on unless they used /tpatoggle). */
+    public synchronized boolean tpaAllowed(UUID uuid) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT tpa_allowed FROM fad_accounts WHERE minecraft_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return !rs.next() || rs.getInt(1) != 0;
+            }
+        }
+    }
+
+    public synchronized void setTpaAllowed(UUID uuid, String name, boolean on) throws SQLException {
+        transaction(() -> {
+            ensureCreditAccount(uuid, name);
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE fad_accounts SET tpa_allowed = ? WHERE minecraft_uuid = ?")) {
                 ps.setInt(1, on ? 1 : 0);
                 ps.setString(2, uuid.toString());
                 ps.executeUpdate();

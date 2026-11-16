@@ -166,6 +166,14 @@ public final class PlayerCommands implements SimpleCommand {
             line(player, "/delhome <name>", "Remove a home");
         }
         line(player, "/spawn", "Go to the spawn");
+        if (plugin.config().fadEnabled() && plugin.servers().tpaAnywhere()) {
+            line(player, "/tpa <player>", "Ask to teleport to a player");
+            line(player, "/tpahere <player>", "Ask a player to teleport to you");
+            line(player, "/tpaccept [player]", "Accept a teleport request (or click it)");
+            line(player, "/tpdeny [player]", "Turn a teleport request down");
+            line(player, "/tpacancel", "Take back the request you sent");
+            line(player, "/tpatoggle", "Stop teleport requests to you (again: allow them)");
+        }
         line(player, "/interactions", "The interactions: /hug, /kiss, /pet… <player>");
         try {
             if (isStaff(player)) {

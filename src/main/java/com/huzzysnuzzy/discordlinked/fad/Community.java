@@ -49,6 +49,7 @@ public final class Community {
     private final Shop shop;
     private final Market market;
     private final Cosmetics cosmetics;
+    private final Tpa tpa;
     private final Groups groups;
     private final ShopReminder shopReminder;
     private final Homes homes;
@@ -64,6 +65,7 @@ public final class Community {
         this.shop = new Shop(plugin, this);
         this.market = new Market(plugin, this);
         this.cosmetics = new Cosmetics(plugin, this);
+        this.tpa = new Tpa(plugin, this);
         this.groups = new Groups(plugin);
         this.shopReminder = new ShopReminder(plugin, this);
         this.homes = new Homes(plugin, this);
@@ -116,6 +118,10 @@ public final class Community {
         return groups;
     }
 
+    public Tpa tpa() {
+        return tpa;
+    }
+
     public Cosmetics cosmetics() {
         return cosmetics;
     }
@@ -148,11 +154,11 @@ public final class Community {
         }
     }
 
+    /** Their server says they went AFK or came back: the AFK prefix goes on or off. */
     void setAfk(UUID player, boolean isAfk) {
-        if (isAfk) {
-            afk.add(player);
-        } else {
-            afk.remove(player);
+        boolean changed = isAfk ? afk.add(player) : afk.remove(player);
+        if (changed) {
+            cosmetics.push(player);
         }
     }
 
@@ -160,7 +166,8 @@ public final class Community {
         afk.remove(player);
     }
 
-    boolean isAfk(UUID player) {
+    /** Whether the server they're on counts them as AFK (DiscordLinkedBackend's afk-minutes). */
+    public boolean isAfk(UUID player) {
         return afk.contains(player);
     }
 
@@ -168,6 +175,7 @@ public final class Community {
     void left(UUID player) {
         afk.remove(player);
         shopReminder.left(player);
+        tpa.left(player);
         sidebar.left(player);
     }
 

@@ -90,7 +90,9 @@ public record PluginConfig(
         int sidebarSeconds,
         int sidebarSize,
         boolean spawnParticles,
-        boolean teleportEffects
+        boolean teleportEffects,
+        String afkPrefix,
+        int tpaExpireSeconds
 ) {
 
     public static PluginConfig load(Path dataDirectory, Logger logger) throws IOException {
@@ -179,8 +181,22 @@ public record PluginConfig(
                 Math.max(3, Math.min(600, parseInt(props, "sidebar-seconds", 10))),
                 Math.max(1, Math.min(10, parseInt(props, "sidebar-size", 5))),
                 !"false".equalsIgnoreCase(props.getProperty("spawn-particles", "true").trim()),
-                !"false".equalsIgnoreCase(props.getProperty("teleport-effects", "true").trim())
+                !"false".equalsIgnoreCase(props.getProperty("teleport-effects", "true").trim()),
+                afkPrefix(props.getProperty("afk-prefix", "&7[AFK]")),
+                Math.max(10, Math.min(600, parseInt(props, "tpa-expire-seconds", 60)))
         );
+    }
+
+    /** afk-prefix, or none when it's empty or wouldn't be allowed as a prefix. */
+    private static String afkPrefix(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        try {
+            return com.huzzysnuzzy.discordlinked.fad.Cosmetics.checkPrefix(value);
+        } catch (IllegalArgumentException e) {
+            return "";
+        }
     }
 
     /** A whole number, or {@code fallback} when it's missing or isn't one. */
